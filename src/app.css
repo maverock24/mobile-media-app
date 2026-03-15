@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+@theme {
+  /* ── Midnight sky palette (reference: cosmic dialer UI) ── */
+
+  /* Deep midnight navy background */
+  --color-background: hsl(218 55% 6%);
+  --color-foreground: hsl(210 30% 94%);
+
+  /* Card / panel surfaces — slightly lighter navy with slight translucency */
+  --color-card: hsl(218 50% 9%);
+  --color-card-foreground: hsl(210 25% 92%);
+
+  --color-popover: hsl(218 50% 9%);
+  --color-popover-foreground: hsl(210 25% 92%);
+
+  /* Primary: bright cyan-teal (the glow accent in the reference) */
+  --color-primary: hsl(190 100% 52%);
+  --color-primary-foreground: hsl(218 60% 6%);
+
+  /* Secondary surfaces */
+  --color-secondary: hsl(218 40% 13%);
+  --color-secondary-foreground: hsl(210 20% 80%);
+
+  --color-muted: hsl(218 35% 11%);
+  --color-muted-foreground: hsl(210 20% 48%);
+
+  /* Accent: slightly lighter navy for hover/active states */
+  --color-accent: hsl(210 50% 16%);
+  --color-accent-foreground: hsl(190 100% 70%);
+
+  --color-destructive: hsl(0 70% 55%);
+  --color-destructive-foreground: hsl(0 0% 98%);
+
+  /* Borders: subtle navy lines */
+  --color-border: hsl(218 40% 15%);
+  --color-input: hsl(218 40% 15%);
+  --color-ring: hsl(190 100% 52%);
+
+  --radius-sm: calc(0.75rem - 4px);
+  --radius-md: calc(0.75rem - 2px);
+  --radius-lg: 0.75rem;
+  --radius-xl: calc(0.75rem + 4px);
+}
+
+@layer base {
+  * { @apply border-border; }
+
+  html {
+    color-scheme: dark;
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    min-height: 100%;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* ── Night sky background ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    /* Layered sky gradients: upper glow + lower dark horizon */
+    background:
+      /* top cyan horizon glow */
+      radial-gradient(ellipse 90% 45% at 50% 0%, hsl(205 80% 18% / 0.6) 0%, transparent 65%),
+      /* mid-scene horizon line glow */
+      radial-gradient(ellipse 100% 20% at 50% 62%, hsl(195 90% 22% / 0.35) 0%, transparent 70%),
+      /* bottom-right subtle glow */
+      radial-gradient(ellipse 60% 40% at 90% 100%, hsl(190 80% 15% / 0.25) 0%, transparent 65%),
+      /* base midnight navy */
+      linear-gradient(180deg, hsl(218 55% 8%) 0%, hsl(218 60% 5%) 55%, hsl(215 65% 4%) 100%);
+  }
+
+  /* ── Starfield layer — tiny scattered white dots ── */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-image:
+      radial-gradient(1px 1px at 10%  8%,  hsl(0 0% 100% / 0.85) 0%, transparent 100%),
+      radial-gradient(1px 1px at 23%  3%,  hsl(0 0% 100% / 0.6)  0%, transparent 100%),
+      radial-gradient(1px 1px at 37% 12%,  hsl(0 0% 100% / 0.9)  0%, transparent 100%),
+      radial-gradient(1px 1px at 48%  5%,  hsl(0 0% 100% / 0.5)  0%, transparent 100%),
+      radial-gradient(1px 1px at 61%  9%,  hsl(0 0% 100% / 0.75) 0%, transparent 100%),
+      radial-gradient(1px 1px at 74%  2%,  hsl(0 0% 100% / 0.65) 0%, transparent 100%),
+      radial-gradient(1px 1px at 85% 14%,  hsl(0 0% 100% / 0.8)  0%, transparent 100%),
+      radial-gradient(1px 1px at 92%  6%,  hsl(0 0% 100% / 0.55) 0%, transparent 100%),
+      radial-gradient(1px 1px at  5% 22%,  hsl(0 0% 100% / 0.45) 0%, transparent 100%),
+      radial-gradient(1px 1px at 16% 18%,  hsl(0 0% 100% / 0.7)  0%, transparent 100%),
+      radial-gradient(1px 1px at 29% 25%,  hsl(0 0% 100% / 0.5)  0%, transparent 100%),
+      radial-gradient(1px 1px at 54% 19%,  hsl(0 0% 100% / 0.65) 0%, transparent 100%),
+      radial-gradient(1px 1px at 68% 28%,  hsl(0 0% 100% / 0.4)  0%, transparent 100%),
+      radial-gradient(1px 1px at 79% 21%,  hsl(0 0% 100% / 0.75) 0%, transparent 100%),
+      radial-gradient(1px 1px at 88% 31%,  hsl(0 0% 100% / 0.5)  0%, transparent 100%),
+      radial-gradient(1px 1px at  8% 38%,  hsl(0 0% 100% / 0.35) 0%, transparent 100%),
+      radial-gradient(1px 1px at 19% 44%,  hsl(0 0% 100% / 0.55) 0%, transparent 100%),
+      radial-gradient(1px 1px at 43% 35%,  hsl(0 0% 100% / 0.4)  0%, transparent 100%),
+      radial-gradient(1px 1px at 57% 41%,  hsl(0 0% 100% / 0.3)  0%, transparent 100%),
+      radial-gradient(1px 1px at 72% 37%,  hsl(0 0% 100% / 0.45) 0%, transparent 100%),
+      radial-gradient(1px 1px at 96% 42%,  hsl(0 0% 100% / 0.35) 0%, transparent 100%),
+      /* slightly larger bright star */
+      radial-gradient(1.5px 1.5px at 33%  7%, hsl(190 100% 90% / 0.9) 0%, transparent 100%),
+      radial-gradient(1.5px 1.5px at 77% 16%, hsl(200  80% 90% / 0.8) 0%, transparent 100%),
+      radial-gradient(1.5px 1.5px at 14% 31%, hsl(0 0% 100% / 0.7)    0%, transparent 100%);
+  }
+
+  /* All direct children of body sit above the star/sky layers */
+  body > * { position: relative; z-index: 1; }
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(190 60% 30%); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(190 100% 52%); }
