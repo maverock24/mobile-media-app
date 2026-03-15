@@ -7,6 +7,7 @@ node_modules
 .wrangler
 /.svelte-kit
 /build
+/dist-mobile
 playwright-report
 test-results
 
@@ -19,6 +20,13 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.test
+
+# Android
+android/.gradle
+android/**/build
+android/local.properties
+*.jks
+*.keystore
 
 # Vite
 vite.config.js.timestamp-*
