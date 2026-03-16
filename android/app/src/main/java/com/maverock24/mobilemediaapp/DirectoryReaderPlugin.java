@@ -15,27 +15,92 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 public class DirectoryReaderPlugin extends Plugin {
 
 	@PluginMethod
-	public void listFiles(PluginCall call) {
+	public void listEntries(PluginCall call) {
+		try {
+			DocumentFile target = getTargetDirectory(call);
+			JSArray entries = new JSArray();
+
+			for (DocumentFile child : target.listFiles()) {
+				String childName = child.getName();
+				if (childName == null || childName.isEmpty()) {
+					continue;
+				}
+
+				String relativePath = buildRelativePath(call.getString("path", ""), childName);
+				if (child.isDirectory()) {
+					JSObject folder = new JSObject();
+					folder.put("kind", "folder");
+					folder.put("name", childName);
+					folder.put("relativePath", relativePath);
+					entries.put(folder);
+					continue;
+				}
+
+				if (!child.isFile() || !childName.toLowerCase().endsWith(".mp3")) {
+					continue;
+				}
+
+				entries.put(createFileObject(child, relativePath));
+			}
+
+			JSObject result = new JSObject();
+			result.put("folderName", target.getName() != null ? target.getName() : "Selected Folder");
+			result.put("entries", entries);
+			call.resolve(result);
+		} catch (Exception exception) {
+			call.reject(exception.getMessage());
+		}
+	}
+
+	@PluginMethod
+	public void listAudioFiles(PluginCall call) {
+		try {
+			DocumentFile target = getTargetDirectory(call);
+			String basePath = call.getString("path", "");
+			JSArray files = new JSArray();
+			collectFiles(target, basePath, files);
+
+			JSObject result = new JSObject();
+			result.put("folderName", target.getName() != null ? target.getName() : "Selected Folder");
+			result.put("files", files);
+			call.resolve(result);
+		} catch (Exception exception) {
+			call.reject(exception.getMessage());
+		}
+	}
+
+	private DocumentFile getTargetDirectory(PluginCall call) throws Exception {
 		String treeUriString = call.getString("treeUri");
 		if (treeUriString == null || treeUriString.isEmpty()) {
-			call.reject("treeUri is required.");
-			return;
+			throw new Exception("treeUri is required.");
 		}
 
 		Uri treeUri = Uri.parse(treeUriString);
 		DocumentFile root = DocumentFile.fromTreeUri(getContext(), treeUri);
 		if (root == null || !root.exists() || !root.isDirectory()) {
-			call.reject("Selected directory is not accessible.");
-			return;
+			throw new Exception("Selected directory is not accessible.");
 		}
 
-		JSArray files = new JSArray();
-		collectFiles(root, "", files);
+		String relativePath = call.getString("path", "");
+		if (relativePath == null || relativePath.isEmpty()) {
+			return root;
+		}
 
-		JSObject result = new JSObject();
-		result.put("folderName", root.getName() != null ? root.getName() : "Selected Folder");
-		result.put("files", files);
-		call.resolve(result);
+		DocumentFile current = root;
+		String[] segments = relativePath.split("/");
+		for (String segment : segments) {
+			if (segment == null || segment.isEmpty()) {
+				continue;
+			}
+
+			DocumentFile next = current.findFile(segment);
+			if (next == null || !next.exists() || !next.isDirectory()) {
+				throw new Exception("Selected directory is not accessible.");
+			}
+			current = next;
+		}
+
+		return current;
 	}
 
 	private void collectFiles(DocumentFile directory, String prefix, JSArray files) {
@@ -45,24 +110,33 @@ public class DirectoryReaderPlugin extends Plugin {
 				continue;
 			}
 
-			String relativePath = prefix.isEmpty() ? childName : prefix + "/" + childName;
+			String relativePath = buildRelativePath(prefix, childName);
 
 			if (child.isDirectory()) {
 				collectFiles(child, relativePath, files);
 				continue;
 			}
 
-			if (!child.isFile()) {
+			if (!child.isFile() || !childName.toLowerCase().endsWith(".mp3")) {
 				continue;
 			}
 
-			JSObject file = new JSObject();
-			file.put("name", childName);
-			file.put("path", child.getUri().toString());
-			file.put("relativePath", relativePath);
-			file.put("mimeType", child.getType());
-			file.put("modifiedAt", child.lastModified());
-			files.put(file);
+			files.put(createFileObject(child, relativePath));
 		}
+	}
+
+	private String buildRelativePath(String prefix, String childName) {
+		return prefix == null || prefix.isEmpty() ? childName : prefix + "/" + childName;
+	}
+
+	private JSObject createFileObject(DocumentFile file, String relativePath) {
+		JSObject result = new JSObject();
+		result.put("kind", "file");
+		result.put("name", file.getName());
+		result.put("path", file.getUri().toString());
+		result.put("relativePath", relativePath);
+		result.put("mimeType", file.getType());
+		result.put("modifiedAt", file.lastModified());
+		return result;
 	}
 }

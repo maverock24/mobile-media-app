@@ -2,7 +2,7 @@
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
-	import { DirectoryReader, type NativeDirectoryFile } from '$lib/native/directory-reader';
+	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
@@ -85,6 +85,7 @@
 	// ── folder browse state ──
 	// rootDirHandle and allFiles MUST be $state so hasFolderLoaded $derived updates
 	let rootDirHandle    = $state<FileSystemDirectoryHandle | null>(null);
+	let nativeTreeUri    = $state<string | null>(null);
 	let pendingHandle    = $state<FileSystemDirectoryHandle | null>(null); // needs permission
 	let allFiles         = $state<StoredAudioFile[]>([]);     // web/native metadata-backed library
 	let browsePath       = $state<string[]>([]);                 // navigation stack
@@ -104,7 +105,7 @@
 	// ── derived ──
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
 	const progressPercent = $derived(duration > 0 ? (currentTime / duration) * 100 : 0);
-	const hasFolderLoaded = $derived(rootDirHandle !== null || allFiles.length > 0);
+	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
 
 	// ── register stop-callback for cross-view audio exclusivity ──
 	$effect(() => {
@@ -262,6 +263,21 @@
 		};
 	}
 
+	function createStoredNativeAudioFile(entry: NativeDirectoryFile): StoredAudioFile {
+		return {
+			source: 'native',
+			name: entry.name,
+			relativePath: entry.relativePath,
+			path: entry.path,
+			mimeType: entry.mimeType,
+			modifiedAt: entry.modifiedAt,
+		};
+	}
+
+	function pathToString(path: string[]): string | undefined {
+		return path.length > 0 ? path.join('/') : undefined;
+	}
+
 	function getRelativePath(file: StoredAudioFile): string {
 		return file.relativePath && file.relativePath.length > 0 ? file.relativePath : file.name;
 	}
@@ -325,20 +341,11 @@
 		});
 	}
 
-	async function pickNativeAudioDirectory(): Promise<{ files: StoredAudioFile[]; folderName: string }> {
+	async function pickNativeAudioDirectory(): Promise<{ treeUri: string; folderName: string }> {
 		const result = await FilePicker.pickDirectory();
-		const directory = await DirectoryReader.listFiles({ treeUri: result.path });
+		const directory = await DirectoryReader.listEntries({ treeUri: result.path });
 		return {
-			files: directory.files
-				.filter((entry) => entry.name.toLowerCase().endsWith('.mp3'))
-				.map((entry) => ({
-					source: 'native' as const,
-					name: entry.name,
-					relativePath: entry.relativePath,
-					path: entry.path,
-					mimeType: entry.mimeType,
-					modifiedAt: entry.modifiedAt,
-				})),
+			treeUri: result.path,
 			folderName: directory.folderName,
 		};
 	}
@@ -376,6 +383,22 @@
 						files.push({ kind: 'file', name, file: createStoredAudioFile(await (handle as FileSystemFileHandle).getFile()) });
 					}
 				}
+				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+				browseEntries = [...folders, ...files];
+			} else if (nativeTreeUri) {
+				const result = await DirectoryReader.listEntries({ treeUri: nativeTreeUri, path: pathToString(path) });
+				const folders: BrowseEntry[] = [];
+				const files: BrowseEntry[] = [];
+
+				for (const entry of result.entries) {
+					if (entry.kind === 'folder') {
+						folders.push({ kind: 'folder', name: entry.name, count: 0 });
+					} else {
+						files.push({ kind: 'file', name: entry.name, file: createStoredNativeAudioFile(entry) });
+					}
+				}
+
 				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 				browseEntries = [...folders, ...files];
@@ -449,6 +472,9 @@
 		if (rootDirHandle) {
 			const dir = await resolveDirAtPath(path);
 			return dir ? (await collectFilesFromDirHandle(dir)).map((file) => createStoredAudioFile(file)) : [];
+		} else if (nativeTreeUri) {
+			const result = await DirectoryReader.listAudioFiles({ treeUri: nativeTreeUri, path: pathToString(path) });
+			return result.files.map((file) => createStoredNativeAudioFile(file));
 		} else if (allFiles.length > 0) {
 			const prefix = path.length > 0 ? path.join('/') + '/' : '';
 			return allFiles.filter(f => {
@@ -507,10 +533,10 @@
 			isLoading = true;
 
 			try {
-				const { files, folderName } = canUseNativePlugin
+				const { treeUri, folderName } = canUseNativePlugin
 					? await pickNativeAudioDirectory()
-					: { files: [], folderName: 'Selected Folder' };
-				if (files.length === 0) {
+					: { treeUri: '', folderName: 'Selected Folder' };
+				if (!treeUri) {
 					if (!canUseNativePlugin) {
 						nativeFileInputEl?.click();
 						return;
@@ -520,8 +546,9 @@
 					return;
 				}
 				rootDirHandle = null;
+				nativeTreeUri = treeUri;
 				pendingHandle = null;
-				allFiles = files;
+				allFiles = [];
 				musicSettings.lastFolderName = folderName;
 				browsePath = [];
 				browseVersion++;
@@ -563,6 +590,7 @@
 		const files = Array.from(input.files ?? []).filter(f => f.name.toLowerCase().endsWith('.mp3'));
 		if (files.length === 0) { alert('No MP3 files found in selected folder.'); return; }
 		rootDirHandle = null;
+		nativeTreeUri = null;
 		allFiles = files.map((file) => createStoredAudioFile(file));
 		musicSettings.lastFolderName = files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files';
 		browsePath = [];
@@ -584,6 +612,7 @@
 		}
 
 		rootDirHandle = null;
+		nativeTreeUri = null;
 		pendingHandle = null;
 		allFiles = files.map((file) => createStoredAudioFile(file));
 		musicSettings.lastFolderName = 'Selected Files';
@@ -603,6 +632,7 @@
 				.requestPermission({ mode: 'read' });
 			if (perm === 'granted') {
 				rootDirHandle = pendingHandle;
+				nativeTreeUri = null;
 				pendingHandle = null;
 				allFiles = [];
 				browseVersion++;
@@ -778,6 +808,7 @@
 				const perm = await (handle as unknown as FSHandle).queryPermission({ mode: 'read' });
 				if (perm === 'granted') {
 					rootDirHandle = handle;
+					nativeTreeUri = null;
 					allFiles = [];
 					browseVersion++;
 					showQueue = true;
