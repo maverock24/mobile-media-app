@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Capacitor } from '@capacitor/core';
+	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
@@ -243,7 +244,37 @@
 		return relativePath && relativePath.length > 0 ? relativePath : file.name;
 	}
 
-	async function blobFromNativePath(path: string): Promise<Blob> {
+	function bytesFromBase64(data: string): Uint8Array {
+		const base64 = data.includes(',') ? (data.split(',').pop() ?? '') : data;
+		const normalized = base64.replace(/\s/g, '');
+		const binary = atob(normalized);
+		const bytes = new Uint8Array(binary.length);
+
+		for (let index = 0; index < binary.length; index += 1) {
+			bytes[index] = binary.charCodeAt(index);
+		}
+
+		return bytes;
+	}
+
+	function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
+		return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+	}
+
+	async function blobFromNativePath(path: string, mimeType?: string): Promise<Blob> {
+		try {
+			const result = await Filesystem.readFile({ path });
+			if (result.data instanceof Blob) {
+				return result.data;
+			}
+
+			return new Blob([arrayBufferFromBytes(bytesFromBase64(result.data))], {
+				type: mimeType ?? 'audio/mpeg',
+			});
+		} catch {
+			// Fall back to HTTP bridge reads for file:// paths if native read fails.
+		}
+
 		const candidates = [Capacitor.convertFileSrc(path), path];
 
 		for (const candidate of candidates) {
@@ -261,9 +292,18 @@
 	}
 
 	async function pickNativeAudioFiles(): Promise<File[]> {
+		if (Capacitor.getPlatform() === 'android') {
+			const permissions = await FilePicker.checkPermissions();
+			if (permissions.readExternalStorage !== 'granted') {
+				const requested = await FilePicker.requestPermissions();
+				if (requested.readExternalStorage !== 'granted') {
+					throw new Error('Android file access permission was denied.');
+				}
+			}
+		}
+
 		const result = await FilePicker.pickFiles({
 			types: ['audio/*'],
-			limit: 0,
 		});
 
 		const files = await Promise.all(result.files.map(async (pickedFile) => {
@@ -275,7 +315,7 @@
 			}
 
 			if (pickedFile.path) {
-				const blob = await blobFromNativePath(pickedFile.path);
+				const blob = await blobFromNativePath(pickedFile.path, pickedFile.mimeType);
 				return new File([blob], pickedFile.name, {
 					type: pickedFile.mimeType ?? blob.type ?? 'audio/mpeg',
 					lastModified: pickedFile.modifiedAt ?? Date.now(),
@@ -285,7 +325,15 @@
 			return null;
 		}));
 
-		return files.filter((file): file is File => file !== null && file.name.toLowerCase().endsWith('.mp3'));
+		return files.filter((file): file is File => {
+			if (file === null) {
+				return false;
+			}
+
+			const isMp3 = file.name.toLowerCase().endsWith('.mp3');
+			const isAudio = file.type.startsWith('audio/');
+			return isMp3 || isAudio;
+		});
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -438,7 +486,8 @@
 				browsePath = [];
 				browseVersion++;
 				showQueue = true;
-			} catch {
+			} catch (error) {
+				console.error('Failed to open native audio files.', error);
 				alert('Unable to open files on this device. Please try again.');
 			}
 			return;
