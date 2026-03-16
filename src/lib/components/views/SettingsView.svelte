@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Capacitor } from '@capacitor/core';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { appSettings, musicSettings, podcastSettings, weatherSettings } from '$lib/stores/settings.svelte';
@@ -35,6 +36,30 @@
 	let androidRelease = $state<AndroidReleaseInfo | null>(null);
 	let isCheckingRelease = $state(false);
 	let releaseError = $state('');
+	const releaseBaseUrl = (() => {
+		const configuredBaseUrl = import.meta.env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
+		if (configuredBaseUrl) {
+			return configuredBaseUrl;
+		}
+
+		if (Capacitor.isNativePlatform()) {
+			return 'https://raw.githubusercontent.com/maverock24/mobile-media-app/main/static';
+		}
+
+		return '';
+	})();
+
+	function resolveReleaseUrl(path: string): string {
+		if (/^https?:\/\//i.test(path)) {
+			return path;
+		}
+
+		if (!releaseBaseUrl) {
+			return path;
+		}
+
+		return `${releaseBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+	}
 
 	function toggle(section: string) {
 		expandedSection = expandedSection === section ? null : section;
@@ -45,7 +70,7 @@
 		releaseError = '';
 
 		try {
-			const response = await fetch(`/releases/android/latest.json?ts=${Date.now()}`, {
+			const response = await fetch(resolveReleaseUrl(`/releases/android/latest.json?ts=${Date.now()}`), {
 				cache: 'no-store'
 			});
 
@@ -58,7 +83,11 @@
 				throw new Error(`Unable to load the latest Android build (${response.status})`);
 			}
 
-			androidRelease = (await response.json()) as AndroidReleaseInfo;
+			const release = (await response.json()) as AndroidReleaseInfo;
+			androidRelease = {
+				...release,
+				url: resolveReleaseUrl(release.url)
+			};
 		} catch (error) {
 			androidRelease = null;
 			releaseError = error instanceof Error ? error.message : 'Unable to load the latest Android build.';
