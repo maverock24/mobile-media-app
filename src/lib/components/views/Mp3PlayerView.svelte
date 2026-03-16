@@ -2,6 +2,7 @@
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
+	import { DirectoryReader, type NativeDirectoryFile } from '$lib/native/directory-reader';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
@@ -246,13 +247,6 @@
 		return relativePath && relativePath.length > 0 ? relativePath : file.name;
 	}
 
-	function getNativeFolderName(path: string): string {
-		const decodedPath = decodeURIComponent(path);
-		const segment = decodedPath.split('/').filter(Boolean).pop() ?? 'Selected Folder';
-		const folderName = segment.includes(':') ? (segment.split(':').pop() ?? segment) : segment;
-		return folderName.length > 0 ? folderName : 'Selected Folder';
-	}
-
 	function bytesFromBase64(data: string): Uint8Array {
 		const base64 = data.includes(',') ? (data.split(',').pop() ?? '') : data;
 		const normalized = base64.replace(/\s/g, '');
@@ -300,42 +294,31 @@
 		throw new Error(`Unable to read selected file at ${path}`);
 	}
 
-	async function collectNativeAudioFiles(directoryPath: string, segments: string[] = []): Promise<File[]> {
-		const { files: entries } = await Filesystem.readdir({ path: directoryPath });
-		const collected = await Promise.all(entries.map(async (entry) => {
-			if (entry.type === 'directory') {
-				try {
-					return await collectNativeAudioFiles(entry.uri, [...segments, entry.name]);
-				} catch {
-					return [];
-				}
-			}
+	async function createFileFromNativeDirectoryEntry(entry: NativeDirectoryFile): Promise<File | null> {
+		if (!entry.name.toLowerCase().endsWith('.mp3')) {
+			return null;
+		}
 
-			if (!entry.name.toLowerCase().endsWith('.mp3')) {
-				return [];
-			}
-
-			try {
-				const blob = await blobFromNativePath(entry.uri, 'audio/mpeg');
-				const file = new File([blob], entry.name, {
-					type: blob.type || 'audio/mpeg',
-					lastModified: entry.mtime ?? Date.now(),
-				});
-				nativeRelativePaths.set(file, [...segments, entry.name].join('/'));
-				return [file];
-			} catch {
-				return [];
-			}
-		}));
-
-		return collected.flat();
+		try {
+			const blob = await blobFromNativePath(entry.path, entry.mimeType);
+			const file = new File([blob], entry.name, {
+				type: entry.mimeType ?? blob.type ?? 'audio/mpeg',
+				lastModified: entry.modifiedAt ?? Date.now(),
+			});
+			nativeRelativePaths.set(file, entry.relativePath);
+			return file;
+		} catch {
+			return null;
+		}
 	}
 
 	async function pickNativeAudioDirectory(): Promise<{ files: File[]; folderName: string }> {
 		const result = await FilePicker.pickDirectory();
+		const directory = await DirectoryReader.listFiles({ treeUri: result.path });
+		const files = await Promise.all(directory.files.map((entry) => createFileFromNativeDirectoryEntry(entry)));
 		return {
-			files: await collectNativeAudioFiles(result.path),
-			folderName: getNativeFolderName(result.path),
+			files: files.filter((file): file is File => file !== null),
+			folderName: directory.folderName,
 		};
 	}
 
