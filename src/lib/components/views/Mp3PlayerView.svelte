@@ -21,6 +21,7 @@
 		| { kind: 'file'; name: string; file: File };
 
 	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+	const nativeRelativePaths = new WeakMap<File, string>();
 
 	// ── IndexedDB persistence for FileSystemDirectoryHandle ──────
 	function openIDB(): Promise<IDBDatabase> {
@@ -241,8 +242,15 @@
 	}
 
 	function getRelativePath(file: File): string {
-		const relativePath = file.webkitRelativePath?.split('/').slice(1).join('/');
+		const relativePath = file.webkitRelativePath?.split('/').slice(1).join('/') ?? nativeRelativePaths.get(file);
 		return relativePath && relativePath.length > 0 ? relativePath : file.name;
+	}
+
+	function getNativeFolderName(path: string): string {
+		const decodedPath = decodeURIComponent(path);
+		const segment = decodedPath.split('/').filter(Boolean).pop() ?? 'Selected Folder';
+		const folderName = segment.includes(':') ? (segment.split(':').pop() ?? segment) : segment;
+		return folderName.length > 0 ? folderName : 'Selected Folder';
 	}
 
 	function bytesFromBase64(data: string): Uint8Array {
@@ -292,39 +300,43 @@
 		throw new Error(`Unable to read selected file at ${path}`);
 	}
 
-	async function pickNativeAudioFiles(): Promise<File[]> {
-		const result = await FilePicker.pickFiles({
-			types: ['audio/*'],
-		});
-
-		const files = await Promise.all(result.files.map(async (pickedFile) => {
-			if (pickedFile.blob) {
-				return new File([pickedFile.blob], pickedFile.name, {
-					type: pickedFile.mimeType ?? pickedFile.blob.type ?? 'audio/mpeg',
-					lastModified: pickedFile.modifiedAt ?? Date.now(),
-				});
+	async function collectNativeAudioFiles(directoryPath: string, segments: string[] = []): Promise<File[]> {
+		const { files: entries } = await Filesystem.readdir({ path: directoryPath });
+		const collected = await Promise.all(entries.map(async (entry) => {
+			if (entry.type === 'directory') {
+				try {
+					return await collectNativeAudioFiles(entry.uri, [...segments, entry.name]);
+				} catch {
+					return [];
+				}
 			}
 
-			if (pickedFile.path) {
-				const blob = await blobFromNativePath(pickedFile.path, pickedFile.mimeType);
-				return new File([blob], pickedFile.name, {
-					type: pickedFile.mimeType ?? blob.type ?? 'audio/mpeg',
-					lastModified: pickedFile.modifiedAt ?? Date.now(),
-				});
+			if (!entry.name.toLowerCase().endsWith('.mp3')) {
+				return [];
 			}
 
-			return null;
+			try {
+				const blob = await blobFromNativePath(entry.uri, 'audio/mpeg');
+				const file = new File([blob], entry.name, {
+					type: blob.type || 'audio/mpeg',
+					lastModified: entry.mtime ?? Date.now(),
+				});
+				nativeRelativePaths.set(file, [...segments, entry.name].join('/'));
+				return [file];
+			} catch {
+				return [];
+			}
 		}));
 
-		return files.filter((file): file is File => {
-			if (file === null) {
-				return false;
-			}
+		return collected.flat();
+	}
 
-			const isMp3 = file.name.toLowerCase().endsWith('.mp3');
-			const isAudio = file.type.startsWith('audio/');
-			return isMp3 || isAudio;
-		});
+	async function pickNativeAudioDirectory(): Promise<{ files: File[]; folderName: string }> {
+		const result = await FilePicker.pickDirectory();
+		return {
+			files: await collectNativeAudioFiles(result.path),
+			folderName: getNativeFolderName(result.path),
+		};
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -465,32 +477,37 @@
 	async function openFolder() {
 		if (isNativeApp) {
 			const canUseNativePlugin = Capacitor.isPluginAvailable('FilePicker');
+			isLoading = true;
 
 			try {
-				const files = canUseNativePlugin ? await pickNativeAudioFiles() : [];
+				const { files, folderName } = canUseNativePlugin
+					? await pickNativeAudioDirectory()
+					: { files: [], folderName: 'Selected Folder' };
 				if (files.length === 0) {
 					if (!canUseNativePlugin) {
 						nativeFileInputEl?.click();
 						return;
 					}
 
-					alert('No MP3 files were selected.');
+					alert('No MP3 files were found in the selected folder.');
 					return;
 				}
 				rootDirHandle = null;
 				pendingHandle = null;
 				allFiles = files;
-				musicSettings.lastFolderName = 'Selected Files';
+				musicSettings.lastFolderName = folderName;
 				browsePath = [];
 				browseVersion++;
 				showQueue = true;
 			} catch (error) {
-				console.error('Failed to open native audio files.', error);
+				console.error('Failed to open native folder.', error);
 				if (nativeFileInputEl) {
 					nativeFileInputEl.click();
 					return;
 				}
-				alert('Unable to open files on this device. Please try again.');
+				alert('Unable to open a folder on this device. Please try again.');
+			} finally {
+				isLoading = false;
 			}
 			return;
 		}
@@ -765,7 +782,7 @@
 			<h2 class="text-2xl font-bold mb-2">Your Music</h2>
 			<p class="text-muted-foreground text-sm leading-relaxed max-w-xs">
 				{#if isNativeApp}
-					Select MP3 files from your device. They will be added to your library for playback.
+					Select a folder from your device. MP3 files in that folder and its sub-folders will be added to your library.
 				{:else}
 					Select a folder from your device. Sub-folders and files will be shown for browsing.
 				{/if}
@@ -786,7 +803,7 @@
 					<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
 					Loading…
 				{:else}
-					<FolderOpen class="w-5 h-5" /> {isNativeApp ? 'Select MP3 Files' : 'Open Folder'}
+					<FolderOpen class="w-5 h-5" /> Open Folder
 				{/if}
 			</Button>
 		{/if}
