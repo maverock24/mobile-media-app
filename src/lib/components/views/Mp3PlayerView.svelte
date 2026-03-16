@@ -93,6 +93,7 @@
 	// ── refs ──
 	let audioEl: HTMLAudioElement;
 	let folderInputEl: HTMLInputElement;
+	let nativeFileInputEl: HTMLInputElement;
 
 	// ── derived ──
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
@@ -292,16 +293,6 @@
 	}
 
 	async function pickNativeAudioFiles(): Promise<File[]> {
-		if (Capacitor.getPlatform() === 'android') {
-			const permissions = await FilePicker.checkPermissions();
-			if (permissions.readExternalStorage !== 'granted') {
-				const requested = await FilePicker.requestPermissions();
-				if (requested.readExternalStorage !== 'granted') {
-					throw new Error('Android file access permission was denied.');
-				}
-			}
-		}
-
 		const result = await FilePicker.pickFiles({
 			types: ['audio/*'],
 		});
@@ -473,9 +464,16 @@
 	// ─────────────────────────────────────────────────────────────
 	async function openFolder() {
 		if (isNativeApp) {
+			const canUseNativePlugin = Capacitor.isPluginAvailable('FilePicker');
+
 			try {
-				const files = await pickNativeAudioFiles();
+				const files = canUseNativePlugin ? await pickNativeAudioFiles() : [];
 				if (files.length === 0) {
+					if (!canUseNativePlugin) {
+						nativeFileInputEl?.click();
+						return;
+					}
+
 					alert('No MP3 files were selected.');
 					return;
 				}
@@ -488,6 +486,10 @@
 				showQueue = true;
 			} catch (error) {
 				console.error('Failed to open native audio files.', error);
+				if (nativeFileInputEl) {
+					nativeFileInputEl.click();
+					return;
+				}
 				alert('Unable to open files on this device. Please try again.');
 			}
 			return;
@@ -521,6 +523,28 @@
 		musicSettings.lastFolderName = files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files';
 		browsePath = [];
 		browseVersion++;  // triggers browse entry reload
+		showQueue = true;
+		input.value = '';
+	}
+
+	function handleNativeFileInput(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const files = Array.from(input.files ?? []).filter((file) => {
+			return file.name.toLowerCase().endsWith('.mp3') || file.type.startsWith('audio/');
+		});
+
+		if (files.length === 0) {
+			alert('No MP3 files were selected.');
+			input.value = '';
+			return;
+		}
+
+		rootDirHandle = null;
+		pendingHandle = null;
+		allFiles = files;
+		musicSettings.lastFolderName = 'Selected Files';
+		browsePath = [];
+		browseVersion++;
 		showQueue = true;
 		input.value = '';
 	}
@@ -712,6 +736,15 @@
 	webkitdirectory
 	class="hidden"
 	onchange={handleFolderInput}
+/>
+
+<input
+	bind:this={nativeFileInputEl}
+	type="file"
+	accept=".mp3,audio/*"
+	multiple
+	class="hidden"
+	onchange={handleNativeFileInput}
 />
 
 <div class="flex flex-col h-full bg-background">
