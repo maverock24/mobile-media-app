@@ -1,5 +1,34 @@
 apply plugin: 'com.android.application'
 
+def envOrDefault(String name, String defaultValue) {
+    def value = System.getenv(name)
+    return value != null && !value.trim().isEmpty() ? value : defaultValue
+}
+
+def envVersionCode() {
+    def rawValue = System.getenv('ANDROID_VERSION_CODE')
+    if (rawValue == null || rawValue.trim().isEmpty()) {
+        return 1
+    }
+
+    try {
+        return Integer.parseInt(rawValue)
+    } catch (NumberFormatException ignored) {
+        return 1
+    }
+}
+
+def releaseSigningVars = [
+    'ANDROID_KEYSTORE_PATH',
+    'ANDROID_KEYSTORE_PASSWORD',
+    'ANDROID_KEY_ALIAS',
+    'ANDROID_KEY_PASSWORD'
+]
+def hasReleaseSigning = releaseSigningVars.every { name ->
+    def value = System.getenv(name)
+    value != null && !value.trim().isEmpty()
+}
+
 android {
     namespace = "com.maverock24.mobilemediaapp"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +36,8 @@ android {
         applicationId "com.maverock24.mobilemediaapp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode envVersionCode()
+        versionName envOrDefault('ANDROID_VERSION_NAME', '1.0.0')
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +45,21 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(System.getenv('ANDROID_KEYSTORE_PATH'))
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

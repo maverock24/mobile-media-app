@@ -87,17 +87,48 @@ Notes:
 - Mobile builds use a dedicated static SvelteKit output in `dist-mobile/`.
 - The normal `pnpm build` command still targets the Netlify deployment.
 
+## Netlify-hosted APK updates
+
+The production Netlify deployment can also host the latest Android APK so the web app can offer installs from the Settings view.
+
+How it works:
+
+- The `Publish Android APK Assets` GitHub Actions workflow builds an Android APK on each push to `main`.
+- The workflow commits `static/releases/android/latest.apk` and `static/releases/android/latest.json` back into the repository.
+- Before committing, the workflow deletes any older APK or manifest files from `static/releases/android`, so only the latest published APK remains in the repo tree.
+- Netlify picks up that GitHub commit through its existing repository integration, so GitHub does not deploy to Netlify directly.
+- The Settings screen reads that manifest and shows a `Download Latest Android APK` action when a build is available.
+
+Recommended GitHub secrets for repeatable installs and upgrades:
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+Repository settings required for the workflow:
+
+- GitHub Actions must be allowed to push commits back to `main`.
+- If branch protection blocks bot pushes, allow `github-actions[bot]` or route this workflow through a release branch instead.
+
+Why the Android signing secrets matter:
+
+- Without a stable signing key, CI can only publish debug-signed APKs.
+- Debug APKs are fine for fresh installs, but they are not reliable for upgrading an already installed app across separate CI runners.
+- With the signing secrets configured, the workflows produce a consistently signed release APK and increment `versionCode` from the GitHub Actions run number.
+
+Operational note:
+
+- This approach keeps only the latest APK file in the repository tree so Netlify serves a single current installer.
+- Git history will still contain prior APK versions from older commits unless you later rewrite history.
+
 ## GitHub Actions Android artifacts
 
-The repo now includes a GitHub Actions workflow that builds a debug Android APK and uploads it as a workflow artifact.
+The repo includes GitHub Actions workflows for both manual Android artifacts and tagged GitHub releases.
 
 How to use it:
 
-```sh
-git push origin main
-```
-
-Or run the `Android Build` workflow manually from the GitHub Actions tab.
+Run the `Android Build` workflow manually from the GitHub Actions tab to produce an artifact without deploying.
 
 After the workflow finishes, download the `media-hub-android-debug-apk` artifact from the workflow run page. The uploaded file is the debug APK produced from:
 
@@ -107,7 +138,7 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 Notes:
 
-- This workflow produces a debug APK for easy device installs and testing.
+- The `Android Release` workflow builds a signed release APK when you push a `v*` tag and the Android signing secrets are configured.
 - For Play Store submission, add a separate signed release workflow that builds an AAB with signing credentials stored in GitHub secrets.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

@@ -11,6 +11,8 @@ permissions:
 jobs:
   release-android-apk:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_VERSION_CODE: ${{ github.run_number }}
 
     steps:
       - name: Checkout
@@ -37,26 +39,43 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Prepare Android signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$ANDROID_KEYSTORE_BASE64" || -z "$ANDROID_KEYSTORE_PASSWORD" || -z "$ANDROID_KEY_ALIAS" || -z "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "Release signing secrets are required to publish a reusable APK."
+            exit 1
+          fi
+
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/media-hub-upload.keystore"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build mobile web assets
-        run: pnpm build:mobile
-
-      - name: Sync Capacitor Android project
-        run: pnpm exec cap sync android
-
-      - name: Assemble debug APK
+      - name: Build release APK
+        env:
+          ANDROID_VERSION_NAME: ${{ github.ref_name }}
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/media-hub-upload.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          pnpm build:mobile
+          pnpm exec cap sync android
+
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
 
       - name: Prepare release asset
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk media-hub-${{ github.ref_name }}-android-debug.apk
+        run: cp android/app/build/outputs/apk/release/app-release.apk media-hub-${{ github.ref_name }}-android-release.apk
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: media-hub-${{ github.ref_name }}-android-debug.apk
+          files: media-hub-${{ github.ref_name }}-android-release.apk
           generate_release_notes: true

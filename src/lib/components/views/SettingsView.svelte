@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { appSettings, musicSettings, podcastSettings, weatherSettings } from '$lib/stores/settings.svelte';
 	import {
@@ -9,16 +10,97 @@
 		RotateCcw,
 		ChevronRight,
 		Check,
-		Volume2,
-		Gauge,
-		Globe
+		Globe,
+		Smartphone,
+		Download,
+		RefreshCw,
+		ExternalLink
 	} from 'lucide-svelte';
 
+	type AndroidReleaseInfo = {
+		version: string;
+		versionCode: number;
+		versionName: string;
+		buildType: 'debug' | 'release';
+		fileName: string;
+		url: string;
+		sizeBytes: number;
+		sha256: string;
+		publishedAt: string;
+		commitSha: string;
+		commitUrl: string;
+	};
+
 	let expandedSection = $state<string | null>(null);
+	let androidRelease = $state<AndroidReleaseInfo | null>(null);
+	let isCheckingRelease = $state(false);
+	let releaseError = $state('');
 
 	function toggle(section: string) {
 		expandedSection = expandedSection === section ? null : section;
 	}
+
+	async function loadAndroidRelease() {
+		isCheckingRelease = true;
+		releaseError = '';
+
+		try {
+			const response = await fetch(`/releases/android/latest.json?ts=${Date.now()}`, {
+				cache: 'no-store'
+			});
+
+			if (response.status === 404) {
+				androidRelease = null;
+				return;
+			}
+
+			if (!response.ok) {
+				throw new Error(`Unable to load the latest Android build (${response.status})`);
+			}
+
+			androidRelease = (await response.json()) as AndroidReleaseInfo;
+		} catch (error) {
+			androidRelease = null;
+			releaseError = error instanceof Error ? error.message : 'Unable to load the latest Android build.';
+		} finally {
+			isCheckingRelease = false;
+		}
+	}
+
+	function formatReleaseDate(value: string) {
+		const date = new Date(value);
+
+		if (Number.isNaN(date.getTime())) {
+			return value;
+		}
+
+		return new Intl.DateTimeFormat(undefined, {
+			dateStyle: 'medium',
+			timeStyle: 'short'
+		}).format(date);
+	}
+
+	function formatFileSize(sizeBytes: number) {
+		if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+			return 'Unknown size';
+		}
+
+		const units = ['B', 'KB', 'MB', 'GB'];
+		let value = sizeBytes;
+		let unitIndex = 0;
+
+		while (value >= 1024 && unitIndex < units.length - 1) {
+			value /= 1024;
+			unitIndex += 1;
+		}
+
+		const digits = unitIndex === 0 ? 0 : 1;
+		return `${value.toFixed(digits)} ${units[unitIndex]}`;
+	}
+
+	onMount(() => {
+		void loadAndroidRelease();
+	});
 
 	function resetAll() {
 		if (!confirm('Reset all settings to defaults?')) return;
@@ -426,6 +508,104 @@
 							</label>
 						{/each}
 					</div>
+				</div>
+			{/if}
+		</div>
+
+		<!-- ── App Updates ───────────────────────────────────── -->
+		<div>
+			<button class="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent transition-colors" onclick={() => toggle('updates')}>
+				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center shrink-0">
+					<Smartphone class="w-5 h-5 text-white" />
+				</div>
+				<div class="flex-1 min-w-0">
+					<p class="font-semibold">App Updates</p>
+					<p class="text-xs text-muted-foreground">
+						{#if androidRelease}
+							{androidRelease.versionName} · {androidRelease.buildType} APK
+						{:else if isCheckingRelease}
+							Checking latest Android build
+						{:else}
+							Install the latest Android APK from this site
+						{/if}
+					</p>
+				</div>
+				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'updates' ? 'rotate-90' : ''}" />
+			</button>
+			{#if expandedSection === 'updates'}
+				<div class="px-4 pb-4 space-y-3 bg-muted/20">
+					<p class="text-xs text-muted-foreground leading-relaxed">
+						Each production Netlify deploy can publish the newest Android APK here. Open this page on an Android device, download the APK, and confirm the install prompt.
+					</p>
+
+					{#if isCheckingRelease}
+						<div class="rounded-xl border border-border/60 bg-background/70 px-3 py-3 text-sm text-muted-foreground">
+							Checking the latest Android build...
+						</div>
+					{:else if releaseError}
+						<div class="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-3 text-sm text-destructive">
+							{releaseError}
+						</div>
+					{:else if androidRelease}
+						<div class="rounded-xl border border-border/60 bg-background/80 p-4 space-y-3">
+							<div class="flex items-start justify-between gap-3">
+								<div>
+									<p class="font-medium leading-tight">Android build {androidRelease.versionName}</p>
+									<p class="text-xs text-muted-foreground mt-1">Published {formatReleaseDate(androidRelease.publishedAt)}</p>
+								</div>
+								<span class="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-primary">
+									{androidRelease.buildType}
+								</span>
+							</div>
+
+							<div class="grid grid-cols-2 gap-3 text-xs text-muted-foreground">
+								<div>
+									<p class="uppercase tracking-wide text-[10px]">Size</p>
+									<p class="mt-1 text-foreground">{formatFileSize(androidRelease.sizeBytes)}</p>
+								</div>
+								<div>
+									<p class="uppercase tracking-wide text-[10px]">Version Code</p>
+									<p class="mt-1 text-foreground">{androidRelease.versionCode}</p>
+								</div>
+							</div>
+
+							<div class="flex flex-col gap-2">
+								<a
+									href={androidRelease.url}
+									class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+									download={androidRelease.fileName}
+								>
+									<Download class="w-4 h-4" />
+									Download Latest Android APK
+								</a>
+								<a
+									href={androidRelease.commitUrl}
+									target="_blank"
+									rel="noreferrer"
+									class="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+								>
+									<ExternalLink class="w-4 h-4" />
+									View Source Commit
+								</a>
+							</div>
+
+							<p class="text-[11px] text-muted-foreground break-all">
+								SHA-256 {androidRelease.sha256}
+							</p>
+						</div>
+					{:else}
+						<div class="rounded-xl border border-border/60 bg-background/70 px-3 py-3 text-sm text-muted-foreground">
+							No Android package has been published to this deployment yet.
+						</div>
+					{/if}
+
+					<button
+						class="inline-flex items-center gap-2 text-sm font-medium text-primary"
+						onclick={() => void loadAndroidRelease()}
+					>
+						<RefreshCw class="w-4 h-4" />
+						Refresh build info
+					</button>
 				</div>
 			{/if}
 		</div>

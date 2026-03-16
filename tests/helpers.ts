@@ -7,7 +7,9 @@ export const BASE = 'http://localhost:4173';
 
 // ── Tab navigation ──────────────────────────────────────────────────────────
 export async function goToTab(page: Page, label: 'Music' | 'Podcasts' | 'Weather' | 'Settings') {
-	await page.getByRole('button', { name: label, exact: true }).click();
+	await page.getByRole('button', { name: label, exact: true }).evaluate((button) => {
+		(button as HTMLButtonElement).click();
+	});
 }
 
 // ── Confirm a tab is visually active (dot indicator) ───────────────────────
