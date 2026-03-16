@@ -15,14 +15,18 @@
 	interface Track {
 		id: number; title: string; artist: string;
 		filename: string; url: string; duration: number;
+		source: StoredAudioFile;
 	}
+
+	type StoredAudioFile =
+		| { source: 'web'; name: string; relativePath: string; file: File }
+		| { source: 'native'; name: string; relativePath: string; path: string; mimeType?: string; modifiedAt?: number };
 
 	type BrowseEntry =
 		| { kind: 'folder'; name: string; count: number }
-		| { kind: 'file'; name: string; file: File };
+		| { kind: 'file'; name: string; file: StoredAudioFile };
 
 	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
-	const nativeRelativePaths = new WeakMap<File, string>();
 
 	// ── IndexedDB persistence for FileSystemDirectoryHandle ──────
 	function openIDB(): Promise<IDBDatabase> {
@@ -82,7 +86,7 @@
 	// rootDirHandle and allFiles MUST be $state so hasFolderLoaded $derived updates
 	let rootDirHandle    = $state<FileSystemDirectoryHandle | null>(null);
 	let pendingHandle    = $state<FileSystemDirectoryHandle | null>(null); // needs permission
-	let allFiles         = $state<File[]>([]);                // webkitdirectory fallback
+	let allFiles         = $state<StoredAudioFile[]>([]);     // web/native metadata-backed library
 	let browsePath       = $state<string[]>([]);                 // navigation stack
 	let browseEntries    = $state<BrowseEntry[]>([]);
 	let browseLoading    = $state(false);
@@ -140,9 +144,9 @@
 		};
 		const onEnded = () => {
 			if (musicSettings.isRepeat) { audioEl.currentTime = 0; audioEl.play().catch(() => {}); }
-			else advanceTrack(true);
+			else void advanceTrack(true);
 		};
-		const onError = () => { advanceTrack(true); };
+		const onError = () => { void advanceTrack(true); };
 		audioEl.volume = musicSettings.volume / 100;
 		audioEl.muted  = musicSettings.isMuted;
 		audioEl.playbackRate = musicSettings.playbackSpeed;
@@ -231,8 +235,14 @@
 		if (sep > 0) return { artist: name.slice(0, sep).trim(), title: name.slice(sep + 3).trim() };
 		return { title: name, artist: 'Unknown Artist' };
 	}
-	function revokeAll() { tracks.forEach((t) => URL.revokeObjectURL(t.url)); }
-	function sortFiles(files: File[]): File[] {
+	function revokeAll() {
+		tracks.forEach((track) => {
+			if (track.url) {
+				URL.revokeObjectURL(track.url);
+			}
+		});
+	}
+	function sortFiles(files: StoredAudioFile[]): StoredAudioFile[] {
 		return [...files].sort((a, b) => {
 			if (musicSettings.sortOrder === 'title')
 				return parseFilename(a.name).title.localeCompare(parseFilename(b.name).title);
@@ -242,9 +252,18 @@
 		});
 	}
 
-	function getRelativePath(file: File): string {
-		const relativePath = file.webkitRelativePath?.split('/').slice(1).join('/') ?? nativeRelativePaths.get(file);
-		return relativePath && relativePath.length > 0 ? relativePath : file.name;
+	function createStoredAudioFile(file: File): StoredAudioFile {
+		const relativePath = file.webkitRelativePath?.split('/').slice(1).join('/') ?? file.name;
+		return {
+			source: 'web',
+			name: file.name,
+			relativePath: relativePath && relativePath.length > 0 ? relativePath : file.name,
+			file,
+		};
+	}
+
+	function getRelativePath(file: StoredAudioFile): string {
+		return file.relativePath && file.relativePath.length > 0 ? file.relativePath : file.name;
 	}
 
 	function bytesFromBase64(data: string): Uint8Array {
@@ -294,30 +313,32 @@
 		throw new Error(`Unable to read selected file at ${path}`);
 	}
 
-	async function createFileFromNativeDirectoryEntry(entry: NativeDirectoryFile): Promise<File | null> {
-		if (!entry.name.toLowerCase().endsWith('.mp3')) {
-			return null;
+	async function materializeStoredFile(entry: StoredAudioFile): Promise<File> {
+		if (entry.source === 'web') {
+			return entry.file;
 		}
 
-		try {
-			const blob = await blobFromNativePath(entry.path, entry.mimeType);
-			const file = new File([blob], entry.name, {
-				type: entry.mimeType ?? blob.type ?? 'audio/mpeg',
-				lastModified: entry.modifiedAt ?? Date.now(),
-			});
-			nativeRelativePaths.set(file, entry.relativePath);
-			return file;
-		} catch {
-			return null;
-		}
+		const blob = await blobFromNativePath(entry.path, entry.mimeType);
+		return new File([blob], entry.name, {
+			type: entry.mimeType ?? blob.type ?? 'audio/mpeg',
+			lastModified: entry.modifiedAt ?? Date.now(),
+		});
 	}
 
-	async function pickNativeAudioDirectory(): Promise<{ files: File[]; folderName: string }> {
+	async function pickNativeAudioDirectory(): Promise<{ files: StoredAudioFile[]; folderName: string }> {
 		const result = await FilePicker.pickDirectory();
 		const directory = await DirectoryReader.listFiles({ treeUri: result.path });
-		const files = await Promise.all(directory.files.map((entry) => createFileFromNativeDirectoryEntry(entry)));
 		return {
-			files: files.filter((file): file is File => file !== null),
+			files: directory.files
+				.filter((entry) => entry.name.toLowerCase().endsWith('.mp3'))
+				.map((entry) => ({
+					source: 'native' as const,
+					name: entry.name,
+					relativePath: entry.relativePath,
+					path: entry.path,
+					mimeType: entry.mimeType,
+					modifiedAt: entry.modifiedAt,
+				})),
 			folderName: directory.folderName,
 		};
 	}
@@ -352,7 +373,7 @@
 						} catch { /* skip */ }
 						folders.push({ kind: 'folder', name, count });
 					} else if (handle.kind === 'file' && name.toLowerCase().endsWith('.mp3')) {
-						files.push({ kind: 'file', name, file: await (handle as FileSystemFileHandle).getFile() });
+						files.push({ kind: 'file', name, file: createStoredAudioFile(await (handle as FileSystemFileHandle).getFile()) });
 					}
 				}
 				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -424,10 +445,10 @@
 	}
 
 	// ── Collect all files under a browse path ──
-	async function collectAllFromPath(path: string[]): Promise<File[]> {
+	async function collectAllFromPath(path: string[]): Promise<StoredAudioFile[]> {
 		if (rootDirHandle) {
 			const dir = await resolveDirAtPath(path);
-			return dir ? await collectFilesFromDirHandle(dir) : [];
+			return dir ? (await collectFilesFromDirHandle(dir)).map((file) => createStoredAudioFile(file)) : [];
 		} else if (allFiles.length > 0) {
 			const prefix = path.length > 0 ? path.join('/') + '/' : '';
 			return allFiles.filter(f => {
@@ -438,15 +459,38 @@
 		return [];
 	}
 
+	async function ensureTrackUrl(index: number): Promise<string | null> {
+		const track = tracks[index];
+		if (!track) {
+			return null;
+		}
+
+		if (track.url) {
+			return track.url;
+		}
+
+		try {
+			const file = await materializeStoredFile(track.source);
+			const url = URL.createObjectURL(file);
+			tracks = tracks.map((current, currentIndex) => {
+				return currentIndex === index ? { ...current, url } : current;
+			});
+			return url;
+		} catch (error) {
+			console.error('Failed to prepare track for playback.', error);
+			return null;
+		}
+	}
+
 	// ─────────────────────────────────────────────────────────────
-	// loadTracks — internal, always called with sorted File[]
+	// loadTracks — internal, always called with sorted stored entries
 	// ─────────────────────────────────────────────────────────────
-	function loadTracks(files: File[], folder: string) {
+	function loadTracks(files: StoredAudioFile[], folder: string) {
 		revokeAll();
 		const sorted = sortFiles(files);
 		tracks = sorted.map((f, i) => {
 			const { title, artist } = parseFilename(f.name);
-			return { id: i, title, artist, filename: f.name, url: URL.createObjectURL(f), duration: 0 };
+			return { id: i, title, artist, filename: f.name, url: '', duration: 0, source: f };
 		});
 		musicSettings.lastFolderName = folder;
 		musicSettings.lastTrackIndex = 0;
@@ -519,7 +563,7 @@
 		const files = Array.from(input.files ?? []).filter(f => f.name.toLowerCase().endsWith('.mp3'));
 		if (files.length === 0) { alert('No MP3 files found in selected folder.'); return; }
 		rootDirHandle = null;
-		allFiles = files;
+		allFiles = files.map((file) => createStoredAudioFile(file));
 		musicSettings.lastFolderName = files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files';
 		browsePath = [];
 		browseVersion++;  // triggers browse entry reload
@@ -541,7 +585,7 @@
 
 		rootDirHandle = null;
 		pendingHandle = null;
-		allFiles = files;
+		allFiles = files.map((file) => createStoredAudioFile(file));
 		musicSettings.lastFolderName = 'Selected Files';
 		browsePath = [];
 		browseVersion++;
@@ -573,19 +617,20 @@
 	// ─────────────────────────────────────────────────────────────
 
 	// Play a single file → load all siblings as context
-	function playBrowseFile(entry: BrowseEntry & { kind: 'file' }) {
+	async function playBrowseFile(entry: BrowseEntry & { kind: 'file' }) {
 		const siblings = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
-		revokeAll();
+		loadTracks(siblings, browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName);
 		const sorted = sortFiles(siblings);
-		tracks = sorted.map((f, i) => {
-			const { title, artist } = parseFilename(f.name);
-			return { id: i, title, artist, filename: f.name, url: URL.createObjectURL(f), duration: 0 };
-		});
 		const idx = sorted.findIndex(f => f === entry.file);
 		musicSettings.lastTrackIndex = Math.max(0, idx);
 		currentTime = 0; duration = 0;
 		if (audioEl && tracks.length > 0) {
-			audioEl.src = tracks[musicSettings.lastTrackIndex].url;
+			const url = await ensureTrackUrl(musicSettings.lastTrackIndex);
+			if (!url) {
+				alert('Unable to load this track.');
+				return;
+			}
+			audioEl.src = url;
 			audioEl.load();
 			claimAudio('music');
 			initAudioContext();
@@ -601,7 +646,12 @@
 		if (files.length === 0) { alert('No MP3 files found.'); return; }
 		loadTracks(files, path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName);
 		if (audioEl && tracks.length > 0) {
-			audioEl.src = tracks[0].url;
+			const url = await ensureTrackUrl(0);
+			if (!url) {
+				alert('Unable to load tracks from this folder.');
+				return;
+			}
+			audioEl.src = url;
 			audioEl.load();
 			claimAudio('music');
 			initAudioContext();
@@ -618,29 +668,42 @@
 	// ─────────────────────────────────────────────────────────────
 	// Playback controls
 	// ─────────────────────────────────────────────────────────────
-	function togglePlay() {
+	async function togglePlay() {
 		if (!audioEl || !currentTrack) return;
 		initAudioContext();
 		if (isPlaying) { audioEl.pause(); }
 		else {
 			claimAudio('music');
-			if (!audioEl.src || audioEl.src === window.location.href) { audioEl.src = currentTrack.url; audioEl.load(); }
+			if (!audioEl.src || audioEl.src === window.location.href) {
+				const url = await ensureTrackUrl(musicSettings.lastTrackIndex);
+				if (!url) {
+					alert('Unable to load this track.');
+					return;
+				}
+				audioEl.src = url;
+				audioEl.load();
+			}
 			audioEl.play().catch(() => {});
 		}
 	}
 
-	function selectTrack(index: number) {
+	async function selectTrack(index: number) {
 		musicSettings.lastTrackIndex = index;
 		musicSettings.lastTrackTimestamp = 0;
 		currentTime = 0; duration = 0;
 		if (audioEl && tracks[index]) {
-			audioEl.src = tracks[index].url; audioEl.load();
+			const url = await ensureTrackUrl(index);
+			if (!url) {
+				alert('Unable to load this track.');
+				return;
+			}
+			audioEl.src = url; audioEl.load();
 			claimAudio('music');
 			audioEl.play().catch(() => {});
 		}
 	}
 
-	function advanceTrack(wasPlaying: boolean) {
+	async function advanceTrack(wasPlaying: boolean) {
 		if (tracks.length === 0) return;
 		const idx = musicSettings.lastTrackIndex;
 		const nextIndex = musicSettings.isShuffle
@@ -656,12 +719,17 @@
 		musicSettings.lastTrackTimestamp = 0;
 		currentTime = 0; duration = 0;
 		if (audioEl && tracks[nextIndex]) {
-			audioEl.src = tracks[nextIndex].url; audioEl.load();
+			const url = await ensureTrackUrl(nextIndex);
+			if (!url) {
+				isPlaying = false;
+				return;
+			}
+			audioEl.src = url; audioEl.load();
 			if (wasPlaying) audioEl.play().catch(() => { isPlaying = false; });
 		}
 	}
 
-	function prevTrack() {
+	async function prevTrack() {
 		if (tracks.length === 0) return;
 		if (musicSettings.rewindOnPrev && currentTime > 3 && audioEl) { audioEl.currentTime = 0; return; }
 		const prevIndex = (musicSettings.lastTrackIndex - 1 + tracks.length) % tracks.length;
@@ -669,7 +737,11 @@
 		musicSettings.lastTrackTimestamp = 0;
 		currentTime = 0; duration = 0;
 		if (audioEl && tracks[prevIndex]) {
-			audioEl.src = tracks[prevIndex].url; audioEl.load();
+			const url = await ensureTrackUrl(prevIndex);
+			if (!url) {
+				return;
+			}
+			audioEl.src = url; audioEl.load();
 			if (isPlaying) audioEl.play().catch(() => {});
 		}
 	}
