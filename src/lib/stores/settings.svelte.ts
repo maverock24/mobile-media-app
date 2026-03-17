@@ -19,6 +19,7 @@ export const musicSettings = persisted('music-settings', {
 	isMuted: false,
 	isShuffle: false,
 	isRepeat: false,
+	librarySource: 'device' as 'device' | 'drive',
 	lastFolderName: '',
 	lastTrackIndex: 0,
 	lastTrackTimestamp: 0,  // seconds — saved on pause/steal for UX continuity

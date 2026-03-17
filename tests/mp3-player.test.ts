@@ -41,6 +41,16 @@ test.describe('MP3 Player view', () => {
 
 	test.beforeEach(async ({ page }) => {
 		await page.goto('/');
+		await page.evaluate(async () => {
+			localStorage.clear();
+			await new Promise<void>((resolve) => {
+				const req = indexedDB.deleteDatabase('music-app');
+				req.onsuccess = () => resolve();
+				req.onerror = () => resolve();
+				req.onblocked = () => resolve();
+			});
+		});
+		await page.reload();
 		// Music tab is default, but be explicit
 		await goToTab(page, 'Music');
 	});
@@ -87,6 +97,23 @@ test.describe('MP3 Player view', () => {
 		]);
 		await fileChooser.setFiles(tmpDir);
 
+		await expect(page.getByText('Track One')).toBeVisible({ timeout: 5000 });
+		await expect(page.getByText('Track Two')).toBeVisible();
+	});
+
+	test('restores the selected library after a page reload', async ({ page }) => {
+		const [fileChooser] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fileChooser.setFiles(tmpDir);
+
+		await expect(page.getByText('Track One')).toBeVisible({ timeout: 5000 });
+		await page.reload();
+		await goToTab(page, 'Music');
 		await expect(page.getByText('Track One')).toBeVisible({ timeout: 5000 });
 		await expect(page.getByText('Track Two')).toBeVisible();
 	});

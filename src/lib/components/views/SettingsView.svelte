@@ -144,6 +144,7 @@
 		musicSettings.isMuted = false;
 		musicSettings.isShuffle = false;
 		musicSettings.isRepeat = false;
+		musicSettings.librarySource = 'device';
 		musicSettings.crossfadeDuration = 0;
 		musicSettings.equalizerPreset = 'flat';
 		musicSettings.showAlbumArt = true;

@@ -2,37 +2,71 @@
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
+	import Input from '$lib/components/ui/Input.svelte';
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import Button from '$lib/components/ui/Button.svelte';
+	import {
+		canStreamGoogleDriveFile,
+		createGoogleDriveStreamSession,
+		downloadGoogleDriveFile,
+		fetchGoogleDriveUser,
+		getGoogleDriveClientId,
+		isGoogleDriveConfigured,
+		listGoogleDriveMp3Files,
+		requestGoogleDriveAccessToken,
+		revokeGoogleDriveAccess,
+		type GoogleDriveFile,
+		type GoogleDriveUser
+	} from '$lib/google-drive';
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, Heart, ListMusic, FolderOpen, Music2,
-		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal
+		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
+		Cloud, RefreshCw, LogOut, Search
 	} from 'lucide-svelte';
 
 	interface Track {
 		id: number; title: string; artist: string;
 		filename: string; url: string; duration: number;
+		cleanup?: () => void;
 		source: StoredAudioFile;
 	}
 
 	type StoredAudioFile =
 		| { source: 'web'; name: string; relativePath: string; file: File }
-		| { source: 'native'; name: string; relativePath: string; path: string; mimeType?: string; modifiedAt?: number };
+		| { source: 'native'; name: string; relativePath: string; path: string; mimeType?: string; modifiedAt?: number }
+		| {
+			source: 'drive';
+			name: string;
+			relativePath: string;
+			fileId: string;
+			mimeType?: string;
+			modifiedAt?: number;
+			sizeBytes?: number;
+			webViewLink?: string;
+		};
 
 	type BrowseEntry =
 		| { kind: 'folder'; name: string; count: number }
 		| { kind: 'file'; name: string; file: StoredAudioFile };
 
 	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+	const googleDriveConfigured = isGoogleDriveConfigured();
+	const googleDriveClientId = getGoogleDriveClientId();
+	type CachedLibraryFile = { name: string; relativePath: string; file: File };
+	type CachedLibrary = { folderName: string; files: CachedLibraryFile[]; savedAt: number };
 
 	// ── IndexedDB persistence for FileSystemDirectoryHandle ──────
 	function openIDB(): Promise<IDBDatabase> {
 		return new Promise((res, rej) => {
-			const req = indexedDB.open('music-app', 1);
-			req.onupgradeneeded = () => req.result.createObjectStore('handles');
+			const req = indexedDB.open('music-app', 2);
+			req.onupgradeneeded = () => {
+				const db = req.result;
+				if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles');
+				if (!db.objectStoreNames.contains('libraries')) db.createObjectStore('libraries');
+			};
 			req.onsuccess = () => res(req.result);
 			req.onerror  = () => rej(req.error);
 		});
@@ -58,6 +92,39 @@
 			db.close();
 			return result;
 		} catch { return null; }
+	}
+	async function saveCachedLibrary(folderName: string, files: StoredAudioFile[]) {
+		const cachedFiles = files.flatMap((file) => {
+			if (file.source !== 'web') return [];
+			return [{ name: file.name, relativePath: file.relativePath, file: file.file } satisfies CachedLibraryFile];
+		});
+
+		if (cachedFiles.length === 0) return;
+
+		try {
+			const db = await openIDB();
+			const tx = db.transaction('libraries', 'readwrite');
+			tx.objectStore('libraries').put({ folderName, files: cachedFiles, savedAt: Date.now() } satisfies CachedLibrary, 'last-library');
+			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
+			db.close();
+		} catch {
+			// Ignore cache write failures.
+		}
+	}
+	async function loadCachedLibrary(): Promise<CachedLibrary | null> {
+		try {
+			const db = await openIDB();
+			const tx = db.transaction('libraries', 'readonly');
+			const result = await new Promise<CachedLibrary | null>((res, rej) => {
+				const req = tx.objectStore('libraries').get('last-library');
+				req.onsuccess = () => res((req.result as CachedLibrary) ?? null);
+				req.onerror = () => rej(req.error);
+			});
+			db.close();
+			return result;
+		} catch {
+			return null;
+		}
 	}
 
 	// EQ constants
@@ -92,6 +159,13 @@
 	let browseEntries    = $state<BrowseEntry[]>([]);
 	let browseLoading    = $state(false);
 	let browseVersion    = $state(0);                          // bump to force reload
+	let driveAccessToken = $state('');
+	let driveTokenExpiresAt = $state(0);
+	let driveUser        = $state<GoogleDriveUser | null>(null);
+	let driveError       = $state('');
+	let driveSearch      = $state('');
+	let isDriveAuthenticating = $state(false);
+	let isDriveLoading   = $state(false);
 
 	// ── Web Audio API (lazy-init) ──
 	let audioCtx: AudioContext | null = null;
@@ -106,6 +180,9 @@
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
 	const progressPercent = $derived(duration > 0 ? (currentTime / duration) * 100 : 0);
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
+	const currentLibraryLabel = $derived(
+		musicSettings.librarySource === 'drive' ? 'Google Drive' : musicSettings.lastFolderName || 'Library'
+	);
 
 	// ── register stop-callback for cross-view audio exclusivity ──
 	$effect(() => {
@@ -121,8 +198,10 @@
 	// ── reload browse entries when path or folder version changes ──
 	$effect(() => {
 		const path = [...browsePath];
+		const driveFilter = driveSearch.trim().toLowerCase();
 		browseVersion; // reactive dependency
-		void loadBrowseEntries(path);
+		musicSettings.librarySource;
+		void loadBrowseEntries(path, driveFilter);
 	});
 
 	// ── audio element event wiring ──
@@ -145,9 +224,9 @@
 		};
 		const onEnded = () => {
 			if (musicSettings.isRepeat) { audioEl.currentTime = 0; audioEl.play().catch(() => {}); }
-			else void advanceTrack(true);
+			else void advanceTrack(true, false);
 		};
-		const onError = () => { void advanceTrack(true); };
+		const onError = () => { void advanceTrack(true, false); };
 		audioEl.volume = musicSettings.volume / 100;
 		audioEl.muted  = musicSettings.isMuted;
 		audioEl.playbackRate = musicSettings.playbackSpeed;
@@ -238,9 +317,26 @@
 	}
 	function revokeAll() {
 		tracks.forEach((track) => {
+			track.cleanup?.();
 			if (track.url) {
 				URL.revokeObjectURL(track.url);
 			}
+		});
+	}
+
+	function releaseTrackUrl(index: number) {
+		const track = tracks[index];
+		if (!track?.url && !track?.cleanup) {
+			return;
+		}
+
+		track.cleanup?.();
+		if (track.url) {
+			URL.revokeObjectURL(track.url);
+		}
+
+		tracks = tracks.map((current, currentIndex) => {
+			return currentIndex === index ? { ...current, url: '', cleanup: undefined } : current;
 		});
 	}
 	function sortFiles(files: StoredAudioFile[]): StoredAudioFile[] {
@@ -255,6 +351,10 @@
 
 	function createStoredAudioFile(file: File): StoredAudioFile {
 		const relativePath = file.webkitRelativePath?.split('/').slice(1).join('/') ?? file.name;
+		return createStoredWebAudioFile(file, relativePath && relativePath.length > 0 ? relativePath : file.name);
+	}
+
+	function createStoredWebAudioFile(file: File, relativePath: string): StoredAudioFile {
 		return {
 			source: 'web',
 			name: file.name,
@@ -271,6 +371,19 @@
 			path: entry.path,
 			mimeType: entry.mimeType,
 			modifiedAt: entry.modifiedAt,
+		};
+	}
+
+	function createStoredDriveAudioFile(entry: GoogleDriveFile): StoredAudioFile {
+		return {
+			source: 'drive',
+			name: entry.name,
+			relativePath: entry.name,
+			fileId: entry.id,
+			mimeType: entry.mimeType,
+			modifiedAt: entry.modifiedTime ? new Date(entry.modifiedTime).getTime() : undefined,
+			sizeBytes: entry.size ? Number(entry.size) : undefined,
+			webViewLink: entry.webViewLink,
 		};
 	}
 
@@ -329,9 +442,157 @@
 		throw new Error(`Unable to read selected file at ${path}`);
 	}
 
-	async function materializeStoredFile(entry: StoredAudioFile): Promise<File> {
+	function formatDriveAuthError(error: unknown): string {
+		const message = error instanceof Error ? error.message : 'Unable to access Google Drive.';
+
+		if (/popup_closed|popup closed|access denied|interrupted/i.test(message)) {
+			return 'Google sign-in was cancelled.';
+		}
+
+		if (/public_google_client_id/i.test(message)) {
+			return 'Google Drive is not configured. Add PUBLIC_GOOGLE_CLIENT_ID to enable sign-in.';
+		}
+
+		return message;
+	}
+
+	function hasValidDriveToken(): boolean {
+		return driveAccessToken.length > 0 && Date.now() < driveTokenExpiresAt - 60_000;
+	}
+
+	async function ensureDriveAccessToken(interactive: boolean): Promise<string | null> {
+		if (hasValidDriveToken()) {
+			return driveAccessToken;
+		}
+
+		if (!interactive) {
+			return null;
+		}
+
+		try {
+			const response = await requestGoogleDriveAccessToken({
+				clientId: googleDriveClientId,
+				prompt: driveAccessToken ? '' : 'consent'
+			});
+
+			driveAccessToken = response.access_token;
+			driveTokenExpiresAt = Date.now() + Number(response.expires_in ?? 3600) * 1000;
+			driveError = '';
+			return driveAccessToken;
+		} catch (error) {
+			driveError = formatDriveAuthError(error);
+			return null;
+		}
+	}
+
+	function activateDeviceLibrary(folderName: string) {
+		musicSettings.librarySource = 'device';
+		musicSettings.lastFolderName = folderName;
+		driveSearch = '';
+	}
+
+	function activateDriveLibrary() {
+		musicSettings.librarySource = 'drive';
+		musicSettings.lastFolderName = 'Google Drive';
+		rootDirHandle = null;
+		nativeTreeUri = null;
+		pendingHandle = null;
+		browsePath = [];
+		showQueue = true;
+		showPanel = 'none';
+		browseVersion += 1;
+	}
+
+	async function loadDriveLibrary(interactive: boolean) {
+		if (!googleDriveConfigured) {
+			driveError = 'Google Drive is not configured. Add PUBLIC_GOOGLE_CLIENT_ID to enable sign-in.';
+			return;
+		}
+
+		isDriveAuthenticating = interactive;
+		isDriveLoading = true;
+
+		try {
+			const token = await ensureDriveAccessToken(interactive);
+			if (!token) {
+				return;
+			}
+
+			const [user, files] = await Promise.all([
+				fetchGoogleDriveUser(token),
+				listGoogleDriveMp3Files(token)
+			]);
+
+			driveUser = user;
+			allFiles = files.map((file) => createStoredDriveAudioFile(file));
+			driveError = '';
+			activateDriveLibrary();
+		} catch (error) {
+			driveError = formatDriveAuthError(error);
+		} finally {
+			isDriveAuthenticating = false;
+			isDriveLoading = false;
+		}
+	}
+
+	async function connectGoogleDrive() {
+		await loadDriveLibrary(true);
+	}
+
+	async function refreshGoogleDrive() {
+		await loadDriveLibrary(true);
+	}
+
+	async function signOutGoogleDrive() {
+		try {
+			await revokeGoogleDriveAccess(driveAccessToken);
+		} catch {
+			// Ignore revoke failures and clear local session state regardless.
+		}
+
+		if (tracks.some((track) => track.source.source === 'drive')) {
+			audioEl?.pause();
+			revokeAll();
+			tracks = [];
+			currentTime = 0;
+			duration = 0;
+			isPlaying = false;
+		}
+
+		driveAccessToken = '';
+		driveTokenExpiresAt = 0;
+		driveUser = null;
+		driveError = '';
+		driveSearch = '';
+
+		if (musicSettings.librarySource === 'drive') {
+			allFiles = [];
+			browseEntries = [];
+			browsePath = [];
+			showQueue = false;
+			musicSettings.librarySource = 'device';
+			musicSettings.lastFolderName = '';
+		}
+	}
+
+	async function materializeStoredFile(entry: StoredAudioFile, interactiveAuth = false): Promise<File> {
 		if (entry.source === 'web') {
 			return entry.file;
+		}
+
+		if (entry.source === 'drive') {
+			const accessToken = await ensureDriveAccessToken(interactiveAuth);
+			if (!accessToken) {
+				throw new Error('Your Google Drive session has expired. Sign in again to continue playback.');
+			}
+
+			return downloadGoogleDriveFile({
+				accessToken,
+				fileId: entry.fileId,
+				fileName: entry.name,
+				mimeType: entry.mimeType,
+				modifiedAt: entry.modifiedAt,
+			});
 		}
 
 		const blob = await blobFromNativePath(entry.path, entry.mimeType);
@@ -353,10 +614,21 @@
 	// ─────────────────────────────────────────────────────────────
 	// Browse — async entry loading
 	// ─────────────────────────────────────────────────────────────
-	async function loadBrowseEntries(path: string[]) {
+	async function loadBrowseEntries(path: string[], driveFilter = '') {
 		browseLoading = true;
 		try {
-			if (rootDirHandle) {
+			if (musicSettings.librarySource === 'drive') {
+				const filter = driveFilter.trim();
+				const files = sortFiles(allFiles).filter((file) => {
+					if (file.source !== 'drive') return false;
+					if (!filter) return true;
+					const parsed = parseFilename(file.name);
+					const haystack = `${file.name} ${parsed.title} ${parsed.artist}`.toLowerCase();
+					return haystack.includes(filter);
+				});
+
+				browseEntries = files.map((file) => ({ kind: 'file', name: file.name, file }));
+			} else if (rootDirHandle) {
 				// Navigate to the directory at `path`
 				let dir: FileSystemDirectoryHandle = rootDirHandle;
 				for (const segment of path) {
@@ -451,6 +723,22 @@
 		return result;
 	}
 
+	async function collectStoredFilesFromDirHandle(
+		dir: FileSystemDirectoryHandle,
+		pathSegments: string[] = []
+	): Promise<StoredAudioFile[]> {
+		const result: StoredAudioFile[] = [];
+		for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
+			if (handle.kind === 'file' && name.toLowerCase().endsWith('.mp3')) {
+				const file = await (handle as FileSystemFileHandle).getFile();
+				result.push(createStoredWebAudioFile(file, [...pathSegments, name].join('/')));
+			} else if (handle.kind === 'directory') {
+				result.push(...await collectStoredFilesFromDirHandle(handle as FileSystemDirectoryHandle, [...pathSegments, name]));
+			}
+		}
+		return result;
+	}
+
 	// ── Navigate to a dir handle following a path ──
 	async function resolveDirAtPath(path: string[]): Promise<FileSystemDirectoryHandle | null> {
 		if (!rootDirHandle) return null;
@@ -469,7 +757,9 @@
 
 	// ── Collect all files under a browse path ──
 	async function collectAllFromPath(path: string[]): Promise<StoredAudioFile[]> {
-		if (rootDirHandle) {
+		if (musicSettings.librarySource === 'drive') {
+			return sortFiles(allFiles);
+		} else if (rootDirHandle) {
 			const dir = await resolveDirAtPath(path);
 			return dir ? (await collectFilesFromDirHandle(dir)).map((file) => createStoredAudioFile(file)) : [];
 		} else if (nativeTreeUri) {
@@ -485,7 +775,7 @@
 		return [];
 	}
 
-	async function ensureTrackUrl(index: number): Promise<string | null> {
+	async function ensureTrackUrl(index: number, interactiveAuth = false): Promise<string | null> {
 		const track = tracks[index];
 		if (!track) {
 			return null;
@@ -496,10 +786,31 @@
 		}
 
 		try {
-			const file = await materializeStoredFile(track.source);
+			if (track.source.source === 'drive' && canStreamGoogleDriveFile(track.source.mimeType)) {
+				const accessToken = await ensureDriveAccessToken(interactiveAuth);
+				if (!accessToken) {
+					throw new Error('Your Google Drive session has expired. Sign in again to continue playback.');
+				}
+
+				const streamSession = await createGoogleDriveStreamSession({
+					accessToken,
+					fileId: track.source.fileId,
+					mimeType: track.source.mimeType,
+				});
+
+				tracks = tracks.map((current, currentIndex) => {
+					return currentIndex === index
+						? { ...current, url: streamSession.url, cleanup: streamSession.dispose }
+						: current;
+				});
+
+				return streamSession.url;
+			}
+
+			const file = await materializeStoredFile(track.source, interactiveAuth);
 			const url = URL.createObjectURL(file);
 			tracks = tracks.map((current, currentIndex) => {
-				return currentIndex === index ? { ...current, url } : current;
+				return currentIndex === index ? { ...current, url, cleanup: undefined } : current;
 			});
 			return url;
 		} catch (error) {
@@ -516,7 +827,7 @@
 		const sorted = sortFiles(files);
 		tracks = sorted.map((f, i) => {
 			const { title, artist } = parseFilename(f.name);
-			return { id: i, title, artist, filename: f.name, url: '', duration: 0, source: f };
+			return { id: i, title, artist, filename: f.name, url: '', duration: 0, cleanup: undefined, source: f };
 		});
 		musicSettings.lastFolderName = folder;
 		musicSettings.lastTrackIndex = 0;
@@ -549,7 +860,7 @@
 				nativeTreeUri = treeUri;
 				pendingHandle = null;
 				allFiles = [];
-				musicSettings.lastFolderName = folderName;
+				activateDeviceLibrary(folderName);
 				browsePath = [];
 				browseVersion++;
 				showQueue = true;
@@ -574,11 +885,15 @@
 				rootDirHandle = dirHandle;
 				pendingHandle = null;
 				allFiles = [];
-				musicSettings.lastFolderName = dirHandle.name;
+				activateDeviceLibrary(dirHandle.name);
 				browsePath = [];
 				browseVersion++;  // triggers browse entry reload
 				showQueue = true;
 				void saveHandleToIDB(dirHandle);
+				void (async () => {
+					const cachedFiles = await collectStoredFilesFromDirHandle(dirHandle);
+					await saveCachedLibrary(dirHandle.name, cachedFiles);
+				})();
 			} catch { /* user cancelled */ }
 		} else {
 			folderInputEl?.click();
@@ -592,10 +907,11 @@
 		rootDirHandle = null;
 		nativeTreeUri = null;
 		allFiles = files.map((file) => createStoredAudioFile(file));
-		musicSettings.lastFolderName = files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files';
+		activateDeviceLibrary(files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files');
 		browsePath = [];
 		browseVersion++;  // triggers browse entry reload
 		showQueue = true;
+		void saveCachedLibrary(musicSettings.lastFolderName || 'Selected Files', allFiles);
 		input.value = '';
 	}
 
@@ -615,10 +931,11 @@
 		nativeTreeUri = null;
 		pendingHandle = null;
 		allFiles = files.map((file) => createStoredAudioFile(file));
-		musicSettings.lastFolderName = 'Selected Files';
+		activateDeviceLibrary('Selected Files');
 		browsePath = [];
 		browseVersion++;
 		showQueue = true;
+		void saveCachedLibrary('Selected Files', allFiles);
 		input.value = '';
 	}
 
@@ -635,9 +952,14 @@
 				nativeTreeUri = null;
 				pendingHandle = null;
 				allFiles = [];
+				activateDeviceLibrary(rootDirHandle.name);
 				browseVersion++;
 				showQueue = true;
 				void saveHandleToIDB(rootDirHandle);
+				void (async () => {
+					const cachedFiles = await collectStoredFilesFromDirHandle(rootDirHandle);
+					await saveCachedLibrary(rootDirHandle.name, cachedFiles);
+				})();
 			}
 		} catch { /* user denied */ }
 	}
@@ -655,7 +977,7 @@
 		musicSettings.lastTrackIndex = Math.max(0, idx);
 		currentTime = 0; duration = 0;
 		if (audioEl && tracks.length > 0) {
-			const url = await ensureTrackUrl(musicSettings.lastTrackIndex);
+			const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
 			if (!url) {
 				alert('Unable to load this track.');
 				return;
@@ -676,7 +998,7 @@
 		if (files.length === 0) { alert('No MP3 files found.'); return; }
 		loadTracks(files, path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName);
 		if (audioEl && tracks.length > 0) {
-			const url = await ensureTrackUrl(0);
+			const url = await ensureTrackUrl(0, true);
 			if (!url) {
 				alert('Unable to load tracks from this folder.');
 				return;
@@ -705,7 +1027,7 @@
 		else {
 			claimAudio('music');
 			if (!audioEl.src || audioEl.src === window.location.href) {
-				const url = await ensureTrackUrl(musicSettings.lastTrackIndex);
+				const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
 				if (!url) {
 					alert('Unable to load this track.');
 					return;
@@ -718,11 +1040,12 @@
 	}
 
 	async function selectTrack(index: number) {
+		releaseTrackUrl(musicSettings.lastTrackIndex);
 		musicSettings.lastTrackIndex = index;
 		musicSettings.lastTrackTimestamp = 0;
 		currentTime = 0; duration = 0;
 		if (audioEl && tracks[index]) {
-			const url = await ensureTrackUrl(index);
+			const url = await ensureTrackUrl(index, true);
 			if (!url) {
 				alert('Unable to load this track.');
 				return;
@@ -733,7 +1056,7 @@
 		}
 	}
 
-	async function advanceTrack(wasPlaying: boolean) {
+	async function advanceTrack(wasPlaying: boolean, interactiveAuth = false) {
 		if (tracks.length === 0) return;
 		const idx = musicSettings.lastTrackIndex;
 		const nextIndex = musicSettings.isShuffle
@@ -745,11 +1068,12 @@
 			if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
 			return;
 		}
+		releaseTrackUrl(idx);
 		musicSettings.lastTrackIndex = nextIndex;
 		musicSettings.lastTrackTimestamp = 0;
 		currentTime = 0; duration = 0;
 		if (audioEl && tracks[nextIndex]) {
-			const url = await ensureTrackUrl(nextIndex);
+			const url = await ensureTrackUrl(nextIndex, interactiveAuth);
 			if (!url) {
 				isPlaying = false;
 				return;
@@ -762,12 +1086,13 @@
 	async function prevTrack() {
 		if (tracks.length === 0) return;
 		if (musicSettings.rewindOnPrev && currentTime > 3 && audioEl) { audioEl.currentTime = 0; return; }
+		releaseTrackUrl(musicSettings.lastTrackIndex);
 		const prevIndex = (musicSettings.lastTrackIndex - 1 + tracks.length) % tracks.length;
 		musicSettings.lastTrackIndex = prevIndex;
 		musicSettings.lastTrackTimestamp = 0;
 		currentTime = 0; duration = 0;
 		if (audioEl && tracks[prevIndex]) {
-			const url = await ensureTrackUrl(prevIndex);
+			const url = await ensureTrackUrl(prevIndex, true);
 			if (!url) {
 				return;
 			}
@@ -795,11 +1120,17 @@
 
 	// ── Restore last folder handle from IndexedDB on mount ───────
 	$effect(() => {
-		if (!('showDirectoryPicker' in window)) { isRestoring = false; return; }
+		if (musicSettings.librarySource === 'drive') { isRestoring = false; return; }
 		void (async () => {
 			try {
-				const handle = await loadHandleFromIDB();
-				if (!handle) return;
+				const [handle, cachedLibrary] = await Promise.all([loadHandleFromIDB(), loadCachedLibrary()]);
+				if (cachedLibrary && cachedLibrary.files.length > 0) {
+					allFiles = cachedLibrary.files.map((file) => createStoredWebAudioFile(file.file, file.relativePath));
+					activateDeviceLibrary(cachedLibrary.folderName);
+					showQueue = true;
+					browseVersion++;
+				}
+				if (!('showDirectoryPicker' in window) || !handle) return;
 				type FSHandle = { queryPermission(o: object): Promise<string> };
 				// queryPermission is safe to call without a user gesture.
 				// If Chrome still has the permission in this session, we restore silently.
@@ -809,7 +1140,7 @@
 				if (perm === 'granted') {
 					rootDirHandle = handle;
 					nativeTreeUri = null;
-					allFiles = [];
+					allFiles = cachedLibrary?.files.length ? allFiles : [];
 					browseVersion++;
 					showQueue = true;
 				} else {
@@ -870,28 +1201,49 @@
 				{#if isNativeApp}
 					Select a folder from your device. MP3 files in that folder and its sub-folders will be added to your library.
 				{:else}
-					Select a folder from your device. Sub-folders and files will be shown for browsing.
+					Open a local folder or connect Google Drive to stream MP3 files from your account.
 				{/if}
 			</p>
 		</div>
-		{#if pendingHandle}
-			<div class="flex flex-col items-center gap-3 w-full max-w-xs">
+		<div class="flex flex-col items-center gap-3 w-full max-w-xs">
+			{#if pendingHandle}
 				<Button onclick={reconnectFolder} class="gap-2 px-6 h-12 text-base w-full">
 					<FolderOpen class="w-5 h-5" /> Reconnect "{musicSettings.lastFolderName}"
 				</Button>
 				<Button variant="outline" onclick={openFolder} class="gap-2 h-10 text-sm w-full" disabled={isLoading}>
 					<FolderOpen class="w-4 h-4" /> Choose a different folder
 				</Button>
-			</div>
-		{:else}
-			<Button onclick={openFolder} class="gap-2 px-6 h-12 text-base" disabled={isLoading}>
-				{#if isLoading}
+			{:else}
+				<Button onclick={openFolder} class="gap-2 px-6 h-12 text-base w-full" disabled={isLoading}>
+					{#if isLoading}
+						<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+						Loading…
+					{:else}
+						<FolderOpen class="w-5 h-5" /> Open Folder
+					{/if}
+				</Button>
+			{/if}
+			<Button
+				variant="outline"
+				onclick={connectGoogleDrive}
+				class="gap-2 px-6 h-12 text-base w-full"
+				disabled={!googleDriveConfigured || isDriveLoading || isDriveAuthenticating}
+			>
+				{#if isDriveLoading || isDriveAuthenticating}
 					<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-					Loading…
+					Connecting…
 				{:else}
-					<FolderOpen class="w-5 h-5" /> Open Folder
+					<Cloud class="w-5 h-5" /> Connect Google Drive
 				{/if}
 			</Button>
+		</div>
+		{#if !googleDriveConfigured}
+			<p class="text-xs text-muted-foreground max-w-xs">
+				Google Drive sign-in is disabled until PUBLIC_GOOGLE_CLIENT_ID is configured.
+			</p>
+		{/if}
+		{#if driveError}
+			<p class="text-xs text-destructive max-w-xs">{driveError}</p>
 		{/if}
 	</div>
 
@@ -909,7 +1261,7 @@
 			<div class="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
 				<button class="text-xs text-muted-foreground hover:text-foreground truncate shrink-0 max-w-[90px]"
 					onclick={() => (browsePath = [])}
-				>{musicSettings.lastFolderName || 'Library'}</button>
+				>{currentLibraryLabel}</button>
 				{#each browsePath as seg, i}
 					<ChevronRight class="w-3 h-3 text-muted-foreground shrink-0" />
 					<button
@@ -930,11 +1282,48 @@
 					{/if}
 					All
 				</Button>
-				<Button variant="ghost" size="sm" class="text-xs h-7 px-2" onclick={openFolder}>
-					<FolderOpen class="w-3.5 h-3.5" />
-				</Button>
+				{#if musicSettings.librarySource === 'drive'}
+					<Button variant="ghost" size="sm" class="text-xs h-7 px-2" onclick={refreshGoogleDrive} disabled={isDriveLoading} aria-label="Refresh Google Drive">
+						{#if isDriveLoading}
+							<div class="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+						{:else}
+							<RefreshCw class="w-3.5 h-3.5" />
+						{/if}
+					</Button>
+					<Button variant="ghost" size="sm" class="text-xs h-7 px-2" onclick={signOutGoogleDrive} aria-label="Sign out of Google Drive">
+						<LogOut class="w-3.5 h-3.5" />
+					</Button>
+				{:else}
+					<Button variant="ghost" size="sm" class="text-xs h-7 px-2" onclick={openFolder}>
+						<FolderOpen class="w-3.5 h-3.5" />
+					</Button>
+				{/if}
 			</div>
 		</div>
+
+		{#if musicSettings.librarySource === 'drive'}
+			<div class="px-4 py-3 border-b space-y-3 bg-card/40 shrink-0">
+				<div class="flex items-center justify-between gap-3">
+					<div class="min-w-0">
+						<p class="text-sm font-medium truncate">{driveUser?.displayName || 'Google Drive'}</p>
+						<p class="text-xs text-muted-foreground truncate">
+							{driveUser?.emailAddress || 'Connected account'}
+							{#if allFiles.length > 0}
+								· {allFiles.length} MP3 file{allFiles.length === 1 ? '' : 's'}
+							{/if}
+						</p>
+					</div>
+					<Cloud class="w-4 h-4 text-primary shrink-0" />
+				</div>
+				<div class="relative">
+					<Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+					<Input bind:value={driveSearch} placeholder="Search Google Drive MP3s" class="pl-9" />
+				</div>
+				{#if driveError}
+					<p class="text-xs text-destructive">{driveError}</p>
+				{/if}
+			</div>
+		{/if}
 
 
 
@@ -945,7 +1334,13 @@
 					<div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
 				</div>
 			{:else if browseEntries.length === 0}
-				<p class="text-center text-muted-foreground text-sm py-12">No MP3 files or folders here</p>
+				<p class="text-center text-muted-foreground text-sm py-12">
+					{#if musicSettings.librarySource === 'drive'}
+						{driveSearch ? 'No Google Drive MP3s match your search' : 'No MP3 files were found in Google Drive'}
+					{:else}
+						No MP3 files or folders here
+					{/if}
+				</p>
 			{:else}
 				{#each browseEntries as entry}
 					{#if entry.kind === 'folder'}
@@ -1024,7 +1419,7 @@
 					<button class="w-12 h-12 flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-md" onclick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
 						{#if isPlaying}<Pause class="w-6 h-6" />{:else}<Play class="w-6 h-6 ml-0.5" />{/if}
 					</button>
-					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={() => advanceTrack(isPlaying)} aria-label="Next">
+					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={() => advanceTrack(isPlaying, true)} aria-label="Next">
 						<SkipForward class="w-5 h-5" />
 					</button>
 				</div>
@@ -1054,12 +1449,27 @@
 		<!-- Folder badge -->
 		<div class="w-full flex items-center justify-between">
 			<div class="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
-				<FolderOpen class="w-3.5 h-3.5 shrink-0" />
-				<span class="truncate">{musicSettings.lastFolderName}</span>
+				{#if musicSettings.librarySource === 'drive'}
+					<Cloud class="w-3.5 h-3.5 shrink-0" />
+				{:else}
+					<FolderOpen class="w-3.5 h-3.5 shrink-0" />
+				{/if}
+				<span class="truncate">{currentLibraryLabel}</span>
 			</div>
-			<Button variant="ghost" size="sm" onclick={openFolder} class="text-xs h-7 px-2 gap-1 shrink-0">
-				<FolderOpen class="w-3 h-3" /> Change
-			</Button>
+			{#if musicSettings.librarySource === 'drive'}
+				<div class="flex items-center gap-1 shrink-0">
+					<Button variant="ghost" size="sm" onclick={refreshGoogleDrive} class="text-xs h-7 px-2 gap-1" disabled={isDriveLoading}>
+						<RefreshCw class="w-3 h-3" /> Refresh
+					</Button>
+					<Button variant="ghost" size="sm" onclick={signOutGoogleDrive} class="text-xs h-7 px-2 gap-1">
+						<LogOut class="w-3 h-3" /> Sign out
+					</Button>
+				</div>
+			{:else}
+				<Button variant="ghost" size="sm" onclick={openFolder} class="text-xs h-7 px-2 gap-1 shrink-0">
+					<FolderOpen class="w-3 h-3" /> Change
+				</Button>
+			{/if}
 		</div>
 
 		<!-- Album Art -->
@@ -1110,7 +1520,7 @@
 				class="w-14 h-14 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg">
 				{#if isPlaying}<Pause class="w-7 h-7" />{:else}<Play class="w-7 h-7 ml-0.5" />{/if}
 			</Button>
-			<Button variant="ghost" size="icon" onclick={() => advanceTrack(isPlaying)}>
+			<Button variant="ghost" size="icon" onclick={() => advanceTrack(isPlaying, true)}>
 				<SkipForward class="w-8 h-8" />
 			</Button>
 			<Button variant="ghost" size="icon"

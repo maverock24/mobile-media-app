@@ -29,9 +29,9 @@ export default defineConfig({
 
 	// Build + start preview server unless caller already has one running (PW_BASE_URL).
 	webServer: process.env.PW_BASE_URL ? undefined : {
-		command: 'pnpm build && pnpm preview',
+		command: `PUBLIC_GOOGLE_CLIENT_ID=${process.env.PUBLIC_GOOGLE_CLIENT_ID ?? 'playwright-google-client-id.apps.googleusercontent.com'} pnpm build && PUBLIC_GOOGLE_CLIENT_ID=${process.env.PUBLIC_GOOGLE_CLIENT_ID ?? 'playwright-google-client-id.apps.googleusercontent.com'} pnpm preview`,
 		url: 'http://localhost:4173',
-		reuseExistingServer: !process.env.CI,
+		reuseExistingServer: false,
 		timeout: 120_000,
 	},
 });

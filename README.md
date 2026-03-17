@@ -29,6 +29,31 @@ npm run dev
 npm run dev -- --open
 ```
 
+## Google Drive MP3 playback
+
+The music view can now sign in with Google and load MP3 files from the signed-in user's Google Drive.
+
+Setup:
+
+1. Create an OAuth client for a web application in Google Cloud.
+2. Enable the Google Drive API for that project.
+3. Add your local and deployed origins to the OAuth client.
+4. Set `PUBLIC_GOOGLE_CLIENT_ID` before running or building the app.
+
+Example:
+
+```sh
+PUBLIC_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com pnpm dev
+```
+
+Typical authorized JavaScript origins:
+
+- `http://localhost:5173`
+- Your production Netlify URL
+- Any custom domain serving this app
+
+The app requests the readonly Drive scope and downloads MP3 blobs directly in the browser for playback.
+
 ## Building
 
 To create a production version of your app:
