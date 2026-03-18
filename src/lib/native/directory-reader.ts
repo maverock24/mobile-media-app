@@ -26,6 +26,7 @@ export interface ListDirectoryFilesResult {
 }
 
 interface DirectoryReaderPlugin {
+	rememberTreeUri(options: { treeUri: string }): Promise<void>;
 	listEntries(options: { treeUri: string; path?: string }): Promise<ListDirectoryEntriesResult>;
 	listAudioFiles(options: { treeUri: string; path?: string }): Promise<ListDirectoryFilesResult>;
 }

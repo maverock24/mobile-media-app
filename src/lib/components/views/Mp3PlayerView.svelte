@@ -55,7 +55,16 @@
 	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
 	const googleDriveConfigured = isGoogleDriveConfigured();
 	const googleDriveClientId = getGoogleDriveClientId();
-	type CachedLibraryFile = { name: string; relativePath: string; file: File };
+	type CachedWebLibraryFile = { source: 'web'; name: string; relativePath: string; file: File };
+	type CachedNativeLibraryFile = {
+		source: 'native';
+		name: string;
+		relativePath: string;
+		path: string;
+		mimeType?: string;
+		modifiedAt?: number;
+	};
+	type CachedLibraryFile = CachedWebLibraryFile | CachedNativeLibraryFile;
 	type CachedLibrary = { folderName: string; files: CachedLibraryFile[]; savedAt: number };
 
 	// ── IndexedDB persistence for FileSystemDirectoryHandle ──────
@@ -95,8 +104,22 @@
 	}
 	async function saveCachedLibrary(folderName: string, files: StoredAudioFile[]) {
 		const cachedFiles = files.flatMap((file) => {
-			if (file.source !== 'web') return [];
-			return [{ name: file.name, relativePath: file.relativePath, file: file.file } satisfies CachedLibraryFile];
+			if (file.source === 'web') {
+				return [{ source: 'web', name: file.name, relativePath: file.relativePath, file: file.file } satisfies CachedLibraryFile];
+			}
+
+			if (file.source === 'native') {
+				return [{
+					source: 'native',
+					name: file.name,
+					relativePath: file.relativePath,
+					path: file.path,
+					mimeType: file.mimeType,
+					modifiedAt: file.modifiedAt,
+				} satisfies CachedLibraryFile];
+			}
+
+			return [];
 		});
 
 		if (cachedFiles.length === 0) return;
@@ -125,6 +148,52 @@
 		} catch {
 			return null;
 		}
+	}
+
+	function restoreStoredFilesFromCache(cachedLibrary: CachedLibrary): StoredAudioFile[] {
+		return cachedLibrary.files.map((file) => {
+			if (file.source === 'web') {
+				return createStoredWebAudioFile(file.file, file.relativePath);
+			}
+
+			return {
+				source: 'native',
+				name: file.name,
+				relativePath: file.relativePath,
+				path: file.path,
+				mimeType: file.mimeType,
+				modifiedAt: file.modifiedAt,
+			} satisfies StoredAudioFile;
+		});
+	}
+
+	function hydrateTracksFromLibrary(files: StoredAudioFile[]) {
+		const sorted = sortFiles(files);
+		tracks = sorted.map((file, index) => {
+			const { title, artist } = parseFilename(file.name);
+			return {
+				id: index,
+				title,
+				artist,
+				filename: file.name,
+				url: '',
+				duration: 0,
+				cleanup: undefined,
+				source: file,
+			};
+		});
+
+		if (tracks.length === 0) {
+			musicSettings.lastTrackIndex = 0;
+			musicSettings.lastTrackTimestamp = 0;
+			currentTime = 0;
+			duration = 0;
+			isPlaying = false;
+			return;
+		}
+
+		musicSettings.lastTrackIndex = Math.min(musicSettings.lastTrackIndex, tracks.length - 1);
+		currentTime = musicSettings.lastTrackTimestamp;
 	}
 
 	// EQ constants
@@ -493,6 +562,7 @@
 
 	function activateDriveLibrary() {
 		musicSettings.librarySource = 'drive';
+		musicSettings.nativeTreeUri = '';
 		musicSettings.lastFolderName = 'Google Drive';
 		rootDirHandle = null;
 		nativeTreeUri = null;
@@ -858,12 +928,24 @@
 				}
 				rootDirHandle = null;
 				nativeTreeUri = treeUri;
+				musicSettings.nativeTreeUri = treeUri;
 				pendingHandle = null;
 				allFiles = [];
 				activateDeviceLibrary(folderName);
 				browsePath = [];
 				browseVersion++;
 				showQueue = true;
+				try {
+					await DirectoryReader.rememberTreeUri({ treeUri });
+				} catch (error) {
+					console.warn('Unable to persist tree URI permission.', error);
+				}
+				void (async () => {
+					const cachedFiles = await collectAllFromPath([]);
+					allFiles = cachedFiles;
+					hydrateTracksFromLibrary(cachedFiles);
+					await saveCachedLibrary(folderName, cachedFiles);
+				})();
 			} catch (error) {
 				console.error('Failed to open native folder.', error);
 				if (nativeFileInputEl) {
@@ -883,6 +965,7 @@
 					showDirectoryPicker(o: object): Promise<FileSystemDirectoryHandle>;
 				}).showDirectoryPicker({ mode: 'read' });
 				rootDirHandle = dirHandle;
+				musicSettings.nativeTreeUri = '';
 				pendingHandle = null;
 				allFiles = [];
 				activateDeviceLibrary(dirHandle.name);
@@ -906,11 +989,13 @@
 		if (files.length === 0) { alert('No MP3 files found in selected folder.'); return; }
 		rootDirHandle = null;
 		nativeTreeUri = null;
+		musicSettings.nativeTreeUri = '';
 		allFiles = files.map((file) => createStoredAudioFile(file));
 		activateDeviceLibrary(files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files');
 		browsePath = [];
 		browseVersion++;  // triggers browse entry reload
 		showQueue = true;
+		hydrateTracksFromLibrary(allFiles);
 		void saveCachedLibrary(musicSettings.lastFolderName || 'Selected Files', allFiles);
 		input.value = '';
 	}
@@ -929,12 +1014,14 @@
 
 		rootDirHandle = null;
 		nativeTreeUri = null;
+		musicSettings.nativeTreeUri = '';
 		pendingHandle = null;
 		allFiles = files.map((file) => createStoredAudioFile(file));
 		activateDeviceLibrary('Selected Files');
 		browsePath = [];
 		browseVersion++;
 		showQueue = true;
+		hydrateTracksFromLibrary(allFiles);
 		void saveCachedLibrary('Selected Files', allFiles);
 		input.value = '';
 	}
@@ -950,6 +1037,7 @@
 			if (perm === 'granted') {
 				rootDirHandle = pendingHandle;
 				nativeTreeUri = null;
+				musicSettings.nativeTreeUri = '';
 				pendingHandle = null;
 				allFiles = [];
 				activateDeviceLibrary(rootDirHandle.name);
@@ -1125,8 +1213,16 @@
 			try {
 				const [handle, cachedLibrary] = await Promise.all([loadHandleFromIDB(), loadCachedLibrary()]);
 				if (cachedLibrary && cachedLibrary.files.length > 0) {
-					allFiles = cachedLibrary.files.map((file) => createStoredWebAudioFile(file.file, file.relativePath));
+					allFiles = restoreStoredFilesFromCache(cachedLibrary);
 					activateDeviceLibrary(cachedLibrary.folderName);
+					hydrateTracksFromLibrary(allFiles);
+					showQueue = true;
+					browseVersion++;
+				}
+				if (isNativeApp && musicSettings.nativeTreeUri) {
+					nativeTreeUri = musicSettings.nativeTreeUri;
+					rootDirHandle = null;
+					pendingHandle = null;
 					showQueue = true;
 					browseVersion++;
 				}

@@ -4,16 +4,19 @@
 	import PodcastView from '$lib/components/views/PodcastView.svelte';
 	import WeatherView from '$lib/components/views/WeatherView.svelte';
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
-	import { Music, Mic2, Cloud, Settings2 } from 'lucide-svelte';
+	import EssayListView from '$lib/components/views/EssayListView.svelte';
+	import EssayPlayerView from '$lib/components/views/EssayPlayerView.svelte';
+	import { essayPlayer } from '$lib/stores/essayPlayer.svelte';
+	import { Music, Mic2, Cloud, BookOpen, Settings2 } from 'lucide-svelte';
 
-	type Tab = 'music' | 'podcasts' | 'weather' | 'settings';
+	type Tab = 'music' | 'podcasts' | 'essays' | 'weather' | 'settings';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
 	const DEFAULT_TAB: Tab = 'music';
 
 	let activeTab = $state<Tab>(DEFAULT_TAB);
 
 	function isTab(value: unknown): value is Tab {
-		return value === 'music' || value === 'podcasts' || value === 'weather' || value === 'settings';
+		return value === 'music' || value === 'podcasts' || value === 'essays' || value === 'weather' || value === 'settings';
 	}
 
 	function readSavedTab(): Tab {
@@ -38,6 +41,7 @@
 	const tabs: { id: Tab; label: string; icon: typeof Music }[] = [
 		{ id: 'music', label: 'Music', icon: Music },
 		{ id: 'podcasts', label: 'Podcasts', icon: Mic2 },
+		{ id: 'essays', label: 'Essays', icon: BookOpen },
 		{ id: 'weather', label: 'Weather', icon: Cloud },
 		{ id: 'settings', label: 'Settings', icon: Settings2 }
 	];
@@ -59,6 +63,13 @@
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'podcasts'}>
 			<PodcastView />
 		</div>
+		<div class="absolute inset-0 overflow-y-auto" class:hidden={activeTab !== 'essays'}>
+			{#if essayPlayer.currentEssay}
+				<EssayPlayerView />
+			{:else}
+				<EssayListView />
+			{/if}
+		</div>
 		<!-- Weather and Settings have no playback state — standard conditional render -->
 		{#if activeTab === 'weather'}
 			<div class="absolute inset-0 overflow-y-auto">
@@ -72,11 +83,14 @@
 	</main>
 
 	<!-- Bottom Tab Bar -->
-	<nav class="border-t bg-background/95 backdrop-blur-sm safe-area-inset-bottom">
+	<div class="border-t bg-background/95 backdrop-blur-sm safe-area-inset-bottom" role="tablist">
 		<div class="flex">
 			{#each tabs as tab}
 				{@const Icon = tab.icon}
 				<button
+					role="tab"
+					aria-selected="{activeTab === tab.id}"
+					aria-label="{tab.label}"
 					class="flex-1 flex flex-col items-center justify-center py-2.5 gap-1 transition-colors {activeTab === tab.id ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
 					onclick={() => (activeTab = tab.id)}
 				>
@@ -90,5 +104,5 @@
 				</button>
 			{/each}
 		</div>
-	</nav>
+	</div>
 </div>

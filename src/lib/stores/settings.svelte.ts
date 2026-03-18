@@ -20,6 +20,7 @@ export const musicSettings = persisted('music-settings', {
 	isShuffle: false,
 	isRepeat: false,
 	librarySource: 'device' as 'device' | 'drive',
+	nativeTreeUri: '',
 	lastFolderName: '',
 	lastTrackIndex: 0,
 	lastTrackTimestamp: 0,  // seconds — saved on pause/steal for UX continuity

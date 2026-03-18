@@ -1,0 +1,76 @@
+{
+  "essays": [
+    {
+      "id": "essay-001",
+      "title": "The Quantum Entanglement Paradox",
+      "description": "A deep dive into one of the most mysterious phenomena in quantum mechanics. Explore how particles can be connected across vast distances and what Einstein called 'spooky action at a distance.'",
+      "author": "Dr. Sarah Chen",
+      "topic": "science",
+      "audioUrl": "https://essays-storage.example.com/sample-001.mp3",
+      "duration": 1800,
+      "fileSize": 45.2,
+      "thumbnail": "https://essays-storage.example.com/thumbnails/001.jpg",
+      "publishedDate": "2024-01-15T10:30:00Z",
+      "transcriptUrl": "https://essays-storage.example.com/transcripts/001.txt",
+      "tags": ["quantum", "physics", "science", "explained"]
+    },
+    {
+      "id": "essay-002",
+      "title": "The Fall of the Roman Empire: Lessons for Today",
+      "description": "An examination of the political, economic, and social factors that led to the decline of one of history's greatest civilizations, and what modern societies can learn from its fall.",
+      "author": "Prof. Marcus Whitmore",
+      "topic": "history",
+      "audioUrl": "https://essays-storage.example.com/sample-002.mp3",
+      "duration": 2400,
+      "fileSize": 62.5,
+      "thumbnail": "https://essays-storage.example.com/thumbnails/002.jpg",
+      "publishedDate": "2024-02-08T14:15:00Z",
+      "transcriptUrl": "https://essays-storage.example.com/transcripts/002.txt",
+      "tags": ["history", "rome", "politics", "civilization"]
+    },
+    {
+      "id": "essay-003",
+      "title": "Consciousness: The Final Frontier",
+      "description": "An exploration of consciousness through philosophy, neuroscience, and psychology. What is awareness? Can machines be conscious? A compelling investigation into the nature of the mind.",
+      "author": "Dr. Anna Petrov",
+      "topic": "philosophy",
+      "audioUrl": "https://essays-storage.example.com/sample-003.mp3",
+      "duration": 2100,
+      "fileSize": 55.8,
+      "thumbnail": "https://essays-storage.example.com/thumbnails/003.jpg",
+      "publishedDate": "2024-01-28T09:45:00Z",
+      "transcriptUrl": "https://essays-storage.example.com/transcripts/003.txt",
+      "tags": ["philosophy", "consciousness", "mind", "science"]
+    },
+    {
+      "id": "essay-004",
+      "title": "AI and the Future of Work",
+      "description": "Examining the transformative impact of artificial intelligence on employment, skills, and society. What jobs will disappear? What new opportunities will emerge?",
+      "author": "James Richardson",
+      "topic": "technology",
+      "audioUrl": "https://essays-storage.example.com/sample-004.mp3",
+      "duration": 1500,
+      "fileSize": 38.2,
+      "thumbnail": "https://essays-storage.example.com/thumbnails/004.jpg",
+      "publishedDate": "2024-02-20T11:20:00Z",
+      "transcriptUrl": "https://essays-storage.example.com/transcripts/004.txt",
+      "tags": ["ai", "technology", "future", "employment"]
+    },
+    {
+      "id": "essay-005",
+      "title": "Dopamine: The Brain's Motivation Chemical",
+      "description": "Uncover the science behind dopamine and how this neurotransmitter drives our motivation, rewards, and addictive behaviors. Learn how to work with your brain chemistry.",
+      "author": "Dr. Lisa Wong",
+      "topic": "psychology",
+      "audioUrl": "https://essays-storage.example.com/sample-005.mp3",
+      "duration": 1200,
+      "fileSize": 31.5,
+      "thumbnail": "https://essays-storage.example.com/thumbnails/005.jpg",
+      "publishedDate": "2024-02-01T16:00:00Z",
+      "transcriptUrl": "https://essays-storage.example.com/transcripts/005.txt",
+      "tags": ["psychology", "neuroscience", "dopamine", "brain"]
+    }
+  ],
+  "lastUpdated": "2024-02-20T18:30:00Z",
+  "version": "1.0.0"
+}

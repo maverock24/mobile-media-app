@@ -1,5 +1,6 @@
 package com.maverock24.mobilemediaapp;
 
+import android.content.Intent;
 import android.net.Uri;
 
 import androidx.documentfile.provider.DocumentFile;
@@ -13,6 +14,27 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 @CapacitorPlugin(name = "DirectoryReader")
 public class DirectoryReaderPlugin extends Plugin {
+
+	@PluginMethod
+	public void rememberTreeUri(PluginCall call) {
+		String treeUriString = call.getString("treeUri");
+		if (treeUriString == null || treeUriString.isEmpty()) {
+			call.reject("treeUri is required.");
+			return;
+		}
+
+		try {
+			Uri treeUri = Uri.parse(treeUriString);
+			getContext()
+				.getContentResolver()
+				.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+			call.resolve();
+		} catch (SecurityException exception) {
+			call.reject("Unable to persist directory permission.", exception);
+		} catch (Exception exception) {
+			call.reject(exception.getMessage());
+		}
+	}
 
 	@PluginMethod
 	public void listEntries(PluginCall call) {
