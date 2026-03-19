@@ -1,23 +1,126 @@
 <script lang="ts">
+	import { Capacitor } from '@capacitor/core';
 	import { onMount } from 'svelte';
 	import EssayCard from '$lib/components/EssayCard.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
+	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { essayPlayer } from '$lib/stores/essayPlayer.svelte';
+	import { essaySettings } from '$lib/stores/settings.svelte';
+	import { listGoogleDriveMp3Files } from '$lib/google-drive';
+	import { DirectoryReader, type NativeDirectoryFile } from '$lib/native/directory-reader';
 	import { isValidAudioUrl } from '$lib/utils/validation';
 	import type { EssayMetadata, EssayLibrary } from '$lib/models/essay';
+
+	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
 
 	let essays: EssayMetadata[] = $state([]);
 	let loading: boolean = $state(true);
 	let error: string | null = $state(null);
+	let activeSourceKey = $state('');
 
 	onMount(async () => {
 		await loadEssays();
 	});
 
+	$effect(() => {
+		const sourceKey = [
+			essaySettings.source,
+			essaySettings.googleDriveFolderId,
+			essaySettings.nativeTreeUri,
+			essaySettings.nativeFolderName,
+			googleDriveSession.user?.emailAddress ?? '',
+			googleDriveSession.accessToken ? 'token-present' : 'token-missing',
+			String(googleDriveSession.expiresAt)
+		].join(':');
+		if (!sourceKey || sourceKey === activeSourceKey) return;
+		activeSourceKey = sourceKey;
+		void loadEssays();
+	});
+
+	function deriveEssayTitle(fileName: string) {
+		return fileName.replace(/\.mp3$/i, '').replace(/[_-]+/g, ' ').trim();
+	}
+
+	function mapDriveFileToEssay(file: import('$lib/google-drive').GoogleDriveFile): EssayMetadata {
+		const publishedDate = file.modifiedTime ?? new Date().toISOString();
+		const sizeBytes = file.size ? Number(file.size) : 0;
+		const sizeMb = sizeBytes > 0 ? Number((sizeBytes / (1024 * 1024)).toFixed(1)) : 0;
+		const title = deriveEssayTitle(file.name);
+
+		return {
+			id: file.id,
+			title,
+			description: `Audio essay from Google Drive folder ${essaySettings.googleDriveFolderName || 'Audio Essays'}.`,
+			author: 'Google Drive',
+			topic: 'essay',
+			audioUrl: '',
+			duration: 0,
+			fileSize: sizeMb,
+			publishedDate,
+			tags: ['google-drive', 'audio-essay'],
+			source: 'drive',
+			googleDriveFileId: file.id,
+			mimeType: file.mimeType
+		};
+	}
+
+	function mapNativeFileToEssay(file: NativeDirectoryFile): EssayMetadata {
+		const title = deriveEssayTitle(file.name);
+		const publishedDate = file.modifiedAt ? new Date(file.modifiedAt).toISOString() : new Date().toISOString();
+
+		return {
+			id: `native:${file.relativePath}`,
+			title,
+			description: `Audio essay from ${essaySettings.nativeFolderName || 'your selected folder'}.`,
+			author: 'Selected Folder',
+			topic: 'essay',
+			audioUrl: '',
+			duration: 0,
+			fileSize: 0,
+			publishedDate,
+			tags: ['device-folder', 'audio-essay'],
+			source: 'native',
+			nativePath: file.path,
+			nativeTreeUri: essaySettings.nativeTreeUri,
+			mimeType: file.mimeType
+		};
+	}
+
 	async function loadEssays() {
 		loading = true;
 		error = null;
 		try {
+			if (essaySettings.source === 'native') {
+				if (!isNativeApp || !essaySettings.nativeTreeUri) {
+					essays = [];
+					error = 'Choose an essays folder from the Login tab to load MP3s on this device.';
+					return;
+				}
+
+				const result = await DirectoryReader.listAudioFiles({ treeUri: essaySettings.nativeTreeUri });
+				essays = result.files.map((file) => mapNativeFileToEssay(file));
+				return;
+			}
+
+			if (essaySettings.source === 'drive') {
+				if (!essaySettings.googleDriveFolderId) {
+					essays = [];
+					error = 'Choose a Google Drive folder from the Login tab to load Audio Essays.';
+					return;
+				}
+
+				const accessToken = await googleDriveSession.ensureAccessToken(false);
+				if (!accessToken) {
+					essays = [];
+					error = 'Sign in from the Login tab to load Audio Essays from Google Drive.';
+					return;
+				}
+
+				const files = await listGoogleDriveMp3Files(accessToken, { folderId: essaySettings.googleDriveFolderId });
+				essays = files.map((file) => mapDriveFileToEssay(file));
+				return;
+			}
+
 			const response = await fetch('/data/essays.json');
 			if (!response.ok) {
 				throw new Error('Failed to load essays');
@@ -37,7 +140,7 @@
 	}
 
 	function handlePlayEssay(essay: EssayMetadata) {
-		if (!isValidAudioUrl(essay.audioUrl)) {
+		if (essay.source === 'static' && !isValidAudioUrl(essay.audioUrl)) {
 			console.warn('Invalid audio URL for essay:', essay.title);
 			return;
 		}
@@ -51,7 +154,11 @@
 	<header class="mb-6">
 		<h1 class="text-3xl md:text-4xl font-bold mb-2">Audio Essays</h1>
 		<p class="text-muted-foreground">
-			Discover thought-provoking essays on science, history, philosophy, and more.
+			{essaySettings.source === 'drive'
+				? `Reading MP3 files from ${essaySettings.googleDriveFolderName || 'your Google Drive folder'}.`
+				: essaySettings.source === 'native'
+					? `Reading MP3 files from ${essaySettings.nativeFolderName || 'your selected folder'}.`
+					: 'Discover thought-provoking essays on science, history, philosophy, and more.'}
 		</p>
 	</header>
 

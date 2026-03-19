@@ -21,6 +21,7 @@ export const essayPlayer = $state.raw({
 		this.progress = 0;
 		this.duration = essay.duration;
 		this.isPlaying = false;
+		this.error = null;
 	},
 
 	startPlayback() {

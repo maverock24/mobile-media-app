@@ -4,19 +4,22 @@
 	import PodcastView from '$lib/components/views/PodcastView.svelte';
 	import WeatherView from '$lib/components/views/WeatherView.svelte';
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
+	import LoginView from '$lib/components/views/LoginView.svelte';
 	import EssayListView from '$lib/components/views/EssayListView.svelte';
 	import EssayPlayerView from '$lib/components/views/EssayPlayerView.svelte';
 	import { essayPlayer } from '$lib/stores/essayPlayer.svelte';
-	import { Music, Mic2, Cloud, BookOpen, Settings2 } from 'lucide-svelte';
+	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
+	import { essaySettings } from '$lib/stores/settings.svelte';
+	import { Music, Mic2, Cloud, BookOpen, Settings2, LogIn } from 'lucide-svelte';
 
-	type Tab = 'music' | 'podcasts' | 'essays' | 'weather' | 'settings';
+	type Tab = 'music' | 'podcasts' | 'essays' | 'login' | 'weather' | 'settings';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
 	const DEFAULT_TAB: Tab = 'music';
 
 	let activeTab = $state<Tab>(DEFAULT_TAB);
 
 	function isTab(value: unknown): value is Tab {
-		return value === 'music' || value === 'podcasts' || value === 'essays' || value === 'weather' || value === 'settings';
+		return value === 'music' || value === 'podcasts' || value === 'essays' || value === 'login' || value === 'weather' || value === 'settings';
 	}
 
 	function readSavedTab(): Tab {
@@ -38,13 +41,21 @@
 		localStorage.setItem(NAVIGATION_STATE_KEY, JSON.stringify({ activeTab }));
 	});
 
-	const tabs: { id: Tab; label: string; icon: typeof Music }[] = [
-		{ id: 'music', label: 'Music', icon: Music },
-		{ id: 'podcasts', label: 'Podcasts', icon: Mic2 },
-		{ id: 'essays', label: 'Essays', icon: BookOpen },
-		{ id: 'weather', label: 'Weather', icon: Cloud },
-		{ id: 'settings', label: 'Settings', icon: Settings2 }
-	];
+	const tabs = $derived.by((): { id: Tab; label: string; icon: typeof Music }[] => {
+		const isDriveConnected = Boolean(googleDriveSession.user)
+			|| googleDriveSession.hasValidToken()
+			|| Boolean(essaySettings.googleDriveFolderId)
+			|| Boolean(essaySettings.nativeTreeUri);
+
+		return [
+			{ id: 'music', label: 'Music', icon: Music },
+			{ id: 'podcasts', label: 'Podcasts', icon: Mic2 },
+			{ id: 'essays', label: 'Essays', icon: BookOpen },
+			{ id: 'login', label: isDriveConnected ? 'Drive' : 'Login', icon: isDriveConnected ? Cloud : LogIn },
+			{ id: 'weather', label: 'Weather', icon: Cloud },
+			{ id: 'settings', label: 'Settings', icon: Settings2 }
+		];
+	});
 </script>
 
 <div class="flex flex-col h-dvh max-w-md mx-auto bg-background overflow-hidden">
@@ -70,8 +81,11 @@
 				<EssayListView />
 			{/if}
 		</div>
-		<!-- Weather and Settings have no playback state — standard conditional render -->
-		{#if activeTab === 'weather'}
+		{#if activeTab === 'login'}
+			<div class="absolute inset-0 overflow-y-auto">
+				<LoginView />
+			</div>
+		{:else if activeTab === 'weather'}
 			<div class="absolute inset-0 overflow-y-auto">
 				<WeatherView />
 			</div>

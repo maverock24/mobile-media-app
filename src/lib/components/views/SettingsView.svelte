@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { env } from '$env/dynamic/public';
 	import { Capacitor } from '@capacitor/core';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
@@ -37,7 +38,7 @@
 	let isCheckingRelease = $state(false);
 	let releaseError = $state('');
 	const releaseBaseUrl = (() => {
-		const configuredBaseUrl = import.meta.env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
+		const configuredBaseUrl = env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
 		if (configuredBaseUrl) {
 			return configuredBaseUrl;
 		}

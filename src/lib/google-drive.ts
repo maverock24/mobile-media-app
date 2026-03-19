@@ -1,3 +1,5 @@
+import { PUBLIC_GOOGLE_CLIENT_ID } from '$env/static/public';
+
 const GOOGLE_IDENTITY_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
@@ -24,6 +26,13 @@ export interface GoogleDriveFile {
 	fileExtension?: string;
 	modifiedTime?: string;
 	size?: string;
+	webViewLink?: string;
+}
+
+export interface GoogleDriveFolder {
+	id: string;
+	name: string;
+	mimeType: string;
 	webViewLink?: string;
 }
 
@@ -67,7 +76,7 @@ export function isGoogleDriveConfigured(): boolean {
 
 export function getGoogleDriveClientId(): string {
 	const runtimeClientId = typeof window !== 'undefined' ? window.__GOOGLE_CLIENT_ID__?.trim() : '';
-	return runtimeClientId || import.meta.env.PUBLIC_GOOGLE_CLIENT_ID?.trim() || '';
+	return runtimeClientId || PUBLIC_GOOGLE_CLIENT_ID?.trim() || '';
 }
 
 export async function loadGoogleIdentityScript(): Promise<void> {
@@ -167,15 +176,34 @@ export async function fetchGoogleDriveUser(accessToken: string): Promise<GoogleD
 	return response.user;
 }
 
-export async function listGoogleDriveMp3Files(accessToken: string): Promise<GoogleDriveFile[]> {
+export async function fetchGoogleDriveFolder(accessToken: string, folderId: string): Promise<GoogleDriveFolder> {
+	const normalizedFolderId = folderId.trim();
+	if (!normalizedFolderId) {
+		throw new Error('Google Drive folder ID is required.');
+	}
+
+	return await googleApiFetch<GoogleDriveFolder>(`/drive/v3/files/${normalizedFolderId}`, accessToken, new URLSearchParams({
+		fields: 'id,name,mimeType,webViewLink'
+	}));
+}
+
+export async function listGoogleDriveMp3Files(
+	accessToken: string,
+	options?: { folderId?: string }
+): Promise<GoogleDriveFile[]> {
 	const files: GoogleDriveFile[] = [];
 	let pageToken = '';
+	const folderId = options?.folderId?.trim();
 
 	do {
+		const query = folderId
+			? `trashed = false and '${folderId}' in parents and mimeType contains 'audio/'`
+			: "trashed = false and mimeType contains 'audio/'";
+
 		const searchParams = new URLSearchParams({
 			fields: 'nextPageToken,files(id,name,mimeType,fileExtension,modifiedTime,size,webViewLink)',
 			pageSize: '200',
-			q: "trashed = false and mimeType contains 'audio/'",
+			q: query,
 			spaces: 'drive',
 			orderBy: 'name_natural'
 		});

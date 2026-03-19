@@ -34,6 +34,15 @@ export const musicSettings = persisted('music-settings', {
 	sortOrder: 'filename' as 'filename' | 'title' | 'artist'
 });
 
+export const essaySettings = persisted('essay-settings', {
+	source: 'static' as 'static' | 'drive' | 'native',
+	googleDriveFolderId: '',
+	googleDriveFolderName: '',
+	googleDriveFolderUrl: '',
+	nativeTreeUri: '',
+	nativeFolderName: ''
+});
+
 // ─────────────────────────────────────────────────────────────
 // Podcast settings
 // ─────────────────────────────────────────────────────────────

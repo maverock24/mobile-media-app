@@ -103,24 +103,30 @@
 		} catch { return null; }
 	}
 	async function saveCachedLibrary(folderName: string, files: StoredAudioFile[]) {
-		const cachedFiles = files.flatMap((file) => {
+		const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
 			if (file.source === 'web') {
-				return [{ source: 'web', name: file.name, relativePath: file.relativePath, file: file.file } satisfies CachedLibraryFile];
+				accumulator.push({
+					source: 'web',
+					name: file.name,
+					relativePath: file.relativePath,
+					file: file.file,
+				});
+				return accumulator;
 			}
 
 			if (file.source === 'native') {
-				return [{
+				accumulator.push({
 					source: 'native',
 					name: file.name,
 					relativePath: file.relativePath,
 					path: file.path,
 					mimeType: file.mimeType,
 					modifiedAt: file.modifiedAt,
-				} satisfies CachedLibraryFile];
+				});
 			}
 
-			return [];
-		});
+			return accumulator;
+		}, []);
 
 		if (cachedFiles.length === 0) return;
 
@@ -217,6 +223,8 @@
 	let showQueue   = $state(false);   // true → browse / folder view
 	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
 	let isRestoring = $state(true);  // true until IDB check finishes (prevents empty-state flash)
+	let preloadedTrackIndex = $state<number | null>(null);
+	let preloadRequestId = 0;
 
 	// ── folder browse state ──
 	// rootDirHandle and allFiles MUST be $state so hasFolderLoaded $derived updates
@@ -385,6 +393,8 @@
 		return { title: name, artist: 'Unknown Artist' };
 	}
 	function revokeAll() {
+		preloadRequestId += 1;
+		preloadedTrackIndex = null;
 		tracks.forEach((track) => {
 			track.cleanup?.();
 			if (track.url) {
@@ -397,6 +407,10 @@
 		const track = tracks[index];
 		if (!track?.url && !track?.cleanup) {
 			return;
+		}
+
+		if (preloadedTrackIndex === index) {
+			preloadedTrackIndex = null;
 		}
 
 		track.cleanup?.();
@@ -889,6 +903,69 @@
 		}
 	}
 
+	function getNextTrackIndex(currentIndex: number): number | null {
+		if (tracks.length === 0) {
+			return null;
+		}
+
+		if (musicSettings.isShuffle) {
+			if (tracks.length === 1) {
+				return 0;
+			}
+
+			if (preloadedTrackIndex !== null && preloadedTrackIndex !== currentIndex && tracks[preloadedTrackIndex]) {
+				return preloadedTrackIndex;
+			}
+
+			let nextIndex = currentIndex;
+			while (nextIndex === currentIndex) {
+				nextIndex = Math.floor(Math.random() * tracks.length);
+			}
+
+			return nextIndex;
+		}
+
+		const atEnd = currentIndex === tracks.length - 1;
+		if (atEnd && !musicSettings.isRepeat) {
+			return null;
+		}
+
+		return atEnd ? 0 : currentIndex + 1;
+	}
+
+	async function preloadNextTrack(currentIndex: number) {
+		const previousPreloadIndex = preloadedTrackIndex;
+		const nextIndex = getNextTrackIndex(currentIndex);
+		const requestId = ++preloadRequestId;
+
+		if (previousPreloadIndex !== null && previousPreloadIndex !== currentIndex && previousPreloadIndex !== nextIndex) {
+			releaseTrackUrl(previousPreloadIndex);
+		}
+
+		if (nextIndex === null || !tracks[nextIndex] || nextIndex === currentIndex) {
+			preloadedTrackIndex = null;
+			return;
+		}
+
+		preloadedTrackIndex = nextIndex;
+
+		if (tracks[nextIndex].url) {
+			return;
+		}
+
+		const url = await ensureTrackUrl(nextIndex, false);
+		if (requestId !== preloadRequestId) {
+			if (url && nextIndex !== musicSettings.lastTrackIndex && preloadedTrackIndex !== nextIndex) {
+				releaseTrackUrl(nextIndex);
+			}
+			return;
+		}
+
+		if (!url && preloadedTrackIndex === nextIndex) {
+			preloadedTrackIndex = null;
+		}
+	}
+
 	// ─────────────────────────────────────────────────────────────
 	// loadTracks — internal, always called with sorted stored entries
 	// ─────────────────────────────────────────────────────────────
@@ -902,6 +979,8 @@
 		musicSettings.lastFolderName = folder;
 		musicSettings.lastTrackIndex = 0;
 		musicSettings.lastTrackTimestamp = 0;
+		preloadedTrackIndex = null;
+		preloadRequestId += 1;
 		currentTime = 0; duration = 0; isPlaying = false;
 	}
 
@@ -1072,6 +1151,7 @@
 			}
 			audioEl.src = url;
 			audioEl.load();
+			void preloadNextTrack(musicSettings.lastTrackIndex);
 			claimAudio('music');
 			initAudioContext();
 			audioEl.play().catch(() => {});
@@ -1093,6 +1173,7 @@
 			}
 			audioEl.src = url;
 			audioEl.load();
+			void preloadNextTrack(0);
 			claimAudio('music');
 			initAudioContext();
 			audioEl.play().catch(() => {});
@@ -1123,6 +1204,7 @@
 				audioEl.src = url;
 				audioEl.load();
 			}
+			void preloadNextTrack(musicSettings.lastTrackIndex);
 			audioEl.play().catch(() => {});
 		}
 	}
@@ -1139,6 +1221,7 @@
 				return;
 			}
 			audioEl.src = url; audioEl.load();
+			void preloadNextTrack(index);
 			claimAudio('music');
 			audioEl.play().catch(() => {});
 		}
@@ -1147,11 +1230,8 @@
 	async function advanceTrack(wasPlaying: boolean, interactiveAuth = false) {
 		if (tracks.length === 0) return;
 		const idx = musicSettings.lastTrackIndex;
-		const nextIndex = musicSettings.isShuffle
-			? Math.floor(Math.random() * tracks.length)
-			: (idx + 1) % tracks.length;
-		const atEnd = !musicSettings.isShuffle && idx === tracks.length - 1;
-		if (atEnd && !musicSettings.isRepeat) {
+		const nextIndex = getNextTrackIndex(idx);
+		if (nextIndex === null) {
 			isPlaying = false; currentTime = 0;
 			if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
 			return;
@@ -1167,6 +1247,7 @@
 				return;
 			}
 			audioEl.src = url; audioEl.load();
+			void preloadNextTrack(nextIndex);
 			if (wasPlaying) audioEl.play().catch(() => { isPlaying = false; });
 		}
 	}
@@ -1185,6 +1266,7 @@
 				return;
 			}
 			audioEl.src = url; audioEl.load();
+			void preloadNextTrack(prevIndex);
 			if (isPlaying) audioEl.play().catch(() => {});
 		}
 	}

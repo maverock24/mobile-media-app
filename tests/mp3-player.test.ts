@@ -225,6 +225,23 @@ test.describe('MP3 Player view', () => {
 		await expect(ranges).toHaveCount(2, { timeout: 5000 });
 	});
 
+	test('next button advances to the next track', async ({ page }) => {
+		const [fc] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fc.setFiles(tmpDir);
+		await page.getByText('Track One').first().click({ timeout: 5000 });
+		await page.waitForTimeout(300);
+
+		await expect(page.getByText('Track One')).toBeVisible();
+		await page.getByRole('button', { name: /Next/i }).first().click();
+		await expect(page.getByText('Track Two')).toBeVisible({ timeout: 5000 });
+	});
+
 	test('browse button navigates back to file list', async ({ page }) => {
 		const [fc] = await Promise.all([
 			page.waitForEvent('filechooser'),

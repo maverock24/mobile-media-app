@@ -15,6 +15,11 @@ export interface EssayMetadata {
 	publishedDate: string;
 	transcriptUrl?: string;
 	tags: string[];
+	source?: 'static' | 'drive' | 'native';
+	googleDriveFileId?: string;
+	nativePath?: string;
+	nativeTreeUri?: string;
+	mimeType?: string;
 }
 
 export interface EssayLibrary {
