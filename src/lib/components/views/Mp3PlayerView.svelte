@@ -22,12 +22,13 @@
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { mp3TrackPositions } from '$lib/stores/settings.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
+	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, Heart, ListMusic, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
-		Cloud, RefreshCw, LogOut, Search
+		Cloud, RefreshCw, LogOut, Search, Star
 	} from 'lucide-svelte';
 
 	interface Track {
@@ -372,6 +373,18 @@
 	// ── Sync playback speed ──
 	$effect(() => { if (audioEl) audioEl.playbackRate = musicSettings.playbackSpeed; });
 
+	// ── Auto-save to Drive when key music settings change ──
+	$effect(() => {
+		// Access reactive fields so Svelte tracks them
+		void musicSettings.driveFolderId;
+		void musicSettings.driveFolderName;
+		void musicSettings.favoriteFolders;
+		void musicSettings.playbackSpeed;
+		void musicSettings.equalizerPreset;
+		void musicSettings.sortOrder;
+		driveConfigSync.scheduleSave();
+	});
+
 	// ── Sync EQ gains ──
 	$effect(() => {
 		musicSettings.eqBands.forEach((gain, i) => {
@@ -694,6 +707,19 @@
 			driveUser = user;
 			driveError = '';
 
+			// Connect config sync (appdata scope) silently, then download + apply saved settings.
+			// This happens in the background — we don't block the folder picker on it.
+			void (async () => {
+				const connected = await driveConfigSync.connect(false);
+				if (connected) {
+					await driveConfigSync.downloadAndApply();
+				} else {
+					// First-time or needs consent — request interactively after picker resolves
+					const ok = await driveConfigSync.connect(true);
+					if (ok) await driveConfigSync.downloadAndApply();
+				}
+			})();
+
 			// Show folder picker before loading files
 			folderPickerToken = token;
 			folderPickerStack = [];
@@ -765,6 +791,91 @@
 		folderPickerFolders = [];
 	}
 
+	// ── Folder favorites ──────────────────────────────────────────
+	function currentFolderAsFavorite() {
+		if (musicSettings.librarySource === 'drive') {
+			return {
+				id: musicSettings.driveFolderId || '_all',
+				name: musicSettings.driveFolderName || 'All files',
+				source: 'drive' as const,
+			};
+		}
+		if (nativeTreeUri) {
+			return {
+				id: nativeTreeUri,
+				name: musicSettings.lastFolderName,
+				source: 'device' as const,
+				treeUri: nativeTreeUri,
+			};
+		}
+		return null;
+	}
+
+	function isCurrentFolderFavorited(): boolean {
+		const entry = currentFolderAsFavorite();
+		if (!entry) return false;
+		return musicSettings.favoriteFolders.some(f => f.id === entry.id && f.source === entry.source);
+	}
+
+	function toggleCurrentFolderFavorite() {
+		const entry = currentFolderAsFavorite();
+		if (!entry) return;
+		const idx = musicSettings.favoriteFolders.findIndex(f => f.id === entry.id && f.source === entry.source);
+		if (idx >= 0) {
+			musicSettings.favoriteFolders = musicSettings.favoriteFolders.filter((_, i) => i !== idx);
+		} else {
+			musicSettings.favoriteFolders = [...musicSettings.favoriteFolders, entry];
+		}
+	}
+
+	function removeFavoriteFolder(id: string, source: string) {
+		musicSettings.favoriteFolders = musicSettings.favoriteFolders.filter(f => !(f.id === id && f.source === source));
+	}
+
+	function isDriveFolderPickerFavorited(folderId: string): boolean {
+		return musicSettings.favoriteFolders.some(f => f.id === folderId && f.source === 'drive');
+	}
+
+	function toggleDriveFolderPickerFavorite(folder: GoogleDriveFolder, e: MouseEvent) {
+		e.stopPropagation();
+		const idx = musicSettings.favoriteFolders.findIndex(f => f.id === folder.id && f.source === 'drive');
+		if (idx >= 0) {
+			musicSettings.favoriteFolders = musicSettings.favoriteFolders.filter((_, i) => i !== idx);
+		} else {
+			musicSettings.favoriteFolders = [...musicSettings.favoriteFolders, { id: folder.id, name: folder.name, source: 'drive' as const }];
+		}
+	}
+
+	async function switchToFavorite(fav: (typeof musicSettings.favoriteFolders)[0]) {
+		if (fav.source === 'drive') {
+			const token = await ensureDriveAccessToken(true);
+			if (!token) return;
+			if (!driveUser) {
+				try { driveUser = await fetchGoogleDriveUser(token); } catch { /* ignore */ }
+			}
+			const folderId = fav.id === '_all' ? undefined : fav.id;
+			musicSettings.driveFolderId = folderId ?? '';
+			musicSettings.driveFolderName = folderId ? fav.name : '';
+			await finishDriveLoad(token, folderId);
+		} else if (fav.source === 'device' && fav.treeUri) {
+			rootDirHandle = null;
+			nativeTreeUri = fav.treeUri;
+			musicSettings.nativeTreeUri = fav.treeUri;
+			pendingHandle = null;
+			allFiles = [];
+			activateDeviceLibrary(fav.name);
+			browsePath = [];
+			browseVersion++;
+			showQueue = true;
+			void (async () => {
+				const cachedFiles = await collectAllFromPath([]);
+				allFiles = cachedFiles;
+				hydrateTracksFromLibrary(cachedFiles);
+				await saveCachedLibrary(fav.name, cachedFiles);
+			})();
+		}
+	}
+
 	function confirmCurrentFolder() {
 		const current = folderPickerStack.at(-1);
 		if (current) {
@@ -833,6 +944,7 @@
 		driveUser = null;
 		driveError = '';
 		driveSearch = '';
+		driveConfigSync.disconnect();
 
 		if (musicSettings.librarySource === 'drive') {
 			allFiles = [];
@@ -1671,6 +1783,11 @@
 					{/if}
 					All
 				</Button>
+				{#if currentFolderAsFavorite()}
+					<Button variant="ghost" size="icon" class={`h-10 w-10 ${isCurrentFolderFavorited() ? 'text-yellow-400' : ''}`} onclick={toggleCurrentFolderFavorite} aria-label={isCurrentFolderFavorited() ? 'Remove from favorites' : 'Add to favorites'} title={isCurrentFolderFavorited() ? 'Remove from favorites' : 'Add to favorites'}>
+						<Star class="w-5 h-5" fill={isCurrentFolderFavorited() ? 'currentColor' : 'none'} />
+					</Button>
+				{/if}
 				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openFolder} aria-label="Open local folder" title="Open local folder">
 					<FolderOpen class="w-5 h-5" />
 				</Button>
@@ -1707,7 +1824,29 @@
 						<Button variant="ghost" size="sm" class="text-xs h-10 px-3" onclick={changeDriveFolder} title="Change folder">
 							<FolderOpen class="w-5 h-5" />
 						</Button>
-						<Cloud class="w-5 h-5 text-primary shrink-0" />
+						<Button variant="ghost" size="sm" class={`text-xs h-10 px-2 ${isCurrentFolderFavorited() ? 'text-yellow-400' : ''}`} onclick={toggleCurrentFolderFavorite} title={isCurrentFolderFavorited() ? 'Remove from favorites' : 'Add to favorites'}>
+							<Star class="w-5 h-5" fill={isCurrentFolderFavorited() ? 'currentColor' : 'none'} />
+						</Button>
+						<!-- Config sync indicator -->
+						{#if driveConfigSync.isConnected}
+							<button
+								class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent transition-colors shrink-0"
+								onclick={() => driveConfigSync.save()}
+								title={driveConfigSync.lastSyncedAt ? `Config synced ${driveConfigSync.lastSyncedAt.toLocaleTimeString()}` : 'Sync settings to Drive'}
+							>
+								{#if driveConfigSync.status === 'syncing'}
+									<RefreshCw class="w-4 h-4 text-primary animate-spin" />
+								{:else if driveConfigSync.status === 'saved'}
+									<Cloud class="w-4 h-4 text-green-500" />
+								{:else if driveConfigSync.status === 'error'}
+									<Cloud class="w-4 h-4 text-destructive" />
+								{:else}
+									<Cloud class="w-4 h-4 text-primary" />
+								{/if}
+							</button>
+						{:else}
+							<Cloud class="w-5 h-5 text-primary shrink-0" />
+						{/if}
 					</div>
 				</div>
 				<div class="relative">
@@ -1721,6 +1860,34 @@
 		{/if}
 
 
+
+		<!-- Favorites strip -->
+		{#if musicSettings.favoriteFolders.length > 0}
+		<div class="px-4 py-2 border-b shrink-0">
+			<div class="flex items-center gap-2 overflow-x-auto" style="scrollbar-width:none">
+				{#each musicSettings.favoriteFolders as fav}
+					{@const isActive = fav.source === 'drive'
+						? (musicSettings.librarySource === 'drive' && (fav.id === '_all' ? !musicSettings.driveFolderId : musicSettings.driveFolderId === fav.id))
+						: (musicSettings.librarySource === 'device' && nativeTreeUri === fav.treeUri)}
+					<div class="flex items-center gap-0.5 shrink-0 rounded-full border pl-2.5 pr-1 py-1 text-xs {isActive ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/40 border-border'}">
+						<button class="flex items-center gap-1.5 min-w-0" onclick={() => switchToFavorite(fav)} title="Switch to {fav.name}">
+							{#if fav.source === 'drive'}
+								<Cloud class="w-3 h-3 shrink-0" />
+							{:else}
+								<FolderOpen class="w-3 h-3 shrink-0" />
+							{/if}
+							<span class="truncate max-w-[100px]">{fav.name}</span>
+						</button>
+						<button
+							class="w-5 h-5 flex items-center justify-center rounded-full ml-0.5 hover:bg-black/10 opacity-60 hover:opacity-100 transition-opacity"
+							onclick={() => removeFavoriteFolder(fav.id, fav.source)}
+							aria-label="Remove {fav.name} from favorites"
+						>×</button>
+					</div>
+				{/each}
+			</div>
+		</div>
+		{/if}
 
 		<!-- Entry list -->
 		<div class="flex-1 overflow-y-auto min-h-0">
@@ -2107,19 +2274,28 @@
 				{:else}
 					{#each folderPickerFolders as folder}
 						{@const isSelected = musicSettings.driveFolderId === folder.id}
-						<button
-							class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors text-left"
-							onclick={() => navigateFolderPickerInto(folder)}
-						>
-							<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
-								<Folder class="w-4 h-4 text-primary" />
-							</div>
-							<p class="flex-1 text-sm font-medium truncate min-w-0">{folder.name}</p>
-							{#if isSelected}
-								<div class="w-4 h-4 rounded-full border-2 border-primary bg-primary shrink-0"></div>
-							{/if}
-							<ChevronRight class="w-4 h-4 text-muted-foreground shrink-0" />
-						</button>
+						{@const isFaved = isDriveFolderPickerFavorited(folder.id)}
+						<div class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
+							<button class="flex items-center gap-3 flex-1 min-w-0 text-left" onclick={() => navigateFolderPickerInto(folder)}>
+								<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+									<Folder class="w-4 h-4 text-primary" />
+								</div>
+								<p class="flex-1 text-sm font-medium truncate min-w-0">{folder.name}</p>
+								{#if isSelected}
+									<div class="w-4 h-4 rounded-full border-2 border-primary bg-primary shrink-0"></div>
+								{/if}
+							</button>
+							<button
+								class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent transition-colors shrink-0 {isFaved ? 'text-yellow-400' : 'text-muted-foreground'}"
+								onclick={(e) => toggleDriveFolderPickerFavorite(folder, e)}
+								aria-label="{isFaved ? 'Remove from' : 'Add to'} favorites"
+							>
+								<Star class="w-4 h-4" fill={isFaved ? 'currentColor' : 'none'} />
+							</button>
+							<button class="shrink-0 text-muted-foreground" onclick={() => navigateFolderPickerInto(folder)} aria-label="Browse {folder.name}">
+								<ChevronRight class="w-4 h-4" />
+							</button>
+						</div>
 					{/each}
 				{/if}
 			{/if}

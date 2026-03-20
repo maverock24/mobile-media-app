@@ -33,7 +33,8 @@ export const musicSettings = persisted('music-settings', {
 	showAlbumArt: true,
 	autoPlay: false,
 	rewindOnPrev: true,    // restart track if >3s in, on prev press
-	sortOrder: 'filename' as 'filename' | 'title' | 'artist'
+	sortOrder: 'filename' as 'filename' | 'title' | 'artist',
+	favoriteFolders: [] as Array<{ id: string; name: string; source: 'device' | 'drive'; treeUri?: string }>,
 });
 
 // ─────────────────────────────────────────────────────────────

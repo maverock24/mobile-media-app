@@ -3,6 +3,7 @@ import { PUBLIC_GOOGLE_CLIENT_ID } from '$env/static/public';
 const GOOGLE_IDENTITY_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+// Note: config sync uses drive.appdata scope — see src/lib/drive-config.ts
 
 export interface GoogleDriveTokenResponse {
 	access_token: string;
