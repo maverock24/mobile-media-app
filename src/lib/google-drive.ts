@@ -27,6 +27,8 @@ export interface GoogleDriveFile {
 	modifiedTime?: string;
 	size?: string;
 	webViewLink?: string;
+	/** Relative path within the selected root folder, e.g. "Rock/song.mp3". Set during BFS. */
+	relativePath?: string;
 }
 
 export interface GoogleDriveFolder {
@@ -187,46 +189,135 @@ export async function fetchGoogleDriveFolder(accessToken: string, folderId: stri
 	}));
 }
 
+export async function listGoogleDriveFolders(
+	accessToken: string,
+	parentId?: string
+): Promise<GoogleDriveFolder[]> {
+	const parent = parentId?.trim() || 'root';
+	const response = await googleApiFetch<{ files?: GoogleDriveFolder[] }>(
+		'/drive/v3/files',
+		accessToken,
+		new URLSearchParams({
+			q: `trashed = false and mimeType = 'application/vnd.google-apps.folder' and '${parent}' in parents`,
+			fields: 'files(id,name,mimeType,webViewLink)',
+			pageSize: '100',
+			orderBy: 'name',
+			spaces: 'drive'
+		})
+	);
+	return response.files ?? [];
+}
+
+export async function checkFolderHasSubfolders(accessToken: string, folderId: string): Promise<boolean> {
+	const response = await googleApiFetch<{ files?: { id: string }[] }>(
+		'/drive/v3/files',
+		accessToken,
+		new URLSearchParams({
+			q: `trashed = false and mimeType = 'application/vnd.google-apps.folder' and '${folderId}' in parents`,
+			fields: 'files(id)',
+			pageSize: '1',
+			spaces: 'drive'
+		})
+	);
+	return (response.files?.length ?? 0) > 0;
+}
+
+function isMp3File(file: GoogleDriveFile): boolean {
+	const extension = file.fileExtension?.toLowerCase();
+	return extension === 'mp3' || file.mimeType === 'audio/mpeg' || file.name.toLowerCase().endsWith('.mp3');
+}
+
+async function fetchMp3FilesInFolder(accessToken: string, folderId: string): Promise<GoogleDriveFile[]> {
+	const files: GoogleDriveFile[] = [];
+	let pageToken = '';
+	do {
+		const searchParams = new URLSearchParams({
+			q: `trashed = false and '${folderId}' in parents and mimeType contains 'audio/'`,
+			fields: 'nextPageToken,files(id,name,mimeType,fileExtension,modifiedTime,size,webViewLink)',
+			pageSize: '200',
+			spaces: 'drive',
+			orderBy: 'name_natural'
+		});
+		if (pageToken) searchParams.set('pageToken', pageToken);
+		const response = await googleApiFetch<{ nextPageToken?: string; files?: GoogleDriveFile[] }>(
+			'/drive/v3/files', accessToken, searchParams
+		);
+		files.push(...(response.files ?? []).filter(isMp3File));
+		pageToken = response.nextPageToken ?? '';
+	} while (pageToken);
+	return files;
+}
+
+async function fetchSubfolderEntries(accessToken: string, folderId: string): Promise<{ id: string; name: string }[]> {
+	const entries: { id: string; name: string }[] = [];
+	let pageToken = '';
+	do {
+		const searchParams = new URLSearchParams({
+			q: `trashed = false and mimeType = 'application/vnd.google-apps.folder' and '${folderId}' in parents`,
+			fields: 'nextPageToken,files(id,name)',
+			pageSize: '100',
+			spaces: 'drive'
+		});
+		if (pageToken) searchParams.set('pageToken', pageToken);
+		const response = await googleApiFetch<{ nextPageToken?: string; files?: { id: string; name: string }[] }>(
+			'/drive/v3/files', accessToken, searchParams
+		);
+		entries.push(...(response.files ?? []));
+		pageToken = response.nextPageToken ?? '';
+	} while (pageToken);
+	return entries;
+}
+
 export async function listGoogleDriveMp3Files(
 	accessToken: string,
 	options?: { folderId?: string }
 ): Promise<GoogleDriveFile[]> {
-	const files: GoogleDriveFile[] = [];
-	let pageToken = '';
-	const folderId = options?.folderId?.trim();
+	const rootFolderId = options?.folderId?.trim();
 
-	do {
-		const query = folderId
-			? `trashed = false and '${folderId}' in parents and mimeType contains 'audio/'`
-			: "trashed = false and mimeType contains 'audio/'";
+	if (!rootFolderId) {
+		// No folder filter: search entire Drive
+		const files: GoogleDriveFile[] = [];
+		let pageToken = '';
+		do {
+			const searchParams = new URLSearchParams({
+				q: "trashed = false and mimeType contains 'audio/'",
+				fields: 'nextPageToken,files(id,name,mimeType,fileExtension,modifiedTime,size,webViewLink)',
+				pageSize: '200',
+				spaces: 'drive',
+				orderBy: 'name_natural'
+			});
+			if (pageToken) searchParams.set('pageToken', pageToken);
+			const response = await googleApiFetch<{ nextPageToken?: string; files?: GoogleDriveFile[] }>(
+				'/drive/v3/files', accessToken, searchParams
+			);
+			files.push(...(response.files ?? []).filter(isMp3File));
+			pageToken = response.nextPageToken ?? '';
+		} while (pageToken);
+		return files;
+	}
 
-		const searchParams = new URLSearchParams({
-			fields: 'nextPageToken,files(id,name,mimeType,fileExtension,modifiedTime,size,webViewLink)',
-			pageSize: '200',
-			q: query,
-			spaces: 'drive',
-			orderBy: 'name_natural'
-		});
+	// Folder filter: BFS over entire folder subtree to collect files recursively.
+	// Each queue item carries the path from the root to that folder.
+	const allFiles: GoogleDriveFile[] = [];
+	const folderQueue: { id: string; path: string[] }[] = [{ id: rootFolderId, path: [] }];
 
-		if (pageToken) {
-			searchParams.set('pageToken', pageToken);
+	while (folderQueue.length > 0) {
+		const { id: currentId, path } = folderQueue.shift()!;
+		const [files, subfolders] = await Promise.all([
+			fetchMp3FilesInFolder(accessToken, currentId),
+			fetchSubfolderEntries(accessToken, currentId)
+		]);
+		// Tag each file with its relative path so the browse view can reconstruct folder structure
+		for (const file of files) {
+			file.relativePath = path.length > 0 ? [...path, file.name].join('/') : file.name;
 		}
+		allFiles.push(...files);
+		for (const sub of subfolders) {
+			folderQueue.push({ id: sub.id, path: [...path, sub.name] });
+		}
+	}
 
-		const response = await googleApiFetch<{ nextPageToken?: string; files?: GoogleDriveFile[] }>(
-			'/drive/v3/files',
-			accessToken,
-			searchParams
-		);
-
-		files.push(...(response.files ?? []).filter((file) => {
-			const extension = file.fileExtension?.toLowerCase();
-			return extension === 'mp3' || file.mimeType === 'audio/mpeg' || file.name.toLowerCase().endsWith('.mp3');
-		}));
-
-		pageToken = response.nextPageToken ?? '';
-	} while (pageToken);
-
-	return files;
+	return allFiles;
 }
 
 function getSupportedStreamMimeType(mimeType?: string): string | null {

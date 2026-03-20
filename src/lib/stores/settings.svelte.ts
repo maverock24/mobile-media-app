@@ -22,6 +22,8 @@ export const musicSettings = persisted('music-settings', {
 	librarySource: 'device' as 'device' | 'drive',
 	nativeTreeUri: '',
 	lastFolderName: '',
+	driveFolderId: '',
+	driveFolderName: '',
 	lastTrackIndex: 0,
 	lastTrackTimestamp: 0,  // seconds — saved on pause/steal for UX continuity
 	crossfadeDuration: 0,   // seconds (0 = disabled)
@@ -32,15 +34,6 @@ export const musicSettings = persisted('music-settings', {
 	autoPlay: false,
 	rewindOnPrev: true,    // restart track if >3s in, on prev press
 	sortOrder: 'filename' as 'filename' | 'title' | 'artist'
-});
-
-export const essaySettings = persisted('essay-settings', {
-	source: 'static' as 'static' | 'drive' | 'native',
-	googleDriveFolderId: '',
-	googleDriveFolderName: '',
-	googleDriveFolderUrl: '',
-	nativeTreeUri: '',
-	nativeFolderName: ''
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -69,6 +62,7 @@ export interface PersistedEpisode {
 	publishedAt: string;
 	played:      boolean;
 	progress:    number;  // 0-100
+	positionSec: number;  // precise playback position in seconds (0 = from start)
 	audioUrl:    string;
 }
 export interface PersistedPodcast {
@@ -90,6 +84,13 @@ export const podcastData = persisted('podcast-data', {
 	lastEpisodeId:      '' as string,   // id of last-played episode
 	lastPodcastId:      -1 as number,   // id of that episode's podcast
 	lastPositionSec:    0 as number,    // playback position in seconds
+});
+
+// ─────────────────────────────────────────────────────────────
+// MP3 per-track resume positions
+// ─────────────────────────────────────────────────────────────
+export const mp3TrackPositions = persisted('mp3-track-positions', {
+	positions: {} as Record<string, number>   // trackKey → seconds
 });
 
 // ─────────────────────────────────────────────────────────────

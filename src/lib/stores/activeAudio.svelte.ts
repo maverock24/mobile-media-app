@@ -1,16 +1,19 @@
 /**
- * Shared coordinator so that only one audio source (music or podcast)
+ * Shared coordinator so that only one audio source (music, podcast, or essay)
  * plays at a time. Views register a stop-callback and call claimAudio
  * when they start playback.
  */
 
-const stopFns: Partial<Record<'music' | 'podcast', () => void>> = {};
+export type AudioSourceId = 'music' | 'podcast' | 'essay';
 
-export function registerAudioSource(id: 'music' | 'podcast', stopFn: () => void) {
+const stopFns: Partial<Record<AudioSourceId, () => void>> = {};
+
+export function registerAudioSource(id: AudioSourceId, stopFn: () => void) {
 	stopFns[id] = stopFn;
 }
 
-export function claimAudio(id: 'music' | 'podcast') {
-	const other = id === 'music' ? 'podcast' : 'music';
-	stopFns[other]?.();
+export function claimAudio(id: AudioSourceId) {
+	for (const other of Object.keys(stopFns) as AudioSourceId[]) {
+		if (other !== id) stopFns[other]?.();
+	}
 }

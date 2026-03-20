@@ -3,10 +3,12 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
 	import Badge from '$lib/components/ui/Badge.svelte';
+	import PlayerControls from '$lib/components/PlayerControls.svelte';
 	import { podcastSettings, podcastData } from '$lib/stores/settings.svelte';
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
+	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import {
-		Play, Pause, SkipBack, SkipForward, Plus, Trash2,
+		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
 		RefreshCw, Mic2, X
 	} from 'lucide-svelte';
@@ -20,6 +22,7 @@
 		publishedAt: string;
 		played:      boolean;
 		progress:    number;   // 0-100
+		positionSec: number;   // exact playback position in seconds (0 = from start)
 		audioUrl:    string;
 	}
 	interface Podcast {
@@ -74,20 +77,25 @@
 		if (!audioEl) return;
 		const onTimeUpdate = () => {
 			currentTime = audioEl.currentTime;
+			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
 			if (currentEpisode && duration > 0) {
 				currentEpisode.episode.progress = Math.min(100, Math.round((audioEl.currentTime / duration) * 100));
+				currentEpisode.episode.positionSec = audioEl.currentTime;
 			}
 		};
 		const onLoadedMetadata = () => {
 			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
+			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
 		};
-		const onPlay  = () => { isPlaying = true; };
-		const onPause = () => { isPlaying = false; };
+		const onPlay  = () => { isPlaying = true;  mediaEngine.setPlaying(true);  };
+		const onPause = () => { isPlaying = false; mediaEngine.setPlaying(false); };
 		const onEnded = () => {
 			isPlaying = false;
+			mediaEngine.setPlaying(false);
 			if (currentEpisode) {
 				currentEpisode.episode.played = true;
 				currentEpisode.episode.progress = 100;
+				currentEpisode.episode.positionSec = 0;
 			}
 		};
 		audioEl.addEventListener('timeupdate',     onTimeUpdate);
@@ -243,11 +251,12 @@
 				// itunes_duration is a string like "1:23:45" or seconds as number
 				const rawDur = item.itunes_duration ?? item.duration ?? 0;
 				return {
-					// prefix with itunesId so IDs are unique across podcasts
-					id:          `${podcast.itunesId}-${i}`,
-					title:       String(item.title ?? 'Untitled'),
-					description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
-					duration:    parseDuration(rawDur as string | number),
+			// prefix with itunesId so IDs are unique across podcasts
+				id:          `${podcast.itunesId}-${i}`,
+				title:       String(item.title ?? 'Untitled'),
+				description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
+				duration:    parseDuration(rawDur as string | number),
+				positionSec: 0,
 					publishedAt: String(item.pubDate ?? ''),
 					played:      false,
 					progress:    0,
@@ -286,11 +295,22 @@
 		audioEl.src = episode.audioUrl;
 		audioEl.playbackRate = podcastSettings.playbackSpeed;
 		audioEl.load();
-		const resumeAt = Math.round((episode.progress / 100) * episode.duration);
+		const resumeAt = (episode.positionSec ?? 0) > 10
+			? episode.positionSec
+			: Math.round((episode.progress / 100) * (episode.duration || 0));
 		if (resumeAt > 10) {
 			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = resumeAt; }, { once: true });
 		}
 		audioEl.play().catch(() => {});
+		mediaEngine.setNowPlaying({
+			id:         episode.id,
+			source:     'podcast',
+			title:      episode.title,
+			subtitle:   podcast.title,
+			audioUrl:   episode.audioUrl,
+			artworkUrl: podcast.artworkUrl,
+			duration:   episode.duration
+		}, 'podcast');
 	}
 
 	function togglePlay() {
@@ -303,12 +323,18 @@
 		}
 	}
 
+	function handleSeekSeconds(seconds: number) {
+		currentTime = seconds;
+		if (audioEl) audioEl.currentTime = seconds;
+	}
+
 	function handleSeek(e: Event) {
 		const input = e.target as HTMLInputElement;
 		const newTime = (parseFloat(input.value) / 100) * duration;
 		currentTime = newTime;
 		if (audioEl) audioEl.currentTime = newTime;
 	}
+
 
 	// ── Persist position on pause / end; sync episode progress into the store ──
 	$effect(() => {
@@ -325,8 +351,9 @@
 					episodes: p.episodes.map(e =>
 						e.id !== currentEpisode!.episode.id ? e : {
 							...e,
-							played:   currentEpisode!.episode.played,
-							progress: currentEpisode!.episode.progress,
+							played:      currentEpisode!.episode.played,
+							progress:    currentEpisode!.episode.progress,
+							positionSec: currentEpisode!.episode.positionSec ?? 0,
 						}
 					),
 				}
@@ -363,7 +390,7 @@
 <!-- Hidden audio element -->
 <audio bind:this={audioEl} preload="metadata"></audio>
 
-<div class="flex flex-col h-full bg-background">
+<div class="flex flex-col h-full bg-background/85">
 
 {#if selectedPodcast}
 	<!-- ════════════════════════════════ EPISODE LIST ═══════════════════════════════ -->
@@ -630,43 +657,17 @@
 					<p class="text-sm font-semibold truncate">{currentEpisode.episode.title}</p>
 					<p class="text-xs text-muted-foreground truncate">{currentEpisode.podcast.title}</p>
 				</div>
-				<!-- Playback controls -->
-				<div class="flex items-center gap-2 shrink-0">
-					<button
-						class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-						onclick={() => { if (audioEl) audioEl.currentTime = Math.max(0, audioEl.currentTime - podcastSettings.skipBackSeconds); }}
-						aria-label="Skip back {podcastSettings.skipBackSeconds}s"
-					>
-						<SkipBack class="w-5 h-5" />
-					</button>
-					<button
-						class="w-12 h-12 flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-md"
-						onclick={togglePlay}
-						aria-label={isPlaying ? 'Pause' : 'Play'}
-					>
-						{#if isPlaying}<Pause class="w-6 h-6" />{:else}<Play class="w-6 h-6 ml-0.5" />{/if}
-					</button>
-					<button
-						class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-						onclick={() => { if (audioEl && duration > 0) audioEl.currentTime = Math.min(duration, audioEl.currentTime + podcastSettings.skipForwardSeconds); }}
-						aria-label="Skip forward {podcastSettings.skipForwardSeconds}s"
-					>
-						<SkipForward class="w-5 h-5" />
-					</button>
-				</div>
 			</div>
-			<!-- Seek slider + times -->
-			<div class="px-4 pb-3 space-y-0.5">
-				<input
-					type="range" min="0" max="100"
-					value={duration > 0 ? (currentTime / duration) * 100 : 0}
-					oninput={handleSeek}
-					class="w-full h-2 rounded-full appearance-none cursor-pointer bg-secondary accent-primary"
+			<div class="px-4 pb-3">
+				<PlayerControls
+					isPlaying={isPlaying}
+					currentTime={currentTime}
+					duration={duration}
+					skipBackSec={podcastSettings.skipBackSeconds}
+					skipForwardSec={podcastSettings.skipForwardSeconds}
+					onPlayToggle={togglePlay}
+					onSeek={handleSeekSeconds}
 				/>
-				<div class="flex justify-between text-[10px] text-muted-foreground">
-					<span>{formatTime(currentTime)}</span>
-					<span>{duration > 0 ? formatTime(duration) : ''}</span>
-				</div>
 			</div>
 		</div>
 	{/if}

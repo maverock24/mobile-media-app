@@ -174,7 +174,7 @@
 	}
 </script>
 
-<div class="flex flex-col h-full bg-background overflow-y-auto">
+<div class="flex flex-col h-full bg-background/85 overflow-y-auto">
 	<!-- Header -->
 	<div class="px-4 pt-5 pb-4 border-b">
 		<h1 class="text-xl font-bold">Settings</h1>

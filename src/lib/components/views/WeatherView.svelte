@@ -224,7 +224,7 @@
 	}
 </script>
 
-<div class="flex flex-col h-full bg-background">
+<div class="flex flex-col h-full bg-background/85">
 
 	<!-- ── Header ──────────────────────────────────────────────── -->
 	<div class="p-4 border-b space-y-3 shrink-0">

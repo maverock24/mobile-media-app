@@ -5,21 +5,19 @@
 	import WeatherView from '$lib/components/views/WeatherView.svelte';
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
 	import LoginView from '$lib/components/views/LoginView.svelte';
-	import EssayListView from '$lib/components/views/EssayListView.svelte';
-	import EssayPlayerView from '$lib/components/views/EssayPlayerView.svelte';
-	import { essayPlayer } from '$lib/stores/essayPlayer.svelte';
+	import MiniPlayer from '$lib/components/ui/MiniPlayer.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
-	import { essaySettings } from '$lib/stores/settings.svelte';
-	import { Music, Mic2, Cloud, BookOpen, Settings2, LogIn } from 'lucide-svelte';
+	import { Music, Mic2, Cloud, Settings2, User } from 'lucide-svelte';
 
-	type Tab = 'music' | 'podcasts' | 'essays' | 'login' | 'weather' | 'settings';
+	type Tab = 'music' | 'podcasts' | 'login' | 'weather' | 'settings';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
 	const DEFAULT_TAB: Tab = 'music';
 
 	let activeTab = $state<Tab>(DEFAULT_TAB);
 
 	function isTab(value: unknown): value is Tab {
-		return value === 'music' || value === 'podcasts' || value === 'essays' || value === 'login' || value === 'weather' || value === 'settings';
+		return value === 'music' || value === 'podcasts'
+			|| value === 'login' || value === 'weather' || value === 'settings';
 	}
 
 	function readSavedTab(): Tab {
@@ -43,43 +41,32 @@
 
 	const tabs = $derived.by((): { id: Tab; label: string; icon: typeof Music }[] => {
 		const isDriveConnected = Boolean(googleDriveSession.user)
-			|| googleDriveSession.hasValidToken()
-			|| Boolean(essaySettings.googleDriveFolderId)
-			|| Boolean(essaySettings.nativeTreeUri);
+			|| googleDriveSession.hasValidToken();
 
 		return [
-			{ id: 'music', label: 'Music', icon: Music },
+			{ id: 'music',    label: 'Music',    icon: Music },
 			{ id: 'podcasts', label: 'Podcasts', icon: Mic2 },
-			{ id: 'essays', label: 'Essays', icon: BookOpen },
-			{ id: 'login', label: isDriveConnected ? 'Drive' : 'Login', icon: isDriveConnected ? Cloud : LogIn },
-			{ id: 'weather', label: 'Weather', icon: Cloud },
+			{ id: 'login',    label: isDriveConnected ? 'Drive' : 'Login', icon: User },
+			{ id: 'weather',  label: 'Weather',  icon: Cloud },
 			{ id: 'settings', label: 'Settings', icon: Settings2 }
 		];
 	});
 </script>
 
-<div class="flex flex-col h-dvh max-w-md mx-auto bg-background overflow-hidden">
+<div class="flex flex-col h-dvh max-w-md mx-auto overflow-hidden relative" style="z-index:1;">
 	<!-- Content -->
 	<main class="flex-1 overflow-hidden relative">
 		<!--
 			Music and Podcast are ALWAYS mounted (CSS hidden, not {#if}).
 			This keeps the <audio> element and all component state alive across
 			tab switches so playback position, tracks, and episode progress are
-			preserved. JS timers (podcast interval) and Web Audio context also
-			survive — so music continues playing when the user browses weather.
+			preserved. JS timers and Web Audio context also survive.
 		-->
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'music'}>
 			<Mp3PlayerView />
 		</div>
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'podcasts'}>
 			<PodcastView />
-		</div>
-		<div class="absolute inset-0 overflow-y-auto" class:hidden={activeTab !== 'essays'}>
-			{#if essayPlayer.currentEssay}
-				<EssayPlayerView />
-			{:else}
-				<EssayListView />
-			{/if}
 		</div>
 		{#if activeTab === 'login'}
 			<div class="absolute inset-0 overflow-y-auto">
@@ -96,6 +83,9 @@
 		{/if}
 	</main>
 
+	<!-- Mini-player: shown when audio is playing but user is on a different tab -->
+	<MiniPlayer {activeTab} onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
+
 	<!-- Bottom Tab Bar -->
 	<div class="border-t bg-background/95 backdrop-blur-sm safe-area-inset-bottom" role="tablist">
 		<div class="flex">
@@ -105,11 +95,11 @@
 					role="tab"
 					aria-selected="{activeTab === tab.id}"
 					aria-label="{tab.label}"
-					class="flex-1 flex flex-col items-center justify-center py-2.5 gap-1 transition-colors {activeTab === tab.id ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
+					class="flex-1 flex flex-col items-center justify-center py-3 gap-1 transition-colors {activeTab === tab.id ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
 					onclick={() => (activeTab = tab.id)}
 				>
 					<div class="relative">
-						<Icon class="w-6 h-6" />
+						<Icon class="w-7 h-7" />
 						{#if activeTab === tab.id}
 							<div class="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary"></div>
 						{/if}

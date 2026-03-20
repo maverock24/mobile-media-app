@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.svg';
+	import AuroraBackground from '$lib/components/AuroraBackground.svelte';
 	let { children } = $props();
 </script>
 
@@ -10,4 +11,5 @@
 	<title>Media Hub</title>
 </svelte:head>
 
+<AuroraBackground />
 {@render children()}

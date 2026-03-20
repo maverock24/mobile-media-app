@@ -6,19 +6,22 @@
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
-		canStreamGoogleDriveFile,
-		createGoogleDriveStreamSession,
+		checkFolderHasSubfolders,
 		downloadGoogleDriveFile,
 		fetchGoogleDriveUser,
 		getGoogleDriveClientId,
 		isGoogleDriveConfigured,
+		listGoogleDriveFolders,
 		listGoogleDriveMp3Files,
 		requestGoogleDriveAccessToken,
 		revokeGoogleDriveAccess,
 		type GoogleDriveFile,
+		type GoogleDriveFolder,
 		type GoogleDriveUser
 	} from '$lib/google-drive';
 	import { musicSettings } from '$lib/stores/settings.svelte';
+	import { mp3TrackPositions } from '$lib/stores/settings.svelte';
+	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
@@ -173,7 +176,7 @@
 		});
 	}
 
-	function hydrateTracksFromLibrary(files: StoredAudioFile[]) {
+	function hydrateTracksFromLibrary(files: StoredAudioFile[], resetToStart = false) {
 		const sorted = sortFiles(files);
 		tracks = sorted.map((file, index) => {
 			const { title, artist } = parseFilename(file.name);
@@ -195,11 +198,23 @@
 			currentTime = 0;
 			duration = 0;
 			isPlaying = false;
+			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
 			return;
 		}
 
-		musicSettings.lastTrackIndex = Math.min(musicSettings.lastTrackIndex, tracks.length - 1);
-		currentTime = musicSettings.lastTrackTimestamp;
+		if (resetToStart) {
+			// New folder: stop playback, clear audio, reset to track 0
+			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+			isPlaying = false;
+			musicSettings.lastTrackIndex = 0;
+			musicSettings.lastTrackTimestamp = 0;
+			currentTime = 0;
+			duration = 0;
+		} else {
+			// Restore: keep saved position
+			musicSettings.lastTrackIndex = Math.min(musicSettings.lastTrackIndex, tracks.length - 1);
+			currentTime = musicSettings.lastTrackTimestamp;
+		}
 	}
 
 	// EQ constants
@@ -234,6 +249,7 @@
 	let allFiles         = $state<StoredAudioFile[]>([]);     // web/native metadata-backed library
 	let browsePath       = $state<string[]>([]);                 // navigation stack
 	let browseEntries    = $state<BrowseEntry[]>([]);
+	let fileSearchQuery  = $state('');
 	let browseLoading    = $state(false);
 	let browseVersion    = $state(0);                          // bump to force reload
 	let driveAccessToken = $state('');
@@ -243,6 +259,24 @@
 	let driveSearch      = $state('');
 	let isDriveAuthenticating = $state(false);
 	let isDriveLoading   = $state(false);
+	let seekingValue     = $state<number | null>(null); // % while slider is dragged
+
+	// ── Filtered browse entries (search by name) ─────────────────
+	const filteredEntries = $derived(
+		fileSearchQuery.trim().length === 0
+			? browseEntries
+			: browseEntries.filter(e =>
+				e.name.toLowerCase().includes(fileSearchQuery.toLowerCase())
+			)
+	);
+
+	// ── Drive folder picker dialog state ──
+	let showFolderPicker      = $state(false);
+	let folderPickerFolders   = $state<GoogleDriveFolder[]>([]);
+	let folderPickerLoading   = $state(false);
+	let folderPickerStack     = $state<{ id: string; name: string }[]>([]);
+	let folderPickerToken     = $state('');
+	let folderHasSubFolders   = $state<Record<string, boolean>>({}); // folderId → has subfolders
 
 	// ── Web Audio API (lazy-init) ──
 	let audioCtx: AudioContext | null = null;
@@ -255,8 +289,11 @@
 
 	// ── derived ──
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
-	const progressPercent = $derived(duration > 0 ? (currentTime / duration) * 100 : 0);
+
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
+	const progressPercent = $derived(
+		seekingValue !== null ? seekingValue : (duration > 0 ? (currentTime / duration) * 100 : 0)
+	);
 	const currentLibraryLabel = $derived(
 		musicSettings.librarySource === 'drive' ? 'Google Drive' : musicSettings.lastFolderName || 'Library'
 	);
@@ -284,7 +321,7 @@
 	// ── audio element event wiring ──
 	$effect(() => {
 		if (!audioEl) return;
-		const onTimeUpdate = () => { currentTime = audioEl.currentTime; };
+		const onTimeUpdate = () => { if (seekingValue === null) currentTime = audioEl.currentTime; };
 		const onLoadedMetadata = () => {
 			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
 			tracks = tracks.map((t, i) =>
@@ -298,8 +335,12 @@
 			isPlaying = false;
 			// Persist position so it's visible in settings and survives any future restore
 			musicSettings.lastTrackTimestamp = audioEl.currentTime;
+			// Per-track resume: save current position
+			saveTrackPosition(musicSettings.lastTrackIndex, audioEl.currentTime);
 		};
 		const onEnded = () => {
+			// Track finished — clear any saved resume position
+			clearTrackPosition(musicSettings.lastTrackIndex);
 			if (musicSettings.isRepeat) { audioEl.currentTime = 0; audioEl.play().catch(() => {}); }
 			else void advanceTrack(true, false);
 		};
@@ -461,7 +502,7 @@
 		return {
 			source: 'drive',
 			name: entry.name,
-			relativePath: entry.name,
+			relativePath: entry.relativePath ?? entry.name,
 			fileId: entry.id,
 			mimeType: entry.mimeType,
 			modifiedAt: entry.modifiedTime ? new Date(entry.modifiedTime).getTime() : undefined,
@@ -476,6 +517,44 @@
 
 	function getRelativePath(file: StoredAudioFile): string {
 		return file.relativePath && file.relativePath.length > 0 ? file.relativePath : file.name;
+	}
+
+	// ── Per-track resume helpers ──────────────────────────────────
+	function getTrackKey(source: StoredAudioFile): string {
+		if (source.source === 'drive')  return `d:${source.fileId}`;
+		if (source.source === 'native') return `n:${source.relativePath}`;
+		return `w:${source.relativePath}`;
+	}
+
+	function saveTrackPosition(index: number, positionSec: number) {
+		const track = tracks[index];
+		if (!track) return;
+		const key = getTrackKey(track.source);
+		// Only save if meaningfully into the track and not within 5s of the end
+		const nearEnd = duration > 0 && positionSec >= duration - 5;
+		if (positionSec > 5 && !nearEnd) {
+			mp3TrackPositions.positions = { ...mp3TrackPositions.positions, [key]: positionSec };
+		} else {
+			clearTrackPosition(index);
+		}
+	}
+
+	function clearTrackPosition(index: number) {
+		const track = tracks[index];
+		if (!track) return;
+		const key = getTrackKey(track.source);
+		if (!(key in mp3TrackPositions.positions)) return;
+		const { [key]: _removed, ...rest } = mp3TrackPositions.positions;
+		mp3TrackPositions.positions = rest;
+	}
+
+	function applyTrackPosition(index: number) {
+		const track = tracks[index];
+		if (!track) return;
+		const pos = mp3TrackPositions.positions[getTrackKey(track.source)] ?? 0;
+		if (pos > 5) {
+			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = pos; }, { once: true });
+		}
 	}
 
 	function bytesFromBase64(data: string): Uint8Array {
@@ -548,6 +627,15 @@
 			return driveAccessToken;
 		}
 
+		// Hydrate silently from the persisted session (survives page refresh)
+		googleDriveSession.hydrateFromStorage();
+		if (googleDriveSession.hasValidToken()) {
+			driveAccessToken = googleDriveSession.accessToken;
+			driveTokenExpiresAt = googleDriveSession.expiresAt;
+			driveUser = googleDriveSession.user;
+			return driveAccessToken;
+		}
+
 		if (!interactive) {
 			return null;
 		}
@@ -602,19 +690,106 @@
 				return;
 			}
 
-			const [user, files] = await Promise.all([
-				fetchGoogleDriveUser(token),
-				listGoogleDriveMp3Files(token)
-			]);
-
+			const user = await fetchGoogleDriveUser(token);
 			driveUser = user;
+			driveError = '';
+
+			// Show folder picker before loading files
+			folderPickerToken = token;
+			folderPickerStack = [];
+			isDriveLoading = false;
+			isDriveAuthenticating = false;
+			await openFolderPicker();
+		} catch (error) {
+			driveError = formatDriveAuthError(error);
+		} finally {
+			isDriveAuthenticating = false;
+			isDriveLoading = false;
+		}
+	}
+
+	async function openFolderPicker() {
+		folderPickerStack = [];
+		await loadFolderPickerLevel();
+		showFolderPicker = true;
+	}
+
+	async function loadFolderPickerLevel() {
+		folderPickerLoading = true;
+		try {
+			const parentId = folderPickerStack.at(-1)?.id;
+			folderPickerFolders = await listGoogleDriveFolders(folderPickerToken, parentId);
+			// Fire parallel sub-folder existence checks for any unchecked folders
+			const unchecked = folderPickerFolders.filter(f => !(f.id in folderHasSubFolders));
+			if (unchecked.length > 0) {
+				const results = await Promise.allSettled(
+					unchecked.map(f => checkFolderHasSubfolders(folderPickerToken, f.id))
+				);
+				const updates: Record<string, boolean> = {};
+				unchecked.forEach((f, i) => {
+					const r = results[i];
+					updates[f.id] = r.status === 'fulfilled' ? r.value : false;
+				});
+				folderHasSubFolders = { ...folderHasSubFolders, ...updates };
+			}
+		} catch {
+			folderPickerFolders = [];
+		} finally {
+			folderPickerLoading = false;
+		}
+	}
+
+	async function navigateFolderPickerInto(folder: GoogleDriveFolder) {
+		folderPickerStack = [...folderPickerStack, { id: folder.id, name: folder.name }];
+		await loadFolderPickerLevel();
+	}
+
+	async function navigateFolderPickerBack() {
+		folderPickerStack = folderPickerStack.slice(0, -1);
+		await loadFolderPickerLevel();
+	}
+
+	async function confirmDriveFolderSelection(folderId?: string, folderName?: string) {
+		showFolderPicker = false;
+		musicSettings.driveFolderId = folderId ?? '';
+		musicSettings.driveFolderName = folderName ?? '';
+		const token = folderPickerToken;
+		folderPickerToken = '';
+		await finishDriveLoad(token, folderId);
+	}
+
+	function cancelFolderPicker() {
+		showFolderPicker = false;
+		folderPickerToken = '';
+		folderPickerStack = [];
+		folderPickerFolders = [];
+	}
+
+	function confirmCurrentFolder() {
+		const current = folderPickerStack.at(-1);
+		if (current) {
+			void confirmDriveFolderSelection(current.id, current.name);
+		} else {
+			void confirmDriveFolderSelection(undefined, undefined);
+		}
+	}
+
+	async function finishDriveLoad(token: string, folderId?: string) {
+		isDriveLoading = true;
+		try {
+			const files = await listGoogleDriveMp3Files(token, { folderId });
+			// Stop any currently playing track before switching library
+			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+			isPlaying = false;
+			currentTime = 0;
+			duration = 0;
+			tracks = [];
 			allFiles = files.map((file) => createStoredDriveAudioFile(file));
 			driveError = '';
 			activateDriveLibrary();
 		} catch (error) {
 			driveError = formatDriveAuthError(error);
 		} finally {
-			isDriveAuthenticating = false;
 			isDriveLoading = false;
 		}
 	}
@@ -624,7 +799,17 @@
 	}
 
 	async function refreshGoogleDrive() {
-		await loadDriveLibrary(true);
+		// Re-auth silently then reload files from the same folder
+		const token = await ensureDriveAccessToken(true);
+		if (!token) return;
+		await finishDriveLoad(token, musicSettings.driveFolderId || undefined);
+	}
+
+	async function changeDriveFolder() {
+		const token = await ensureDriveAccessToken(false);
+		if (!token) { await loadDriveLibrary(true); return; }
+		folderPickerToken = token;
+		await openFolderPicker();
 	}
 
 	async function signOutGoogleDrive() {
@@ -701,18 +886,17 @@
 	async function loadBrowseEntries(path: string[], driveFilter = '') {
 		browseLoading = true;
 		try {
-			if (musicSettings.librarySource === 'drive') {
-				const filter = driveFilter.trim();
-				const files = sortFiles(allFiles).filter((file) => {
-					if (file.source !== 'drive') return false;
-					if (!filter) return true;
-					const parsed = parseFilename(file.name);
-					const haystack = `${file.name} ${parsed.title} ${parsed.artist}`.toLowerCase();
-					return haystack.includes(filter);
-				});
-
-				browseEntries = files.map((file) => ({ kind: 'file', name: file.name, file }));
-			} else if (rootDirHandle) {
+			if (musicSettings.librarySource === 'drive' && driveFilter.trim()) {
+			// Search mode: flat filtered list across all Drive files
+			const filter = driveFilter.trim();
+			const files = sortFiles(allFiles).filter((file) => {
+				if (file.source !== 'drive') return false;
+				const parsed = parseFilename(file.name);
+				const haystack = `${file.name} ${parsed.title} ${parsed.artist}`.toLowerCase();
+				return haystack.includes(filter);
+			});
+			browseEntries = files.map((file) => ({ kind: 'file', name: file.name, file }));
+		} else if (rootDirHandle) {
 				// Navigate to the directory at `path`
 				let dir: FileSystemDirectoryHandle = rootDirHandle;
 				for (const segment of path) {
@@ -842,7 +1026,11 @@
 	// ── Collect all files under a browse path ──
 	async function collectAllFromPath(path: string[]): Promise<StoredAudioFile[]> {
 		if (musicSettings.librarySource === 'drive') {
-			return sortFiles(allFiles);
+			const prefix = path.length > 0 ? path.join('/') + '/' : '';
+			return sortFiles(allFiles.filter(f => {
+				const p = getRelativePath(f);
+				return prefix ? p.startsWith(prefix) : true;
+			}));
 		} else if (rootDirHandle) {
 			const dir = await resolveDirAtPath(path);
 			return dir ? (await collectFilesFromDirHandle(dir)).map((file) => createStoredAudioFile(file)) : [];
@@ -870,27 +1058,6 @@
 		}
 
 		try {
-			if (track.source.source === 'drive' && canStreamGoogleDriveFile(track.source.mimeType)) {
-				const accessToken = await ensureDriveAccessToken(interactiveAuth);
-				if (!accessToken) {
-					throw new Error('Your Google Drive session has expired. Sign in again to continue playback.');
-				}
-
-				const streamSession = await createGoogleDriveStreamSession({
-					accessToken,
-					fileId: track.source.fileId,
-					mimeType: track.source.mimeType,
-				});
-
-				tracks = tracks.map((current, currentIndex) => {
-					return currentIndex === index
-						? { ...current, url: streamSession.url, cleanup: streamSession.dispose }
-						: current;
-				});
-
-				return streamSession.url;
-			}
-
 			const file = await materializeStoredFile(track.source, interactiveAuth);
 			const url = URL.createObjectURL(file);
 			tracks = tracks.map((current, currentIndex) => {
@@ -1100,7 +1267,7 @@
 		browsePath = [];
 		browseVersion++;
 		showQueue = true;
-		hydrateTracksFromLibrary(allFiles);
+		hydrateTracksFromLibrary(allFiles, true);
 		void saveCachedLibrary('Selected Files', allFiles);
 		input.value = '';
 	}
@@ -1151,7 +1318,26 @@
 			}
 			audioEl.src = url;
 			audioEl.load();
+			applyTrackPosition(musicSettings.lastTrackIndex);
 			void preloadNextTrack(musicSettings.lastTrackIndex);
+			claimAudio('music');
+			initAudioContext();
+			audioEl.play().catch(() => {});
+		}
+	}
+
+	// Play only the files visible in the current folder view (no recursion)
+	async function playCurrentFolder() {
+		const files = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
+		if (files.length === 0) { alert('No MP3 files found.'); return; }
+		const label = browsePath.length > 0 ? browsePath[browsePath.length - 1] : (musicSettings.lastFolderName || 'Library');
+		loadTracks(files, label);
+		if (audioEl && tracks.length > 0) {
+			const url = await ensureTrackUrl(0, true);
+			if (!url) { alert('Unable to load tracks from this folder.'); return; }
+			audioEl.src = url;
+			audioEl.load();
+			void preloadNextTrack(0);
 			claimAudio('music');
 			initAudioContext();
 			audioEl.play().catch(() => {});
@@ -1203,6 +1389,7 @@
 				}
 				audioEl.src = url;
 				audioEl.load();
+				applyTrackPosition(musicSettings.lastTrackIndex);
 			}
 			void preloadNextTrack(musicSettings.lastTrackIndex);
 			audioEl.play().catch(() => {});
@@ -1221,6 +1408,7 @@
 				return;
 			}
 			audioEl.src = url; audioEl.load();
+			applyTrackPosition(index);
 			void preloadNextTrack(index);
 			claimAudio('music');
 			audioEl.play().catch(() => {});
@@ -1247,6 +1435,7 @@
 				return;
 			}
 			audioEl.src = url; audioEl.load();
+			applyTrackPosition(nextIndex);
 			void preloadNextTrack(nextIndex);
 			if (wasPlaying) audioEl.play().catch(() => { isPlaying = false; });
 		}
@@ -1266,14 +1455,21 @@
 				return;
 			}
 			audioEl.src = url; audioEl.load();
+			applyTrackPosition(prevIndex);
 			void preloadNextTrack(prevIndex);
 			if (isPlaying) audioEl.play().catch(() => {});
 		}
 	}
 
-	function handleSeek(e: Event) {
-		const input = e.target as HTMLInputElement;
-		const newTime = (parseFloat(input.value) / 100) * duration;
+	function handleSeekInput(e: Event) {
+		// Track drag position visually without touching audio (prevents timeupdate reset)
+		seekingValue = parseFloat((e.target as HTMLInputElement).value);
+	}
+	function handleSeekCommit(e: Event) {
+		// User released – now actually seek the audio
+		const pct = parseFloat((e.target as HTMLInputElement).value);
+		const newTime = (pct / 100) * duration;
+		seekingValue = null;
 		currentTime = newTime;
 		if (audioEl) audioEl.currentTime = newTime;
 	}
@@ -1290,7 +1486,22 @@
 
 	// ── Restore last folder handle from IndexedDB on mount ───────
 	$effect(() => {
-		if (musicSettings.librarySource === 'drive') { isRestoring = false; return; }
+		if (musicSettings.librarySource === 'drive') {
+			// Silently restore Drive library using the persisted session token (survives refresh)
+			void (async () => {
+				try {
+					const token = await ensureDriveAccessToken(false);
+					if (token && musicSettings.driveFolderId) {
+						await finishDriveLoad(token, musicSettings.driveFolderId || undefined);
+					}
+				} catch {
+					// Silent restore failed — user will see the Connect button
+				} finally {
+					isRestoring = false;
+				}
+			})();
+			return;
+		}
 		void (async () => {
 			try {
 				const [handle, cachedLibrary] = await Promise.all([loadHandleFromIDB(), loadCachedLibrary()]);
@@ -1359,7 +1570,7 @@
 	onchange={handleNativeFileInput}
 />
 
-<div class="flex flex-col h-full bg-background">
+<div class="flex flex-col h-full bg-background/85">
 
 	<!-- ════════════════════════════ RESTORING ════════════════════════════ -->
 	{#if isRestoring}
@@ -1437,13 +1648,13 @@
 
 			<!-- Breadcrumb -->
 			<div class="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
-				<button class="text-xs text-muted-foreground hover:text-foreground truncate shrink-0 max-w-[90px]"
+				<button class="text-sm text-muted-foreground hover:text-foreground truncate shrink-0 max-w-[90px]"
 					onclick={() => (browsePath = [])}
 				>{currentLibraryLabel}</button>
 				{#each browsePath as seg, i}
 					<ChevronRight class="w-3 h-3 text-muted-foreground shrink-0" />
 					<button
-						class="text-xs truncate max-w-[90px] {i === browsePath.length - 1 ? 'text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}"
+						class="text-sm truncate max-w-[90px] {i === browsePath.length - 1 ? 'text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}"
 						onclick={() => (browsePath = browsePath.slice(0, i + 1))}
 					>{seg}</button>
 				{/each}
@@ -1451,31 +1662,25 @@
 
 			<!-- Play All current path + Change folder -->
 			<div class="flex items-center gap-1 shrink-0">
-				<Button size="sm" variant="default" class="gap-1 text-xs h-7 px-2"
-					onclick={() => playFolderPath(browsePath)} disabled={isLoading}>
+				<Button size="sm" variant="default" class="gap-1 text-xs h-9 px-3"
+					onclick={playCurrentFolder} disabled={isLoading}>
 					{#if isLoading}
-						<div class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+						<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
 					{:else}
-						<Play class="w-3 h-3" />
+						<Play class="w-4 h-4 ml-0.5" />
 					{/if}
 					All
 				</Button>
-				{#if musicSettings.librarySource === 'drive'}
-					<Button variant="ghost" size="sm" class="text-xs h-7 px-2" onclick={refreshGoogleDrive} disabled={isDriveLoading} aria-label="Refresh Google Drive">
-						{#if isDriveLoading}
-							<div class="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-						{:else}
-							<RefreshCw class="w-3.5 h-3.5" />
-						{/if}
-					</Button>
-					<Button variant="ghost" size="sm" class="text-xs h-7 px-2" onclick={signOutGoogleDrive} aria-label="Sign out of Google Drive">
-						<LogOut class="w-3.5 h-3.5" />
-					</Button>
-				{:else}
-					<Button variant="ghost" size="sm" class="text-xs h-7 px-2" onclick={openFolder}>
-						<FolderOpen class="w-3.5 h-3.5" />
-					</Button>
-				{/if}
+				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openFolder} aria-label="Open local folder" title="Open local folder">
+					<FolderOpen class="w-5 h-5" />
+				</Button>
+				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={driveUser ? changeDriveFolder : connectGoogleDrive} disabled={isDriveAuthenticating} aria-label={driveUser ? 'Change Drive folder' : 'Connect Google Drive'} title={driveUser ? 'Change Google Drive folder' : 'Connect Google Drive'}>
+					{#if isDriveAuthenticating}
+						<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+					{:else}
+						<Cloud class="w-5 h-5" />
+					{/if}
+				</Button>
 			</div>
 		</div>
 
@@ -1490,8 +1695,20 @@
 								· {allFiles.length} MP3 file{allFiles.length === 1 ? '' : 's'}
 							{/if}
 						</p>
+						{#if musicSettings.driveFolderName}
+							<p class="text-xs text-primary truncate mt-0.5">
+								<Folder class="w-3 h-3 inline mr-0.5 -mt-0.5" />{musicSettings.driveFolderName}
+							</p>
+						{:else}
+							<p class="text-xs text-muted-foreground truncate mt-0.5">All files</p>
+						{/if}
 					</div>
-					<Cloud class="w-4 h-4 text-primary shrink-0" />
+					<div class="flex items-center gap-1 shrink-0">
+						<Button variant="ghost" size="sm" class="text-xs h-10 px-3" onclick={changeDriveFolder} title="Change folder">
+							<FolderOpen class="w-5 h-5" />
+						</Button>
+						<Cloud class="w-5 h-5 text-primary shrink-0" />
+					</div>
 				</div>
 				<div class="relative">
 					<Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
@@ -1507,20 +1724,36 @@
 
 		<!-- Entry list -->
 		<div class="flex-1 overflow-y-auto min-h-0">
+			{#if browseEntries.length > 0}
+				<div class="px-4 pt-3 pb-1">
+					<div class="relative">
+						<Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+						<input
+							type="search"
+							placeholder="Filter files…"
+							bind:value={fileSearchQuery}
+							class="w-full pl-9 pr-3 py-2 rounded-lg border bg-muted/40 text-sm outline-none focus:ring-2 focus:ring-primary/50"
+							aria-label="Filter files"
+						/>
+					</div>
+				</div>
+			{/if}
 			{#if browseLoading}
 				<div class="flex items-center justify-center h-32">
 					<div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
 				</div>
-			{:else if browseEntries.length === 0}
+			{:else if filteredEntries.length === 0}
 				<p class="text-center text-muted-foreground text-sm py-12">
-					{#if musicSettings.librarySource === 'drive'}
+					{#if fileSearchQuery.trim()}
+						No files match “{fileSearchQuery}”
+					{:else if musicSettings.librarySource === 'drive'}
 						{driveSearch ? 'No Google Drive MP3s match your search' : 'No MP3 files were found in Google Drive'}
 					{:else}
 						No MP3 files or folders here
 					{/if}
 				</p>
 			{:else}
-				{#each browseEntries as entry}
+				{#each filteredEntries as entry}
 					{#if entry.kind === 'folder'}
 					<!-- Folder row -->
 					<div class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
@@ -1533,15 +1766,15 @@
 						</button>
 						<!-- Play all in this subfolder -->
 						<button
-							class="w-7 h-7 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
+							class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
 							onclick={() => playFolderPath([...browsePath, entry.name])}
 							aria-label="Play {entry.name}"
 						>
-							<Play class="w-3.5 h-3.5 ml-0.5" />
+							<Play class="w-4 h-4 ml-0.5" />
 						</button>
 						<!-- Navigate into -->
 						<button class="text-muted-foreground shrink-0" onclick={() => navigateInto(entry.name)} aria-label="Browse {entry.name}">
-							<ChevronRight class="w-4 h-4" />
+							<ChevronRight class="w-5 h-5" />
 						</button>
 					</div>
 					{:else}
@@ -1555,11 +1788,11 @@
 							<p class="text-xs text-muted-foreground truncate">{parseFilename(entry.name).artist}</p>
 						</button>
 						<button
-							class="w-7 h-7 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
+							class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
 							onclick={() => playBrowseFile(entry)}
 							aria-label="Play {entry.name}"
 						>
-							<Play class="w-3.5 h-3.5 ml-0.5" />
+							<Play class="w-4 h-4 ml-0.5" />
 						</button>
 					</div>
 					{/if}
@@ -1592,13 +1825,13 @@
 				<!-- Playback controls -->
 				<div class="flex items-center gap-2 shrink-0">
 					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={prevTrack} aria-label="Previous">
-						<SkipBack class="w-5 h-5" />
+						<SkipBack class="w-6 h-6" />
 					</button>
 					<button class="w-12 h-12 flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-md" onclick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
 						{#if isPlaying}<Pause class="w-6 h-6" />{:else}<Play class="w-6 h-6 ml-0.5" />{/if}
 					</button>
 					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={() => advanceTrack(isPlaying, true)} aria-label="Next">
-						<SkipForward class="w-5 h-5" />
+						<SkipForward class="w-6 h-6" />
 					</button>
 				</div>
 			</div>
@@ -1606,7 +1839,8 @@
 			<div class="px-4 pb-3 space-y-0.5">
 				<input
 					type="range" min="0" max="100" value={progressPercent}
-					oninput={handleSeek}
+					oninput={handleSeekInput}
+					onchange={handleSeekCommit}
 					class="w-full h-2 rounded-full appearance-none cursor-pointer bg-secondary accent-primary"
 				/>
 				<div class="flex justify-between text-[10px] text-muted-foreground">
@@ -1628,26 +1862,20 @@
 		<div class="w-full flex items-center justify-between">
 			<div class="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
 				{#if musicSettings.librarySource === 'drive'}
-					<Cloud class="w-3.5 h-3.5 shrink-0" />
+					<Cloud class="w-5 h-5 shrink-0" />
 				{:else}
-					<FolderOpen class="w-3.5 h-3.5 shrink-0" />
+					<FolderOpen class="w-5 h-5 shrink-0" />
 				{/if}
 				<span class="truncate">{currentLibraryLabel}</span>
 			</div>
-			{#if musicSettings.librarySource === 'drive'}
-				<div class="flex items-center gap-1 shrink-0">
-					<Button variant="ghost" size="sm" onclick={refreshGoogleDrive} class="text-xs h-7 px-2 gap-1" disabled={isDriveLoading}>
-						<RefreshCw class="w-3 h-3" /> Refresh
-					</Button>
-					<Button variant="ghost" size="sm" onclick={signOutGoogleDrive} class="text-xs h-7 px-2 gap-1">
-						<LogOut class="w-3 h-3" /> Sign out
-					</Button>
-				</div>
-			{:else}
-				<Button variant="ghost" size="sm" onclick={openFolder} class="text-xs h-7 px-2 gap-1 shrink-0">
-					<FolderOpen class="w-3 h-3" /> Change
+			<div class="flex items-center gap-1 shrink-0">
+				<Button variant="ghost" size="icon" onclick={openFolder} title="Open local folder" class="h-10 w-10">
+					<FolderOpen class="w-5 h-5" />
 				</Button>
-			{/if}
+				<Button variant="ghost" size="icon" onclick={driveUser ? changeDriveFolder : connectGoogleDrive} title={driveUser ? 'Change Google Drive folder' : 'Connect Google Drive'} class="h-10 w-10">
+					<Cloud class="w-5 h-5" />
+				</Button>
+			</div>
 		</div>
 
 		<!-- Album Art -->
@@ -1668,14 +1896,15 @@
 				onclick={() => (isLiked = !isLiked)}
 				class="{isLiked ? 'text-red-500' : 'text-muted-foreground'} ml-2 shrink-0"
 			>
-				<Heart class="w-5 h-5" fill={isLiked ? 'currentColor' : 'none'} />
+				<Heart class="w-6 h-6" fill={isLiked ? 'currentColor' : 'none'} />
 			</Button>
 		</div>
 
 		<!-- Progress -->
 		<div class="w-full space-y-1">
 			<input type="range" min="0" max="100" value={progressPercent}
-				oninput={handleSeek}
+				oninput={handleSeekInput}
+				onchange={handleSeekCommit}
 				class="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-secondary accent-primary" />
 			<div class="flex justify-between text-xs text-muted-foreground">
 				<span>{formatTime(currentTime)}</span>
@@ -1689,7 +1918,7 @@
 			<Button variant="ghost" size="icon"
 				onclick={() => (musicSettings.isShuffle = !musicSettings.isShuffle)}
 				class={musicSettings.isShuffle ? 'text-primary' : 'text-muted-foreground'}>
-				<Shuffle class="w-5 h-5" />
+				<Shuffle class="w-6 h-6" />
 			</Button>
 			<Button variant="ghost" size="icon" onclick={prevTrack}>
 				<SkipBack class="w-8 h-8" />
@@ -1704,7 +1933,7 @@
 			<Button variant="ghost" size="icon"
 				onclick={() => (musicSettings.isRepeat = !musicSettings.isRepeat)}
 				class={musicSettings.isRepeat ? 'text-primary' : 'text-muted-foreground'}>
-				<Repeat class="w-5 h-5" />
+				<Repeat class="w-6 h-6" />
 			</Button>
 		</div>
 
@@ -1712,9 +1941,9 @@
 		<div class="flex items-center gap-3 w-full">
 			<Button variant="ghost" size="icon" onclick={toggleMute} class="text-muted-foreground shrink-0">
 				{#if musicSettings.isMuted || musicSettings.volume === 0}
-					<VolumeX class="w-4 h-4" />
+					<VolumeX class="w-5 h-5" />
 				{:else}
-					<Volume2 class="w-4 h-4" />
+					<Volume2 class="w-5 h-5" />
 				{/if}
 			</Button>
 			<input type="range" min="0" max="100"
@@ -1775,22 +2004,137 @@
 		<Button variant={showQueue ? 'default' : 'outline'} size="sm"
 			class="flex-1 gap-1.5 text-xs"
 			onclick={() => { showQueue = !showQueue; showPanel = 'none'; }}>
-			<ListMusic class="w-3.5 h-3.5" /> Browse
+			<ListMusic class="w-4 h-4" /> Browse
 		</Button>
 		<Button variant={showPanel === 'speed' ? 'default' : 'outline'} size="sm"
 			class="flex-1 gap-1.5 text-xs"
 			onclick={() => togglePanel('speed')}>
-			<Gauge class="w-3.5 h-3.5" /> {musicSettings.playbackSpeed}\xd7
+			<Gauge class="w-4 h-4" /> {musicSettings.playbackSpeed}\xd7
 		</Button>
 		<Button variant={showPanel === 'eq' ? 'default' : 'outline'} size="sm"
 			class="flex-1 gap-1.5 text-xs"
 			onclick={() => togglePanel('eq')}>
-			<SlidersHorizontal class="w-3.5 h-3.5" /> EQ
+			<SlidersHorizontal class="w-4 h-4" /> EQ
 		</Button>
 	</div>
 
 	{/if}
 </div>
+
+<!-- ═══════════════════ DRIVE FOLDER PICKER DIALOG ═══════════════════ -->
+{#if showFolderPicker}
+<div
+	class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+	role="dialog"
+	aria-modal="true"
+	aria-label="Choose Google Drive folder"
+>
+	<!-- Backdrop -->
+	<button
+		class="absolute inset-0 bg-black/60 backdrop-blur-sm"
+		onclick={cancelFolderPicker}
+		aria-label="Close"
+		tabindex="-1"
+	></button>
+
+	<!-- Sheet -->
+	<div class="relative z-10 w-full max-w-md bg-card rounded-t-2xl sm:rounded-2xl shadow-2xl border border-border flex flex-col max-h-[80dvh]">
+		<!-- Handle bar -->
+		<div class="flex justify-center pt-3 pb-1 sm:hidden shrink-0">
+			<div class="w-10 h-1 rounded-full bg-muted-foreground/40"></div>
+		</div>
+
+		<!-- Header -->
+		<div class="px-4 pt-3 pb-3 border-b shrink-0">
+			<div class="flex items-center gap-2">
+				{#if folderPickerStack.length > 0}
+					<button
+						class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground"
+						onclick={navigateFolderPickerBack}
+						aria-label="Back"
+					>
+						<ChevronLeft class="w-4 h-4" />
+					</button>
+				{/if}
+				<div class="flex-1 min-w-0">
+					<h2 class="text-base font-semibold leading-tight">Choose a folder</h2>
+					{#if folderPickerStack.length > 0}
+						<p class="text-xs text-muted-foreground truncate">
+							{folderPickerStack.map(f => f.name).join(' › ')}
+						</p>
+					{:else}
+						<p class="text-xs text-muted-foreground">Select which folder to load MP3s from</p>
+					{/if}
+				</div>
+				<button
+					class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground"
+					onclick={cancelFolderPicker}
+					aria-label="Cancel"
+				>
+					<ChevronLeft class="w-4 h-4 rotate-180" />
+				</button>
+			</div>
+		</div>
+
+		<!-- Folder list -->
+		<div class="flex-1 overflow-y-auto min-h-0">
+			{#if folderPickerLoading}
+				<div class="flex items-center justify-center py-12">
+					<div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+				</div>
+			{:else}
+				<!-- "All files" option (only at root level) -->
+				{#if folderPickerStack.length === 0}
+					<button
+						class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors text-left"
+						onclick={() => confirmDriveFolderSelection(undefined, undefined)}
+					>
+						<div class="w-9 h-9 rounded-lg bg-muted/50 flex items-center justify-center shrink-0">
+							<Cloud class="w-4 h-4 text-muted-foreground" />
+						</div>
+						<div class="flex-1 min-w-0">
+							<p class="text-sm font-medium">All files</p>
+							<p class="text-xs text-muted-foreground">Search entire Google Drive</p>
+						</div>
+						{#if !musicSettings.driveFolderId}
+							<div class="w-4 h-4 rounded-full border-2 border-primary bg-primary shrink-0"></div>
+						{/if}
+					</button>
+				{/if}
+
+				{#if folderPickerFolders.length === 0}
+					<p class="text-center text-muted-foreground text-sm py-8 px-4">No sub-folders found here</p>
+				{:else}
+					{#each folderPickerFolders as folder}
+						{@const isSelected = musicSettings.driveFolderId === folder.id}
+						<button
+							class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors text-left"
+							onclick={() => navigateFolderPickerInto(folder)}
+						>
+							<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+								<Folder class="w-4 h-4 text-primary" />
+							</div>
+							<p class="flex-1 text-sm font-medium truncate min-w-0">{folder.name}</p>
+							{#if isSelected}
+								<div class="w-4 h-4 rounded-full border-2 border-primary bg-primary shrink-0"></div>
+							{/if}
+							<ChevronRight class="w-4 h-4 text-muted-foreground shrink-0" />
+						</button>
+					{/each}
+				{/if}
+			{/if}
+		</div>
+
+		<!-- Footer -->
+		<div class="px-4 py-3 border-t shrink-0 flex gap-2">
+			<Button variant="outline" class="flex-1" onclick={cancelFolderPicker}>Cancel</Button>
+			<Button class="flex-1" onclick={confirmCurrentFolder}>
+				Select{folderPickerStack.length > 0 ? ` "${folderPickerStack.at(-1)!.name}"` : ' all'}
+			</Button>
+		</div>
+	</div>
+</div>
+{/if}
 
 <style>
 	@keyframes bar1 { 0%, 100% { height: 30%; } 50% { height: 90%; } }

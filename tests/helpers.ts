@@ -6,7 +6,7 @@ import { type Page, expect } from '@playwright/test';
 export const BASE = 'http://localhost:4173';
 
 // ── Tab navigation ──────────────────────────────────────────────────────────
-export async function goToTab(page: Page, label: 'Music' | 'Podcasts' | 'Weather' | 'Settings') {
+export async function goToTab(page: Page, label: 'Music' | 'Podcasts' | 'Essays' | 'Weather' | 'Settings') {
 	await page.getByRole('button', { name: label, exact: true }).evaluate((button) => {
 		(button as HTMLButtonElement).click();
 	});

@@ -74,4 +74,22 @@ test.describe('Tab navigation', () => {
 			await expect(btn).toBeEnabled();
 		}
 	});
+
+	test('unknown saved tab value falls back to default Music tab', async ({ page }) => {
+		await page.goto('about:blank');
+		await page.addInitScript(() => {
+			localStorage.setItem('navigation-state', JSON.stringify({ activeTab: 'nonexistent-tab' }));
+		});
+		await page.goto('/');
+		await expectActiveTab(page, 'Music');
+	});
+
+	test('navigation state with extra future fields does not crash', async ({ page }) => {
+		await page.goto('about:blank');
+		await page.addInitScript(() => {
+			localStorage.setItem('navigation-state', JSON.stringify({ activeTab: 'podcasts', futureField: 42 }));
+		});
+		await page.goto('/');
+		await expectActiveTab(page, 'Podcasts');
+	});
 });
