@@ -200,7 +200,7 @@
 			const t = Math.random();
 			return {
 				x: Math.random() * w,
-				y: Math.sqrt(t) * 200,
+				y: Math.sqrt(t) * 110,
 				radius: isBright ? 0.85 + Math.random() * 0.50
 				       : isMid   ? 0.40 + Math.random() * 0.35
 				                 : 0.10 + Math.random() * 0.22,
