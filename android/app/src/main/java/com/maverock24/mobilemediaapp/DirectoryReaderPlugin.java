@@ -3,6 +3,7 @@ package com.maverock24.mobilemediaapp;
 import android.content.Intent;
 import android.net.Uri;
 
+import androidx.core.content.FileProvider;
 import androidx.documentfile.provider.DocumentFile;
 
 import com.getcapacitor.JSArray;
@@ -160,5 +161,37 @@ public class DirectoryReaderPlugin extends Plugin {
 		result.put("mimeType", file.getType());
 		result.put("modifiedAt", file.lastModified());
 		return result;
+	}
+
+	@PluginMethod
+	public void installApk(PluginCall call) {
+		String filePath = call.getString("path");
+		if (filePath == null || filePath.isEmpty()) {
+			call.reject("path is required.");
+			return;
+		}
+
+		try {
+			java.io.File apkFile = new java.io.File(filePath);
+			if (!apkFile.exists()) {
+				call.reject("APK file not found at: " + filePath);
+				return;
+			}
+
+			Uri apkUri = FileProvider.getUriForFile(
+				getContext(),
+				getContext().getPackageName() + ".fileprovider",
+				apkFile
+			);
+
+			Intent intent = new Intent(Intent.ACTION_VIEW);
+			intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+			intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+			intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+			getContext().startActivity(intent);
+			call.resolve();
+		} catch (Exception e) {
+			call.reject("Failed to launch APK installer: " + e.getMessage(), e);
+		}
 	}
 }

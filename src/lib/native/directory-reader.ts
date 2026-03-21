@@ -29,6 +29,7 @@ interface DirectoryReaderPlugin {
 	rememberTreeUri(options: { treeUri: string }): Promise<void>;
 	listEntries(options: { treeUri: string; path?: string }): Promise<ListDirectoryEntriesResult>;
 	listAudioFiles(options: { treeUri: string; path?: string }): Promise<ListDirectoryFilesResult>;
+	installApk(options: { path: string }): Promise<void>;
 }
 
 export const DirectoryReader = registerPlugin<DirectoryReaderPlugin>('DirectoryReader');

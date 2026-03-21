@@ -25,6 +25,9 @@ export const mediaEngine = $state<NowPlayingState & {
 	updateTime(currentTime: number, duration: number): void;
 	setPlaying(playing: boolean): void;
 	clear(): void;
+	_nextHandler: (() => void) | null;
+	_prevHandler: (() => void) | null;
+	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null): void;
 }>({
 	item:        null as MediaItem | null,
 	isPlaying:   false as boolean,
@@ -58,6 +61,15 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.currentTime = 0;
 		this.duration    = 0;
 		this.source      = null;
+	},
+
+	_nextHandler: null as (() => void) | null,
+	_prevHandler: null as (() => void) | null,
+
+	/** Register next/previous track callbacks (e.g. for Android Auto via MediaSession). */
+	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null) {
+		this._nextHandler = next;
+		this._prevHandler = prev;
 	}
 });
 
@@ -81,6 +93,13 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 					? [{ src: item.artworkUrl, sizes: '512x512', type: 'image/jpeg' }]
 					: []
 			});
+		});
+
+		$effect(() => {
+			const next = mediaEngine._nextHandler;
+			const prev = mediaEngine._prevHandler;
+			navigator.mediaSession.setActionHandler('nexttrack', next ?? null);
+			navigator.mediaSession.setActionHandler('previoustrack', prev ?? null);
 		});
 	});
 }

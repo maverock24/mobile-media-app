@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { env } from '$env/dynamic/public';
 	import { Capacitor } from '@capacitor/core';
+	import { Filesystem, Directory } from '@capacitor/filesystem';
+	import { DirectoryReader } from '$lib/native/directory-reader';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { appSettings, musicSettings, podcastSettings, weatherSettings } from '$lib/stores/settings.svelte';
@@ -37,6 +39,9 @@
 	let androidRelease = $state<AndroidReleaseInfo | null>(null);
 	let isCheckingRelease = $state(false);
 	let releaseError = $state('');
+	let isInstalling = $state(false);
+	let installError = $state('');
+	let installStep = $state<'idle' | 'downloading' | 'launching'>('idle');
 	const releaseBaseUrl = (() => {
 		const configuredBaseUrl = env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
 		if (configuredBaseUrl) {
@@ -126,6 +131,28 @@
 
 		const digits = unitIndex === 0 ? 0 : 1;
 		return `${value.toFixed(digits)} ${units[unitIndex]}`;
+	}
+
+	async function installUpdate() {
+		if (!androidRelease) return;
+		isInstalling = true;
+		installError = '';
+		installStep = 'downloading';
+		try {
+			const { path } = await Filesystem.downloadFile({
+				url: androidRelease.url,
+				path: 'update.apk',
+				directory: Directory.Cache
+			});
+			if (!path) throw new Error('Download failed — no file path returned.');
+			installStep = 'launching';
+			await DirectoryReader.installApk({ path });
+		} catch (err) {
+			installError = err instanceof Error ? err.message : 'Failed to install update.';
+		} finally {
+			isInstalling = false;
+			installStep = 'idle';
+		}
 	}
 
 	onMount(() => {
@@ -601,14 +628,36 @@
 							</div>
 
 							<div class="flex flex-col gap-2">
-								<a
-									href={androidRelease.url}
-									class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-									download={androidRelease.fileName}
-								>
-									<Download class="w-4 h-4" />
-									Download Latest Android APK
-								</a>
+								{#if Capacitor.isNativePlatform()}
+									<button
+										class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60 disabled:pointer-events-none"
+										onclick={() => void installUpdate()}
+										disabled={isInstalling}
+									>
+										{#if installStep === 'downloading'}
+											<RefreshCw class="w-4 h-4 animate-spin" />
+											Downloading…
+										{:else if installStep === 'launching'}
+											<RefreshCw class="w-4 h-4 animate-spin" />
+											Launching installer…
+										{:else}
+											<Download class="w-4 h-4" />
+											Install Update
+										{/if}
+									</button>
+									{#if installError}
+										<p class="text-xs text-destructive">{installError}</p>
+									{/if}
+								{:else}
+									<a
+										href={androidRelease.url}
+										class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+										download={androidRelease.fileName}
+									>
+										<Download class="w-4 h-4" />
+										Download Latest Android APK
+									</a>
+								{/if}
 								<a
 									href={androidRelease.commitUrl}
 									target="_blank"
@@ -631,11 +680,12 @@
 					{/if}
 
 					<button
-						class="inline-flex items-center gap-2 text-sm font-medium text-primary"
+						class="inline-flex items-center gap-2 text-sm font-medium text-primary disabled:opacity-50"
 						onclick={() => void loadAndroidRelease()}
+						disabled={isCheckingRelease}
 					>
-						<RefreshCw class="w-4 h-4" />
-						Refresh build info
+						<RefreshCw class="w-4 h-4 {isCheckingRelease ? 'animate-spin' : ''}" />
+						{isCheckingRelease ? 'Checking…' : 'Refresh build info'}
 					</button>
 				</div>
 			{/if}

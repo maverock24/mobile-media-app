@@ -23,9 +23,22 @@
 		85: ['🌨', 'Snow Showers'],  86: ['❄️', 'Heavy Snow Showers'],
 		95: ['⛈', 'Thunderstorm'],  96: ['⛈', 'Thunderstorm'],99: ['⛈', 'T-Storm + Hail'],
 	};
-	function wmoIcon(code: number)  { return (WMO[code] ?? ['🌡', ''])[0]; }
+	// Night-specific icon overrides (codes 0–2 look different after dark)
+	const WMO_NIGHT: Partial<Record<number, string>> = {
+		0: '🌙', // Clear Sky
+		1: '🌙', // Mainly Clear
+		2: '☁️', // Partly Cloudy
+	};
+	function wmoIcon(code: number, isDay = true) {
+		if (!isDay && code in WMO_NIGHT) return WMO_NIGHT[code]!;
+		return (WMO[code] ?? ['🌡', ''])[0];
+	}
 	function wmoLabel(code: number) { return (WMO[code] ?? ['', 'Unknown'])[1]; }
-	function getBgGradient(code: number) {
+	function getBgGradient(code: number, isDay = true) {
+		if (!isDay) {
+			if (code <= 2)  return 'from-indigo-950 to-slate-800';
+			if (code === 3) return 'from-slate-700 to-slate-600';
+		}
 		if (code === 0) return 'from-amber-500 to-orange-400';
 		if (code <= 2)  return 'from-sky-500 to-blue-400';
 		if (code === 3) return 'from-slate-500 to-slate-400';
@@ -39,13 +52,13 @@
 	// ── Types ────────────────────────────────────────────────────
 	interface GeoResult { name: string; country: string; country_code: string;
 	                       latitude: number; longitude: number; timezone: string; }
-	interface HourlySlot { time: string; temp: number; code: number; }
+	interface HourlySlot { time: string; temp: number; code: number; isDay: boolean; }
 	interface DailySlot  { date: string; day: string; high: number; low: number; code: number; }
 	interface WeatherData {
 		city: string; country: string;
 		temp: number; feelsLike: number; humidity: number;
 		windSpeed: number; windDir: number; visibility: number;
-		code: number;
+		code: number; isDay: boolean;
 		high: number; low: number;
 		hourly: HourlySlot[];
 		daily: DailySlot[];
@@ -117,8 +130,8 @@
 				'https://api.open-meteo.com/v1/forecast',
 				`?latitude=${city.lat}&longitude=${city.lon}`,
 				`&current=temperature_2m,apparent_temperature,relative_humidity_2m`,
-				`,wind_speed_10m,wind_direction_10m,weather_code`,
-				`&hourly=temperature_2m,weather_code,visibility`,
+				`,wind_speed_10m,wind_direction_10m,weather_code,is_day`,
+				`&hourly=temperature_2m,weather_code,visibility,is_day`,
 				`&daily=weather_code,temperature_2m_max,temperature_2m_min`,
 				`&forecast_days=14&timezone=${encodeURIComponent(city.timezone)}`,
 				`&wind_speed_unit=kmh`,
@@ -129,10 +142,11 @@
 
 			// Hourly: next 24 hours starting from current hour
 			const nowHour = new Date().toISOString().slice(0, 13);
-			const hTimes: string[]  = d.hourly.time;
-			const hTemps: number[]  = d.hourly.temperature_2m;
-			const hCodes: number[]  = d.hourly.weather_code;
-			const hVis:   number[]  = d.hourly.visibility;
+			const hTimes:  string[]  = d.hourly.time;
+			const hTemps:  number[]  = d.hourly.temperature_2m;
+			const hCodes:  number[]  = d.hourly.weather_code;
+			const hVis:    number[]  = d.hourly.visibility;
+			const hIsDay:  number[]  = d.hourly.is_day ?? [];
 			let hIdx = hTimes.findIndex(t => t.startsWith(nowHour));
 			if (hIdx < 0) hIdx = 0;
 			const hourly: HourlySlot[] = [];
@@ -144,7 +158,7 @@
 					: h < 12   ? `${h}AM`
 					: h === 12 ? '12PM'
 					: `${h - 12}PM`;
-				hourly.push({ time: label, temp: hTemps[i], code: hCodes[i] });
+				hourly.push({ time: label, temp: hTemps[i], code: hCodes[i], isDay: hIsDay[i] !== 0 });
 			}
 
 			// Daily: all returned forecast days
@@ -169,6 +183,7 @@
 				windDir:    d.current.wind_direction_10m,
 				visibility: hVis[hIdx] != null ? Math.round(hVis[hIdx] / 1000) : 0,
 				code:       d.current.weather_code,
+				isDay:      d.current.is_day !== 0,
 				high:       dMax[0] ?? d.current.temperature_2m,
 				low:        dMin[0] ?? d.current.temperature_2m,
 				hourly, daily,
@@ -299,7 +314,16 @@
 					<button
 						class="shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors {city.name === weatherSettings.activeCity ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}"
 						onclick={() => (weatherSettings.activeCity = city.name)}
-					>{city.name}</button>
+					>
+						{#if city.name === weatherSettings.activeCity && isLoading}
+							<span class="inline-flex items-center gap-1.5">
+								<span class="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin"></span>
+								{city.name}
+							</span>
+						{:else}
+							{city.name}
+						{/if}
+					</button>
 				{/each}
 				<button
 					class="shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center hover:bg-secondary/80 transition-colors"
@@ -332,7 +356,7 @@
 
 		{:else if current}
 			<!-- ── Current Weather Hero ── -->
-			<div class="bg-gradient-to-br {getBgGradient(current.code)} text-white p-6 m-4 rounded-2xl shadow-lg relative overflow-hidden">
+			<div class="bg-gradient-to-br {getBgGradient(current.code, current.isDay)} text-white p-6 m-4 rounded-2xl shadow-lg relative overflow-hidden">
 				{#if isRefreshing}
 					<div class="absolute inset-0 bg-black/20 flex items-center justify-center rounded-2xl">
 						<div class="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -352,7 +376,7 @@
 							<span>Feels {displayTemp(current.feelsLike)}</span>
 						</div>
 					</div>
-					<div class="text-6xl">{wmoIcon(current.code)}</div>
+					<div class="text-6xl">{wmoIcon(current.code, current.isDay)}</div>
 				</div>
 			</div>
 
@@ -364,7 +388,7 @@
 						{#each current.hourly as h}
 							<div class="flex flex-col items-center gap-1.5 shrink-0 min-w-[52px]">
 								<span class="text-xs text-muted-foreground">{h.time}</span>
-								<span class="text-xl">{wmoIcon(h.code)}</span>
+								<span class="text-xl">{wmoIcon(h.code, h.isDay)}</span>
 								<span class="text-sm font-medium">{displayTemp(h.temp)}</span>
 							</div>
 						{/each}
@@ -448,7 +472,7 @@
 								</button>
 								{#if cached}
 									<span class="text-sm text-muted-foreground">{displayTemp(cached.temp)}</span>
-									<span class="text-lg">{wmoIcon(cached.code)}</span>
+									<span class="text-lg">{wmoIcon(cached.code, cached.isDay)}</span>
 								{/if}
 								<Button variant="ghost" size="icon" class="w-7 h-7 text-muted-foreground hover:text-destructive shrink-0"
 									onclick={() => removeCity(city.name)}>

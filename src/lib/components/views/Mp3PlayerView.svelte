@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
@@ -24,6 +25,7 @@
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
+	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, Heart, ListMusic, FolderOpen, Music2,
@@ -260,6 +262,7 @@
 	let driveSearch      = $state('');
 	let isDriveAuthenticating = $state(false);
 	let isDriveLoading   = $state(false);
+	let switchingToFavId = $state<string | null>(null); // fav id currently loading
 	let seekingValue     = $state<number | null>(null); // % while slider is dragged
 
 	// ── Filtered browse entries (search by name) ─────────────────
@@ -308,6 +311,15 @@
 				audioEl.pause();
 			}
 		});
+	});
+
+	// ── register MediaSession skip handlers for Android Auto / lock-screen controls ──
+	$effect(() => {
+		mediaEngine.setSkipHandlers(
+			() => { void advanceTrack(isPlaying); },
+			() => { void prevTrack(); }
+		);
+		return () => mediaEngine.setSkipHandlers(null, null);
 	});
 
 	// ── reload browse entries when path or folder version changes ──
@@ -662,6 +674,10 @@
 			driveAccessToken = response.access_token;
 			driveTokenExpiresAt = Date.now() + Number(response.expires_in ?? 3600) * 1000;
 			driveError = '';
+			// Persist so HMR / page reload can silently restore without re-signing in
+			googleDriveSession.accessToken = driveAccessToken;
+			googleDriveSession.expiresAt = driveTokenExpiresAt;
+			googleDriveSession.persist();
 			return driveAccessToken;
 		} catch (error) {
 			driveError = formatDriveAuthError(error);
@@ -847,15 +863,18 @@
 	}
 
 	async function switchToFavorite(fav: (typeof musicSettings.favoriteFolders)[0]) {
+		switchingToFavId = fav.id;
+		try {
 		if (fav.source === 'drive') {
+			const folderId = fav.id === '_all' ? undefined : fav.id;
+			musicSettings.librarySource = 'drive';
+			musicSettings.driveFolderId = folderId ?? '';
+			musicSettings.driveFolderName = folderId ? fav.name : '';
 			const token = await ensureDriveAccessToken(true);
-			if (!token) return;
+			if (!token) { switchingToFavId = null; return; }
 			if (!driveUser) {
 				try { driveUser = await fetchGoogleDriveUser(token); } catch { /* ignore */ }
 			}
-			const folderId = fav.id === '_all' ? undefined : fav.id;
-			musicSettings.driveFolderId = folderId ?? '';
-			musicSettings.driveFolderName = folderId ? fav.name : '';
 			await finishDriveLoad(token, folderId);
 		} else if (fav.source === 'device' && fav.treeUri) {
 			rootDirHandle = null;
@@ -873,6 +892,9 @@
 				hydrateTracksFromLibrary(cachedFiles);
 				await saveCachedLibrary(fav.name, cachedFiles);
 			})();
+		}
+		} finally {
+			switchingToFavId = null;
 		}
 	}
 
@@ -1333,6 +1355,8 @@
 				void saveHandleToIDB(dirHandle);
 				void (async () => {
 					const cachedFiles = await collectStoredFilesFromDirHandle(dirHandle);
+					allFiles = cachedFiles;
+					hydrateTracksFromLibrary(cachedFiles);
 					await saveCachedLibrary(dirHandle.name, cachedFiles);
 				})();
 			} catch { /* user cancelled */ }
@@ -1404,6 +1428,8 @@
 				void saveHandleToIDB(rootDirHandle);
 				void (async () => {
 					const cachedFiles = await collectStoredFilesFromDirHandle(rootDirHandle);
+					allFiles = cachedFiles;
+					hydrateTracksFromLibrary(cachedFiles);
 					await saveCachedLibrary(rootDirHandle.name, cachedFiles);
 				})();
 			}
@@ -1597,13 +1623,18 @@
 	}
 
 	// ── Restore last folder handle from IndexedDB on mount ───────
+	// untrack() prevents any reactive reads in the sync preamble (e.g. driveAccessToken reads
+	// inside ensureDriveAccessToken) from becoming effect dependencies, which would otherwise
+	// cause this effect to re-run when those signals are written during hydration — leading to
+	// multiple concurrent finishDriveLoad calls and a spinner that never resolves.
 	$effect(() => {
+		untrack(() => {
 		if (musicSettings.librarySource === 'drive') {
 			// Silently restore Drive library using the persisted session token (survives refresh)
 			void (async () => {
 				try {
 					const token = await ensureDriveAccessToken(false);
-					if (token && musicSettings.driveFolderId) {
+					if (token) {
 						await finishDriveLoad(token, musicSettings.driveFolderId || undefined);
 					}
 				} catch {
@@ -1654,6 +1685,7 @@
 				isRestoring = false;
 			}
 		})();
+		});
 	});
 
 	$effect(() => { return () => { revokeAll(); audioCtx?.close(); }; });
@@ -1870,8 +1902,10 @@
 						? (musicSettings.librarySource === 'drive' && (fav.id === '_all' ? !musicSettings.driveFolderId : musicSettings.driveFolderId === fav.id))
 						: (musicSettings.librarySource === 'device' && nativeTreeUri === fav.treeUri)}
 					<div class="flex items-center gap-0.5 shrink-0 rounded-full border pl-2.5 pr-1 py-1 text-xs {isActive ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/40 border-border'}">
-						<button class="flex items-center gap-1.5 min-w-0" onclick={() => switchToFavorite(fav)} title="Switch to {fav.name}">
-							{#if fav.source === 'drive'}
+						<button class="flex items-center gap-1.5 min-w-0" onclick={() => switchToFavorite(fav)} title="Switch to {fav.name}" disabled={switchingToFavId !== null}>
+							{#if switchingToFavId === fav.id}
+								<div class="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin shrink-0"></div>
+							{:else if fav.source === 'drive'}
 								<Cloud class="w-3 h-3 shrink-0" />
 							{:else}
 								<FolderOpen class="w-3 h-3 shrink-0" />
