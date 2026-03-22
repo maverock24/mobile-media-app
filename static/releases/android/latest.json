@@ -1,13 +1,13 @@
 {
   "version": "0.0.1",
-  "versionCode": 14,
-  "versionName": "0.0.1 (build 14)",
+  "versionCode": 22,
+  "versionName": "0.0.1 (build 22)",
   "buildType": "release",
-  "fileName": "media-hub-0.0.1-build-14.apk",
+  "fileName": "media-hub-0.0.1-build-22.apk",
   "url": "/releases/android/latest.apk",
-  "sizeBytes": 31639876,
-  "sha256": "d3061bd414f472c9e27b125809a0845655320e795870b9c1cd10136cd6cc074d",
-  "publishedAt": "2026-03-18T11:45:26Z",
-  "commitSha": "0240c535d4aa25a58179e351c08c9dc10804f4d4",
-  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/0240c535d4aa25a58179e351c08c9dc10804f4d4"
+  "sizeBytes": 34728446,
+  "sha256": "6ecaeb5aaa9cd90ccbeee8dfd1dfb614aa54d9b2e2429af5ab116dc04563f007",
+  "publishedAt": "2026-03-22T20:36:21Z",
+  "commitSha": "329775502dd5823982f121018d69eac1ea40f440",
+  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/329775502dd5823982f121018d69eac1ea40f440"
 }
