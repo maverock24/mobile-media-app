@@ -40,6 +40,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build mobile web assets
+        env:
+          PUBLIC_GOOGLE_CLIENT_ID: ${{ secrets.PUBLIC_GOOGLE_CLIENT_ID }}
         run: pnpm build:mobile
 
       - name: Sync Capacitor Android project
