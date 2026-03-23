@@ -743,10 +743,11 @@
 					isPlaying={isPlaying}
 					currentTime={currentTime}
 					duration={duration}
-					skipBackSec={podcastSettings.skipBackSeconds}
-					skipForwardSec={podcastSettings.skipForwardSeconds}
+					showTrackNav={true}
 					onPlayToggle={togglePlay}
 					onSeek={handleSeekSeconds}
+					onPrev={prevEpisode}
+					onNext={nextEpisode}
 				/>
 			</div>
 		</div>
