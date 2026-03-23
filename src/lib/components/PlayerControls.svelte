@@ -83,9 +83,6 @@
 				aria-label={skipBackSec > 0 ? `Skip back ${skipBackSec}s` : 'Previous track'}
 			>
 				<SkipBack class="w-6 h-6" />
-				{#if skipBackSec > 0 && !showTrackNav}
-					<span class="absolute text-[9px] font-bold mt-5">{skipBackSec}</span>
-				{/if}
 			</button>
 		{/if}
 
@@ -110,9 +107,6 @@
 				aria-label={skipForwardSec > 0 ? `Skip forward ${skipForwardSec}s` : 'Next track'}
 			>
 				<SkipForward class="w-6 h-6" />
-				{#if skipForwardSec > 0 && !showTrackNav}
-					<span class="absolute text-[9px] font-bold mt-5">{skipForwardSec}</span>
-				{/if}
 			</button>
 		{/if}
 	</div>
