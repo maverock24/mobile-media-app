@@ -7,7 +7,9 @@
  * state that the MiniPlayer and MediaSession integration consume.
  */
 
+import { Capacitor } from '@capacitor/core';
 import type { MediaItem, MediaSource } from '$lib/models/media';
+import { MediaControls } from '$lib/native/media-controls';
 
 export interface NowPlayingState {
 	item:        MediaItem | null;
@@ -141,10 +143,6 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 					});
 				}
 			}, 1000);
-			// Ensure cleanup if effect re-runs
-			return () => {
-				if (_positionStateTimer !== null) { clearTimeout(_positionStateTimer); _positionStateTimer = null; }
-			};
 		});
 
 		// Register all action handlers whenever the callbacks change
@@ -168,5 +166,120 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 				? (d) => seek(Math.max(mediaEngine.currentTime - (d.seekOffset ?? 10), 0))
 				: null);
 		});
+
+		return () => {
+			if (_positionStateTimer !== null) {
+				clearTimeout(_positionStateTimer);
+				_positionStateTimer = null;
+			}
+		};
+	});
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native Android lock-screen controls bridge for Capacitor.
+// WebView MediaSession support is not sufficient on many Android devices.
+// ─────────────────────────────────────────────────────────────────────────────
+if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
+	$effect.root(() => {
+		let permissionRequested = false;
+		let nativePositionTimer: ReturnType<typeof setTimeout> | null = null;
+		let mediaActionHandle: Promise<{ remove: () => Promise<void> }> | null = null;
+
+		$effect(() => {
+			if (mediaActionHandle !== null) {
+				return;
+			}
+
+			mediaActionHandle = MediaControls.addListener('mediaAction', (event) => {
+				switch (event.action) {
+					case 'play':
+						mediaEngine._playHandler?.();
+						break;
+					case 'pause':
+						mediaEngine._pauseHandler?.();
+						break;
+					case 'nexttrack':
+						mediaEngine._nextHandler?.();
+						break;
+					case 'previoustrack':
+						mediaEngine._prevHandler?.();
+						break;
+					case 'seekto':
+						if (event.positionSec != null) {
+							mediaEngine._seekHandler?.(event.positionSec);
+						}
+						break;
+					default:
+						break;
+				}
+			});
+
+			return () => {
+				if (mediaActionHandle) {
+					void mediaActionHandle.then((handle) => handle.remove());
+					mediaActionHandle = null;
+				}
+			};
+		});
+
+		$effect(() => {
+			const item = mediaEngine.item;
+			if (!item) {
+				void MediaControls.clear().catch(() => {});
+				return;
+			}
+
+			if (!permissionRequested) {
+				permissionRequested = true;
+				void MediaControls.ensureNotificationPermission().catch(() => {});
+			}
+
+			void MediaControls.updateNowPlaying({
+				title: item.title,
+				artist: item.subtitle,
+				durationSec: item.duration ?? 0,
+			}).catch(() => {});
+		});
+
+		$effect(() => {
+			void MediaControls.setTransportAvailability({
+				hasNext: mediaEngine._nextHandler !== null,
+				hasPrevious: mediaEngine._prevHandler !== null,
+			}).catch(() => {});
+		});
+
+		$effect(() => {
+			const isPlaying = mediaEngine.isPlaying;
+			const currentTime = mediaEngine.currentTime;
+			const duration = mediaEngine.duration;
+			void isPlaying;
+			void currentTime;
+			void duration;
+
+			if (nativePositionTimer !== null) {
+				return;
+			}
+
+			nativePositionTimer = setTimeout(() => {
+				nativePositionTimer = null;
+				void MediaControls.updatePlaybackState({
+					isPlaying: mediaEngine.isPlaying,
+					positionSec: mediaEngine.currentTime,
+					durationSec: mediaEngine.duration,
+				}).catch(() => {});
+			}, 1000);
+		});
+
+		return () => {
+			if (nativePositionTimer !== null) {
+				clearTimeout(nativePositionTimer);
+				nativePositionTimer = null;
+			}
+			if (mediaActionHandle) {
+				void mediaActionHandle.then((handle) => handle.remove());
+				mediaActionHandle = null;
+			}
+		};
 	});
 }

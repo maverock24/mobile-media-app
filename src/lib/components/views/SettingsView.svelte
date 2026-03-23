@@ -50,7 +50,7 @@
 		}
 
 		if (Capacitor.isNativePlatform()) {
-			return 'https://raw.githubusercontent.com/maverock24/mobile-media-app/main/static';
+			return 'https://mobile-media-app-maverock24.netlify.app';
 		}
 
 		return '';

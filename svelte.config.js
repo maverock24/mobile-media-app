@@ -29,6 +29,7 @@ const config = {
 					'https://itunes.apple.com',
 					'https://geocoding-api.open-meteo.com',
 					'https://api.open-meteo.com',
+					'https://mobile-media-app-maverock24.netlify.app',
 					'https://raw.githubusercontent.com'
 				],
 				'img-src': ['self', 'data:', 'blob:'],

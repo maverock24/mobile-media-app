@@ -380,13 +380,10 @@
 		return () => mediaEngine.setPlaybackHandlers(null, null, null);
 	});
 
-	// ── sync current track metadata to media engine → drives lock-screen / MediaSession ──
-	$effect(() => {
-		const track = currentTrack;
-		if (!track) {
-			mediaEngine.clear();
-			return;
-		}
+	function syncTrackToMediaEngine(index: number) {
+		const track = tracks[index];
+		if (!track) return;
+		if (mediaEngine.source && mediaEngine.source !== 'music') return;
 		mediaEngine.setNowPlaying({
 			id:         String(track.id),
 			source:     'music',
@@ -396,7 +393,7 @@
 			artworkUrl: undefined,
 			duration:   track.duration > 0 ? track.duration : undefined,
 		}, 'music');
-	});
+	}
 
 	// ── reload browse entries when path or folder version changes ──
 	$effect(() => {
@@ -1616,6 +1613,7 @@
 			}
 			audioEl.src = url;
 			audioEl.load();
+			syncTrackToMediaEngine(musicSettings.lastTrackIndex);
 			applyTrackPosition(musicSettings.lastTrackIndex);
 			void preloadNextTrack(musicSettings.lastTrackIndex);
 			claimAudio('music');
@@ -1635,6 +1633,7 @@
 			if (!url) { alert('Unable to load tracks from this folder.'); return; }
 			audioEl.src = url;
 			audioEl.load();
+			syncTrackToMediaEngine(0);
 			void preloadNextTrack(0);
 			claimAudio('music');
 			initAudioContext();
@@ -1657,6 +1656,7 @@
 			}
 			audioEl.src = url;
 			audioEl.load();
+			syncTrackToMediaEngine(0);
 			void preloadNextTrack(0);
 			claimAudio('music');
 			initAudioContext();
@@ -1687,6 +1687,7 @@
 				}
 				audioEl.src = url;
 				audioEl.load();
+				syncTrackToMediaEngine(musicSettings.lastTrackIndex);
 				applyTrackPosition(musicSettings.lastTrackIndex);
 			}
 			void preloadNextTrack(musicSettings.lastTrackIndex);
@@ -1706,6 +1707,7 @@
 				return;
 			}
 			audioEl.src = url; audioEl.load();
+			syncTrackToMediaEngine(index);
 			applyTrackPosition(index);
 			void preloadNextTrack(index);
 			claimAudio('music');
@@ -1733,6 +1735,7 @@
 				return;
 			}
 			audioEl.src = url; audioEl.load();
+			syncTrackToMediaEngine(nextIndex);
 			applyTrackPosition(nextIndex);
 			void preloadNextTrack(nextIndex);
 			if (wasPlaying) audioEl.play().catch(() => { isPlaying = false; });
@@ -1753,6 +1756,7 @@
 				return;
 			}
 			audioEl.src = url; audioEl.load();
+			syncTrackToMediaEngine(prevIndex);
 			applyTrackPosition(prevIndex);
 			void preloadNextTrack(prevIndex);
 			if (isPlaying) audioEl.play().catch(() => {});
