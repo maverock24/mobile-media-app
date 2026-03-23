@@ -76,12 +76,11 @@
 	// ── IndexedDB persistence for FileSystemDirectoryHandle ──────
 	function openIDB(): Promise<IDBDatabase> {
 		return new Promise((res, rej) => {
-			const req = indexedDB.open('music-app', 3);
+			const req = indexedDB.open('music-app', 2);
 			req.onupgradeneeded = () => {
 				const db = req.result;
 				if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles');
 				if (!db.objectStoreNames.contains('libraries')) db.createObjectStore('libraries');
-				if (!db.objectStoreNames.contains('drive-files')) db.createObjectStore('drive-files');
 			};
 			req.onsuccess = () => res(req.result);
 			req.onerror  = () => rej(req.error);
@@ -163,11 +162,22 @@
 		}
 	}
 
-	// ── IndexedDB cache for Google Drive file lists (1-hour TTL) ─
+	// ── Separate IDB for Google Drive file list cache (avoids version conflicts with music-app) ─
 	const DRIVE_CACHE_TTL = 60 * 60 * 1000;
+	function openDriveCacheIDB(): Promise<IDBDatabase> {
+		return new Promise((res, rej) => {
+			const req = indexedDB.open('music-app-drive-cache', 1);
+			req.onupgradeneeded = () => {
+				const db = req.result;
+				if (!db.objectStoreNames.contains('drive-files')) db.createObjectStore('drive-files');
+			};
+			req.onsuccess = () => res(req.result);
+			req.onerror  = () => rej(req.error);
+		});
+	}
 	async function saveDriveCache(cacheKey: string, files: GoogleDriveFile[]) {
 		try {
-			const db = await openIDB();
+			const db = await openDriveCacheIDB();
 			const tx = db.transaction('drive-files', 'readwrite');
 			tx.objectStore('drive-files').put({ files, savedAt: Date.now() }, cacheKey);
 			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
@@ -176,7 +186,7 @@
 	}
 	async function loadDriveCache(cacheKey: string): Promise<GoogleDriveFile[] | null> {
 		try {
-			const db = await openIDB();
+			const db = await openDriveCacheIDB();
 			const tx = db.transaction('drive-files', 'readonly');
 			const entry = await new Promise<{ files: GoogleDriveFile[]; savedAt: number } | null>((res, rej) => {
 				const req = tx.objectStore('drive-files').get(cacheKey);
@@ -190,7 +200,7 @@
 	}
 	async function bustDriveCache(cacheKey: string) {
 		try {
-			const db = await openIDB();
+			const db = await openDriveCacheIDB();
 			const tx = db.transaction('drive-files', 'readwrite');
 			tx.objectStore('drive-files').delete(cacheKey);
 			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
@@ -375,8 +385,7 @@
 		const path = [...browsePath];
 		const driveFilter = driveSearch.trim().toLowerCase();
 		browseVersion; // reactive dependency
-		const source = musicSettings.librarySource;
-		if (source === 'drive') void allFiles; // re-run when drive files stream in progressively
+		musicSettings.librarySource;
 		void loadBrowseEntries(path, driveFilter);
 	});
 
@@ -998,6 +1007,7 @@
 							}
 							if (!ctrl.signal.aborted) {
 								allFiles = freshFiles.map(createStoredDriveAudioFile);
+								browseVersion += 1;
 								await saveDriveCache(cacheKey, freshFiles);
 							}
 						} catch { /* ignore background refresh errors */ }
@@ -1022,9 +1032,10 @@
 					foldersScanned: batch.foldersScanned,
 					foldersQueued: batch.foldersQueued
 				};
-				// Push new entries into the reactive array (avoids full re-allocation each batch)
+				// Append batch to the reactive array as a single assignment (not one-at-a-time)
 				const newMapped = batch.files.map(createStoredDriveAudioFile);
-				for (const f of newMapped) allFiles.push(f);
+				allFiles = [...allFiles, ...newMapped];
+				browseVersion += 1; // trigger browse view to refresh with new files
 
 				// Activate the library UI as soon as the first files arrive
 				if (!libraryActivated && collectedFiles.length > 0) {
