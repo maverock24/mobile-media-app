@@ -344,7 +344,15 @@
 	// ── audio element event wiring ──
 	$effect(() => {
 		if (!audioEl) return;
-		const onTimeUpdate = () => { if (seekingValue === null) currentTime = audioEl.currentTime; };
+		// Throttle timeupdate to ~4Hz — smooth for seek bar, 15× less CPU than 60fps
+		let _lastTimeUpdate = 0;
+		const onTimeUpdate = () => {
+			if (seekingValue !== null) return;
+			const now = Date.now();
+			if (now - _lastTimeUpdate < 250) return;
+			_lastTimeUpdate = now;
+			currentTime = audioEl.currentTime;
+		};
 		const onLoadedMetadata = () => {
 			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
 			tracks = tracks.map((t, i) =>
@@ -1702,7 +1710,7 @@
 </script>
 
 <!-- Hidden audio element -->
-<audio bind:this={audioEl} preload="metadata"></audio>
+<audio bind:this={audioEl} preload="none"></audio>
 
 <!-- Hidden folder input fallback -->
 <input

@@ -25,21 +25,34 @@ export function persisted<T extends object>(key: string, defaults: T): T {
 		localStorage.setItem(key, JSON.stringify(state));
 	}
 
-	// Watch for any change and write back to localStorage
+	let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
+	function scheduleFlush() {
+		if (_debounceTimer !== null) clearTimeout(_debounceTimer);
+		_debounceTimer = setTimeout(() => {
+			_debounceTimer = null;
+			flushToLocalStorage();
+		}, 500);
+	}
+
+	// Watch for any change and write back to localStorage (debounced to avoid
+	// writing on every audio timeupdate tick at 60fps)
 	$effect.root(() => {
 		$effect(() => {
 			// Accessing JSON.stringify triggers fine-grained reactivity on all fields.
-			// Persist immediately after each reactive update.
-			flushToLocalStorage();
+			JSON.stringify(state); // track deps without writing immediately
+			scheduleFlush();
 		});
 
 		if (typeof window === 'undefined') return;
 
 		const flushBeforeUnload = () => {
+			// Flush immediately on unload — can't wait for debounce
+			if (_debounceTimer !== null) { clearTimeout(_debounceTimer); _debounceTimer = null; }
 			flushToLocalStorage();
 		};
 		const flushWhenHidden = () => {
 			if (document.visibilityState === 'hidden') {
+				if (_debounceTimer !== null) { clearTimeout(_debounceTimer); _debounceTimer = null; }
 				flushToLocalStorage();
 			}
 		};

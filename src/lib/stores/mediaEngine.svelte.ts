@@ -124,14 +124,27 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 		});
 
 		// Sync position state for seek bar on lock screen / notification
+		// Throttled to once per second — no need to call native API at 60fps
+		let _positionStateTimer: ReturnType<typeof setTimeout> | null = null;
 		$effect(() => {
-			if (mediaEngine.duration > 0) {
-				navigator.mediaSession.setPositionState({
-					duration:     mediaEngine.duration,
-					position:     Math.min(mediaEngine.currentTime, mediaEngine.duration),
-					playbackRate: 1,
-				});
-			}
+			const duration    = mediaEngine.duration;
+			const currentTime = mediaEngine.currentTime;
+			if (duration <= 0) return;
+			if (_positionStateTimer !== null) return; // already scheduled
+			_positionStateTimer = setTimeout(() => {
+				_positionStateTimer = null;
+				if (mediaEngine.duration > 0) {
+					navigator.mediaSession.setPositionState({
+						duration:     mediaEngine.duration,
+						position:     Math.min(mediaEngine.currentTime, mediaEngine.duration),
+						playbackRate: 1,
+					});
+				}
+			}, 1000);
+			// Ensure cleanup if effect re-runs
+			return () => {
+				if (_positionStateTimer !== null) { clearTimeout(_positionStateTimer); _positionStateTimer = null; }
+			};
 		});
 
 		// Register all action handlers whenever the callbacks change

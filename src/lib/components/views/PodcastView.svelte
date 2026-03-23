@@ -87,7 +87,12 @@
 	// ── Audio element event wiring ───────────────────────────────
 	$effect(() => {
 		if (!audioEl) return;
+		// Throttle timeupdate to ~4Hz — smooth for seek bar, 15× less CPU than 60fps
+		let _lastTimeUpdate = 0;
 		const onTimeUpdate = () => {
+			const now = Date.now();
+			if (now - _lastTimeUpdate < 250) return;
+			_lastTimeUpdate = now;
 			currentTime = audioEl.currentTime;
 			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
 			if (currentEpisode && duration > 0) {
@@ -137,6 +142,18 @@
 
 	// ── Derived ─────────────────────────────────────────────────
 	const subscribedPodcasts = $derived(podcastData.podcasts.filter(p => p.subscribed));
+
+	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
+	const RSS_CACHE_TTL = 30 * 60 * 1000;
+	const rssCache = new Map<string, { data: unknown; ts: number }>();
+	async function fetchRss(feedUrl: string): Promise<unknown> {
+		const cached = rssCache.get(feedUrl);
+		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data;
+		const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`);
+		const data = await res.json();
+		if (data.status === 'ok') rssCache.set(feedUrl, { data, ts: Date.now() });
+		return data;
+	}
 
 	// ── Helpers ─────────────────────────────────────────────────
 	function formatTime(seconds: number): string {
@@ -237,6 +254,8 @@
 	// ── Load episodes from RSS2JSON ──────────────────────────────
 	async function loadEpisodes(podcast: Podcast, force = false) {
 		if (!force && podcast.episodesLoaded) return;
+		// Bust the RSS cache on manual force-refresh so we always get fresh data
+		if (force && podcast.feedUrl) rssCache.delete(podcast.feedUrl);
 		// Background refresh: show subtle spinner without blocking the episode list
 		if (force && podcast.episodesLoaded) {
 			episodesRefreshing = true;
@@ -262,11 +281,8 @@
 					selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
 				}
 			}
-			const res = await fetch(
-				`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(podcast.feedUrl)}`
-			);
-			const data = await res.json();
-			if (data.status !== 'ok') throw new Error(data.message ?? 'RSS error');
+			const data = await fetchRss(podcast.feedUrl) as Record<string, unknown>;
+			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
 			const eps: Episode[] = (data.items ?? []).map((item: Record<string, unknown>, i: number) => {
 				const enc = item.enclosure as { link?: string; length?: number } | null;
 				// itunes_duration is a string like "1:23:45" or seconds as number
@@ -402,20 +418,14 @@
 			podcastData.lastEpisodeId   = currentEpisode.episode.id;
 			podcastData.lastPodcastId   = currentEpisode.podcast.id;
 			podcastData.lastPositionSec = audioEl.currentTime;
-			// Sync progress back into the persisted episodes array
-			podcastData.podcasts = podcastData.podcasts.map(p =>
-				p.id !== currentEpisode!.podcast.id ? p : {
-					...p,
-					episodes: p.episodes.map(e =>
-						e.id !== currentEpisode!.episode.id ? e : {
-							...e,
-							played:      currentEpisode!.episode.played,
-							progress:    currentEpisode!.episode.progress,
-							positionSec: currentEpisode!.episode.positionSec ?? 0,
-						}
-					),
-				}
-			);
+			// Update only the target episode in-place to avoid cloning the whole array
+			const pod = podcastData.podcasts.find(p => p.id === currentEpisode!.podcast.id);
+			const ep  = pod?.episodes.find(e => e.id === currentEpisode!.episode.id);
+			if (ep) {
+				ep.played      = currentEpisode.episode.played;
+				ep.progress    = currentEpisode.episode.progress;
+				ep.positionSec = currentEpisode.episode.positionSec ?? 0;
+			}
 		};
 		audioEl.addEventListener('pause', onPause);
 		audioEl.addEventListener('ended', onPause);
@@ -446,7 +456,7 @@
 </script>
 
 <!-- Hidden audio element -->
-<audio bind:this={audioEl} preload="metadata"></audio>
+<audio bind:this={audioEl} preload="none"></audio>
 
 <div class="flex flex-col h-full bg-background/85">
 
