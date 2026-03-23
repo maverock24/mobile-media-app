@@ -13,7 +13,7 @@
 		getGoogleDriveClientId,
 		isGoogleDriveConfigured,
 		listGoogleDriveFolders,
-		listGoogleDriveMp3Files,
+		streamGoogleDriveMp3Files,
 		requestGoogleDriveAccessToken,
 		revokeGoogleDriveAccess,
 		type GoogleDriveFile,
@@ -76,11 +76,12 @@
 	// ── IndexedDB persistence for FileSystemDirectoryHandle ──────
 	function openIDB(): Promise<IDBDatabase> {
 		return new Promise((res, rej) => {
-			const req = indexedDB.open('music-app', 2);
+			const req = indexedDB.open('music-app', 3);
 			req.onupgradeneeded = () => {
 				const db = req.result;
 				if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles');
 				if (!db.objectStoreNames.contains('libraries')) db.createObjectStore('libraries');
+				if (!db.objectStoreNames.contains('drive-files')) db.createObjectStore('drive-files');
 			};
 			req.onsuccess = () => res(req.result);
 			req.onerror  = () => rej(req.error);
@@ -160,6 +161,41 @@
 		} catch {
 			return null;
 		}
+	}
+
+	// ── IndexedDB cache for Google Drive file lists (1-hour TTL) ─
+	const DRIVE_CACHE_TTL = 60 * 60 * 1000;
+	async function saveDriveCache(cacheKey: string, files: GoogleDriveFile[]) {
+		try {
+			const db = await openIDB();
+			const tx = db.transaction('drive-files', 'readwrite');
+			tx.objectStore('drive-files').put({ files, savedAt: Date.now() }, cacheKey);
+			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
+			db.close();
+		} catch { /* ignore cache write failures */ }
+	}
+	async function loadDriveCache(cacheKey: string): Promise<GoogleDriveFile[] | null> {
+		try {
+			const db = await openIDB();
+			const tx = db.transaction('drive-files', 'readonly');
+			const entry = await new Promise<{ files: GoogleDriveFile[]; savedAt: number } | null>((res, rej) => {
+				const req = tx.objectStore('drive-files').get(cacheKey);
+				req.onsuccess = () => res((req.result as { files: GoogleDriveFile[]; savedAt: number }) ?? null);
+				req.onerror = () => rej(req.error);
+			});
+			db.close();
+			if (!entry || Date.now() - entry.savedAt > DRIVE_CACHE_TTL) return null;
+			return entry.files;
+		} catch { return null; }
+	}
+	async function bustDriveCache(cacheKey: string) {
+		try {
+			const db = await openIDB();
+			const tx = db.transaction('drive-files', 'readwrite');
+			tx.objectStore('drive-files').delete(cacheKey);
+			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
+			db.close();
+		} catch { /* ignore */ }
 	}
 
 	function restoreStoredFilesFromCache(cachedLibrary: CachedLibrary): StoredAudioFile[] {
@@ -262,6 +298,8 @@
 	let driveSearch      = $state('');
 	let isDriveAuthenticating = $state(false);
 	let isDriveLoading   = $state(false);
+	let driveLoadProgress = $state({ filesFound: 0, foldersScanned: 0, foldersQueued: 0 });
+	let driveLoadAbort   = $state<AbortController | null>(null);
 	let switchingToFavId = $state<string | null>(null); // fav id currently loading
 	let seekingValue     = $state<number | null>(null); // % while slider is dragged
 
@@ -337,7 +375,8 @@
 		const path = [...browsePath];
 		const driveFilter = driveSearch.trim().toLowerCase();
 		browseVersion; // reactive dependency
-		musicSettings.librarySource;
+		const source = musicSettings.librarySource;
+		if (source === 'drive') void allFiles; // re-run when drive files stream in progressively
 		void loadBrowseEntries(path, driveFilter);
 	});
 
@@ -925,24 +964,95 @@
 		}
 	}
 
-	async function finishDriveLoad(token: string, folderId?: string) {
+	async function finishDriveLoad(token: string, folderId?: string, forceRefresh = false) {
+		// Cancel any in-progress load
+		driveLoadAbort?.abort();
+		const ctrl = new AbortController();
+		driveLoadAbort = ctrl;
+
 		isDriveLoading = true;
+		driveLoadProgress = { filesFound: 0, foldersScanned: 0, foldersQueued: 0 };
+		driveError = '';
+
+		const cacheKey = folderId ?? '_all';
+
 		try {
-			const files = await listGoogleDriveMp3Files(token, { folderId });
-			// Stop any currently playing track before switching library
+			if (!forceRefresh) {
+				const cached = await loadDriveCache(cacheKey);
+				if (cached && !ctrl.signal.aborted) {
+					// Instant restore from IDB — use cached file list immediately
+					if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+					isPlaying = false; currentTime = 0; duration = 0; tracks = [];
+					allFiles = cached.map(createStoredDriveAudioFile);
+					driveLoadProgress = { filesFound: cached.length, foldersScanned: 0, foldersQueued: 0 };
+					activateDriveLibrary();
+					isDriveLoading = false;
+
+					// Background refresh — update silently without blocking UI
+					void (async () => {
+						const freshFiles: GoogleDriveFile[] = [];
+						try {
+							for await (const batch of streamGoogleDriveMp3Files(token, { folderId, signal: ctrl.signal })) {
+								if (ctrl.signal.aborted) return;
+								freshFiles.push(...batch.files);
+							}
+							if (!ctrl.signal.aborted) {
+								allFiles = freshFiles.map(createStoredDriveAudioFile);
+								await saveDriveCache(cacheKey, freshFiles);
+							}
+						} catch { /* ignore background refresh errors */ }
+					})();
+					return;
+				}
+			}
+
+			// Fresh scan — stop playback then stream files progressively into the UI
 			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
-			isPlaying = false;
-			currentTime = 0;
-			duration = 0;
-			tracks = [];
-			allFiles = files.map((file) => createStoredDriveAudioFile(file));
-			driveError = '';
-			activateDriveLibrary();
+			isPlaying = false; currentTime = 0; duration = 0; tracks = [];
+			allFiles = [];
+
+			const collectedFiles: GoogleDriveFile[] = [];
+			let libraryActivated = false;
+
+			for await (const batch of streamGoogleDriveMp3Files(token, { folderId, signal: ctrl.signal })) {
+				if (ctrl.signal.aborted) break;
+				collectedFiles.push(...batch.files);
+				driveLoadProgress = {
+					filesFound: collectedFiles.length,
+					foldersScanned: batch.foldersScanned,
+					foldersQueued: batch.foldersQueued
+				};
+				// Push new entries into the reactive array (avoids full re-allocation each batch)
+				const newMapped = batch.files.map(createStoredDriveAudioFile);
+				for (const f of newMapped) allFiles.push(f);
+
+				// Activate the library UI as soon as the first files arrive
+				if (!libraryActivated && collectedFiles.length > 0) {
+					activateDriveLibrary();
+					libraryActivated = true;
+				}
+			}
+
+			if (!ctrl.signal.aborted) {
+				if (!libraryActivated) activateDriveLibrary();
+				await saveDriveCache(cacheKey, collectedFiles);
+			}
 		} catch (error) {
-			driveError = formatDriveAuthError(error);
+			if (!ctrl.signal.aborted) {
+				driveError = formatDriveAuthError(error);
+			}
 		} finally {
-			isDriveLoading = false;
+			if (driveLoadAbort === ctrl) {
+				isDriveLoading = false;
+				driveLoadAbort = null;
+			}
 		}
+	}
+
+	function cancelDriveLoad() {
+		driveLoadAbort?.abort();
+		driveLoadAbort = null;
+		isDriveLoading = false;
 	}
 
 	async function connectGoogleDrive() {
@@ -950,10 +1060,11 @@
 	}
 
 	async function refreshGoogleDrive() {
-		// Re-auth silently then reload files from the same folder
 		const token = await ensureDriveAccessToken(true);
 		if (!token) return;
-		await finishDriveLoad(token, musicSettings.driveFolderId || undefined);
+		const cacheKey = musicSettings.driveFolderId || '_all';
+		await bustDriveCache(cacheKey);
+		await finishDriveLoad(token, musicSettings.driveFolderId || undefined, true);
 	}
 
 	async function changeDriveFolder() {
@@ -1903,6 +2014,23 @@
 					<Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
 					<Input bind:value={driveSearch} placeholder="Search Google Drive MP3s" class="pl-9" />
 				</div>
+				{#if isDriveLoading}
+					<div class="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
+						<div class="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin shrink-0"></div>
+						<span class="flex-1 min-w-0 truncate">
+							{#if driveLoadProgress.foldersScanned > 0}
+								{driveLoadProgress.filesFound} file{driveLoadProgress.filesFound === 1 ? '' : 's'} found
+								· {driveLoadProgress.foldersScanned} folder{driveLoadProgress.foldersScanned === 1 ? '' : 's'} scanned
+								{#if driveLoadProgress.foldersQueued > 0}
+									· {driveLoadProgress.foldersQueued} remaining
+								{/if}
+							{:else}
+								Scanning Drive…
+							{/if}
+						</span>
+						<button class="text-xs underline hover:text-foreground shrink-0" onclick={cancelDriveLoad}>Cancel</button>
+					</div>
+				{/if}
 				{#if driveError}
 					<p class="text-xs text-destructive">{driveError}</p>
 				{/if}

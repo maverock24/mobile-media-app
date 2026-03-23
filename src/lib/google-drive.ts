@@ -269,17 +269,31 @@ async function fetchSubfolderEntries(accessToken: string, folderId: string): Pro
 	return entries;
 }
 
-export async function listGoogleDriveMp3Files(
+export type DriveScanBatch = {
+	files: GoogleDriveFile[];
+	foldersScanned: number;
+	foldersQueued: number;
+};
+
+// Number of Drive folders fetched concurrently during BFS traversal.
+const DRIVE_SCAN_CONCURRENCY = 5;
+
+/**
+ * Streams MP3 files from a Google Drive folder tree using concurrent BFS.
+ * Yields batches as each round of folders is scanned so the UI can update progressively.
+ */
+export async function* streamGoogleDriveMp3Files(
 	accessToken: string,
-	options?: { folderId?: string }
-): Promise<GoogleDriveFile[]> {
+	options?: { folderId?: string; signal?: AbortSignal }
+): AsyncGenerator<DriveScanBatch> {
 	const rootFolderId = options?.folderId?.trim();
+	const signal = options?.signal;
 
 	if (!rootFolderId) {
-		// No folder filter: search entire Drive
-		const files: GoogleDriveFile[] = [];
+		// No folder filter: flat search of entire Drive, yield page by page
 		let pageToken = '';
 		do {
+			if (signal?.aborted) return;
 			const searchParams = new URLSearchParams({
 				q: "trashed = false and mimeType contains 'audio/'",
 				fields: 'nextPageToken,files(id,name,mimeType,fileExtension,modifiedTime,size,webViewLink)',
@@ -291,34 +305,58 @@ export async function listGoogleDriveMp3Files(
 			const response = await googleApiFetch<{ nextPageToken?: string; files?: GoogleDriveFile[] }>(
 				'/drive/v3/files', accessToken, searchParams
 			);
-			files.push(...(response.files ?? []).filter(isMp3File));
+			const batch = (response.files ?? []).filter(isMp3File);
 			pageToken = response.nextPageToken ?? '';
+			yield { files: batch, foldersScanned: 1, foldersQueued: pageToken ? 1 : 0 };
 		} while (pageToken);
-		return files;
+		return;
 	}
 
-	// Folder filter: BFS over entire folder subtree to collect files recursively.
-	// Each queue item carries the path from the root to that folder.
-	const allFiles: GoogleDriveFile[] = [];
-	const folderQueue: { id: string; path: string[] }[] = [{ id: rootFolderId, path: [] }];
+	// Concurrent BFS: process up to DRIVE_SCAN_CONCURRENCY folders simultaneously per round.
+	type QueueEntry = { id: string; path: string[] };
+	const pending: QueueEntry[] = [{ id: rootFolderId, path: [] }];
+	let foldersScanned = 0;
 
-	while (folderQueue.length > 0) {
-		const { id: currentId, path } = folderQueue.shift()!;
-		const [files, subfolders] = await Promise.all([
-			fetchMp3FilesInFolder(accessToken, currentId),
-			fetchSubfolderEntries(accessToken, currentId)
-		]);
-		// Tag each file with its relative path so the browse view can reconstruct folder structure
-		for (const file of files) {
-			file.relativePath = path.length > 0 ? [...path, file.name].join('/') : file.name;
+	while (pending.length > 0) {
+		if (signal?.aborted) return;
+
+		// Take up to CONCURRENCY folders from the front of the queue
+		const round = pending.splice(0, DRIVE_SCAN_CONCURRENCY);
+
+		const results = await Promise.all(
+			round.map(({ id, path }) =>
+				Promise.all([
+					fetchMp3FilesInFolder(accessToken, id),
+					fetchSubfolderEntries(accessToken, id)
+				]).then(([files, subfolders]) => ({ path, files, subfolders }))
+			)
+		);
+
+		const batchFiles: GoogleDriveFile[] = [];
+		for (const { path, files, subfolders } of results) {
+			for (const file of files) {
+				file.relativePath = path.length > 0 ? [...path, file.name].join('/') : file.name;
+			}
+			batchFiles.push(...files);
+			foldersScanned++;
+			for (const sub of subfolders) {
+				pending.push({ id: sub.id, path: [...path, sub.name] });
+			}
 		}
-		allFiles.push(...files);
-		for (const sub of subfolders) {
-			folderQueue.push({ id: sub.id, path: [...path, sub.name] });
-		}
+
+		yield { files: batchFiles, foldersScanned, foldersQueued: pending.length };
 	}
+}
 
-	return allFiles;
+export async function listGoogleDriveMp3Files(
+	accessToken: string,
+	options?: { folderId?: string }
+): Promise<GoogleDriveFile[]> {
+	const all: GoogleDriveFile[] = [];
+	for await (const batch of streamGoogleDriveMp3Files(accessToken, options)) {
+		all.push(...batch.files);
+	}
+	return all;
 }
 
 function getSupportedStreamMimeType(mimeType?: string): string | null {
