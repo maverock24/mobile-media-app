@@ -28,7 +28,8 @@ const config = {
 					'https://api.rss2json.com',
 					'https://itunes.apple.com',
 					'https://geocoding-api.open-meteo.com',
-					'https://api.open-meteo.com'
+					'https://api.open-meteo.com',
+					'https://raw.githubusercontent.com'
 				],
 				'img-src': ['self', 'data:', 'blob:'],
 				'media-src': ['self', 'blob:'],
