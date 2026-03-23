@@ -11,7 +11,7 @@
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
-		RefreshCw, Mic2, X, SkipBack, SkipForward
+		RefreshCw, Mic2, X
 	} from 'lucide-svelte';
 
 	// ── Types ────────────────────────────────────────────────────
@@ -728,14 +728,6 @@
 				<div class="flex-1 min-w-0">
 					<p class="text-sm font-semibold truncate">{currentEpisode.episode.title}</p>
 					<p class="text-xs text-muted-foreground truncate">{currentEpisode.podcast.title}</p>
-				</div>
-				<div class="shrink-0 flex items-center gap-0.5">
-					<button onclick={prevEpisode} class="p-2 rounded-full hover:bg-accent transition-colors" aria-label="Previous episode">
-						<SkipBack class="w-4 h-4" />
-					</button>
-					<button onclick={nextEpisode} class="p-2 rounded-full hover:bg-accent transition-colors" aria-label="Next episode">
-						<SkipForward class="w-4 h-4" />
-					</button>
 				</div>
 			</div>
 			<div class="px-4 pb-3">
