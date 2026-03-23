@@ -147,6 +147,15 @@
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
 	const rssCache = new Map<string, { data: unknown; ts: number }>();
 	async function fetchRss(feedUrl: string): Promise<unknown> {
+		// Validate that the feed URL is a legitimate HTTP(S) address
+		try {
+			const parsed = new URL(feedUrl);
+			if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+				throw new Error('Feed URL must use HTTP or HTTPS.');
+			}
+		} catch (e) {
+			throw new Error('Invalid feed URL.');
+		}
 		const cached = rssCache.get(feedUrl);
 		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data;
 		const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`);
@@ -283,7 +292,7 @@
 			}
 			const data = await fetchRss(podcast.feedUrl) as Record<string, unknown>;
 			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
-			const eps: Episode[] = (data.items ?? []).map((item: Record<string, unknown>, i: number) => {
+			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
 				const enc = item.enclosure as { link?: string; length?: number } | null;
 				// itunes_duration is a string like "1:23:45" or seconds as number
 				const rawDur = item.itunes_duration ?? item.duration ?? 0;
@@ -300,7 +309,9 @@
 					audioUrl:    enc?.link ?? String(item.link ?? ''),
 				};
 			});
-			const feedImage = typeof data.feed?.image === 'string' ? data.feed.image : '';
+			const feedImage = typeof (data.feed as Record<string, unknown> | undefined)?.image === 'string'
+				? (data.feed as Record<string, unknown>).image as string
+				: '';
 			// Merge: preserve played/progress/positionSec from already-known episodes
 			const existingMap = new Map(
 				(podcastData.podcasts.find(p => p.id === podcast.id)?.episodes ?? []).map(e => [e.id, e])

@@ -136,6 +136,19 @@
 
 	async function installUpdate() {
 		if (!androidRelease) return;
+
+		// Reject non-HTTPS download URLs
+		try {
+			const parsed = new URL(androidRelease.url);
+			if (parsed.protocol !== 'https:') {
+				installError = 'APK download URL must use HTTPS.';
+				return;
+			}
+		} catch {
+			installError = 'APK download URL is invalid.';
+			return;
+		}
+
 		isInstalling = true;
 		installError = '';
 		installStep = 'downloading';
@@ -146,6 +159,22 @@
 				directory: Directory.Cache
 			});
 			if (!path) throw new Error('Download failed — no file path returned.');
+
+			// Verify SHA-256 before launching installer
+			if (androidRelease.sha256) {
+				const { data } = await Filesystem.readFile({ path: 'update.apk', directory: Directory.Cache });
+				const binary = atob(data as string);
+				const bytes = new Uint8Array(binary.length);
+				for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+				const hashBuffer = await crypto.subtle.digest('SHA-256', bytes.buffer);
+				const hashHex = Array.from(new Uint8Array(hashBuffer))
+					.map(b => b.toString(16).padStart(2, '0')).join('');
+				if (hashHex !== androidRelease.sha256.toLowerCase()) {
+					await Filesystem.deleteFile({ path: 'update.apk', directory: Directory.Cache }).catch(() => {});
+					throw new Error('APK integrity check failed — the file may be corrupt or tampered with.');
+				}
+			}
+
 			installStep = 'launching';
 			await DirectoryReader.installApk({ path });
 		} catch (err) {
