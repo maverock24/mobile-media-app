@@ -380,6 +380,24 @@
 		return () => mediaEngine.setPlaybackHandlers(null, null, null);
 	});
 
+	// ── sync current track metadata to media engine → drives lock-screen / MediaSession ──
+	$effect(() => {
+		const track = currentTrack;
+		if (!track) {
+			mediaEngine.clear();
+			return;
+		}
+		mediaEngine.setNowPlaying({
+			id:         String(track.id),
+			source:     'music',
+			title:      track.title,
+			subtitle:   track.artist,
+			audioUrl:   '',
+			artworkUrl: undefined,
+			duration:   track.duration > 0 ? track.duration : undefined,
+		}, 'music');
+	});
+
 	// ── reload browse entries when path or folder version changes ──
 	$effect(() => {
 		const path = [...browsePath];
@@ -400,6 +418,7 @@
 			if (now - _lastTimeUpdate < 250) return;
 			_lastTimeUpdate = now;
 			currentTime = audioEl.currentTime;
+			mediaEngine.updateTime(audioEl.currentTime, isFinite(audioEl.duration) ? audioEl.duration : 0);
 		};
 		const onLoadedMetadata = () => {
 			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
@@ -409,9 +428,10 @@
 					: t
 			);
 		};
-		const onPlay  = () => { isPlaying = true; };
+		const onPlay  = () => { isPlaying = true;  mediaEngine.setPlaying(true);  };
 		const onPause = () => {
 			isPlaying = false;
+			mediaEngine.setPlaying(false);
 			// Persist position so it's visible in settings and survives any future restore
 			musicSettings.lastTrackTimestamp = audioEl.currentTime;
 			// Per-track resume: save current position
