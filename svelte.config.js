@@ -14,7 +14,32 @@ const config = {
 			: netlifyAdapter({
 				edge: false,
 				split: false
-			})
+			}),
+		csp: {
+			mode: 'hash',
+			directives: {
+				'default-src': ['self'],
+				'script-src': ['self', 'https://accounts.google.com'],
+				'connect-src': [
+					'self',
+					'https://www.googleapis.com',
+					'https://accounts.google.com',
+					'https://oauth2.googleapis.com',
+					'https://api.rss2json.com',
+					'https://itunes.apple.com',
+					'https://geocoding-api.open-meteo.com',
+					'https://api.open-meteo.com'
+				],
+				'img-src': ['self', 'data:', 'blob:'],
+				'media-src': ['self', 'blob:'],
+				'style-src': ['self', 'unsafe-inline'],
+				'font-src': ['self', 'data:'],
+				'frame-src': ['none'],
+				'object-src': ['none'],
+				'base-uri': ['self'],
+				'form-action': ['self']
+			}
+		}
 	},
 	vitePlugin: {
 		dynamicCompileOptions: ({ filename }) =>
