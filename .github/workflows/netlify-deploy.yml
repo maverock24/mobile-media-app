@@ -95,6 +95,7 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           PUBLIC_GOOGLE_CLIENT_ID: ${{ secrets.PUBLIC_GOOGLE_CLIENT_ID }}
+          PUBLIC_BUILD_VERSION_CODE: ${{ github.run_number }}
         run: |
           pnpm build:mobile
           pnpm exec cap sync android

@@ -28,7 +28,7 @@
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
-		Volume2, VolumeX, Heart, ListMusic, FolderOpen, Music2,
+		Volume2, VolumeX, Heart, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
 		Cloud, RefreshCw, LogOut, Search, Star
 	} from 'lucide-svelte';
@@ -2211,21 +2211,21 @@
 	{/if}
 
 	<!-- Bottom toolbar -->
-	<div class="border-t bg-background px-3 py-2 shrink-0 flex gap-2">
-		<Button variant={showQueue ? 'default' : 'outline'} size="sm"
-			class="flex-1 gap-1.5 text-xs"
+	<div class="border-t bg-background px-3 py-2.5 shrink-0 flex gap-2">
+		<Button variant={showQueue ? 'default' : 'outline'}
+			class="flex-1 gap-2 text-sm h-11"
 			onclick={() => { showQueue = !showQueue; showPanel = 'none'; }}>
-			<ListMusic class="w-4 h-4" /> Browse
+			<FolderOpen class="w-5 h-5" /> Browse
 		</Button>
-		<Button variant={showPanel === 'speed' ? 'default' : 'outline'} size="sm"
-			class="flex-1 gap-1.5 text-xs"
+		<Button variant={showPanel === 'speed' ? 'default' : 'outline'}
+			class="flex-1 gap-2 text-sm h-11"
 			onclick={() => togglePanel('speed')}>
-			<Gauge class="w-4 h-4" /> {musicSettings.playbackSpeed}\xd7
+			<Gauge class="w-5 h-5" /> {musicSettings.playbackSpeed}\xd7
 		</Button>
-		<Button variant={showPanel === 'eq' ? 'default' : 'outline'} size="sm"
-			class="flex-1 gap-1.5 text-xs"
+		<Button variant={showPanel === 'eq' ? 'default' : 'outline'}
+			class="flex-1 gap-2 text-sm h-11"
 			onclick={() => togglePanel('eq')}>
-			<SlidersHorizontal class="w-4 h-4" /> EQ
+			<SlidersHorizontal class="w-5 h-5" /> EQ
 		</Button>
 	</div>
 

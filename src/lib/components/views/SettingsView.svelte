@@ -42,6 +42,7 @@
 	let isInstalling = $state(false);
 	let installError = $state('');
 	let installStep = $state<'idle' | 'downloading' | 'launching'>('idle');
+	const installedVersionCode = parseInt(env.PUBLIC_BUILD_VERSION_CODE ?? '0', 10);
 	const releaseBaseUrl = (() => {
 		const configuredBaseUrl = env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
 		if (configuredBaseUrl) {
@@ -579,7 +580,13 @@
 				<div class="flex-1 min-w-0">
 					<p class="font-semibold">App Updates</p>
 					<p class="text-xs text-muted-foreground">
-						{#if androidRelease}
+						{#if androidRelease && installedVersionCode > 0}
+							{#if androidRelease.versionCode > installedVersionCode}
+								Update available · {androidRelease.versionName}
+							{:else}
+								Up to date · {androidRelease.versionName}
+							{/if}
+						{:else if androidRelease}
 							{androidRelease.versionName} · {androidRelease.buildType} APK
 						{:else if isCheckingRelease}
 							Checking latest Android build
@@ -611,9 +618,22 @@
 									<p class="font-medium leading-tight">Android build {androidRelease.versionName}</p>
 									<p class="text-xs text-muted-foreground mt-1">Published {formatReleaseDate(androidRelease.publishedAt)}</p>
 								</div>
-								<span class="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-primary">
-									{androidRelease.buildType}
-								</span>
+								<div class="flex flex-col items-end gap-1">
+									<span class="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-primary">
+										{androidRelease.buildType}
+									</span>
+									{#if installedVersionCode > 0}
+										{#if androidRelease.versionCode > installedVersionCode}
+											<span class="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+												Update available
+											</span>
+										{:else}
+											<span class="rounded-full bg-green-500/15 px-2.5 py-1 text-[11px] font-medium text-green-600 dark:text-green-400">
+												Up to date
+											</span>
+										{/if}
+									{/if}
+								</div>
 							</div>
 
 							<div class="grid grid-cols-2 gap-3 text-xs text-muted-foreground">
@@ -622,8 +642,13 @@
 									<p class="mt-1 text-foreground">{formatFileSize(androidRelease.sizeBytes)}</p>
 								</div>
 								<div>
-									<p class="uppercase tracking-wide text-[10px]">Version Code</p>
-									<p class="mt-1 text-foreground">{androidRelease.versionCode}</p>
+									<p class="uppercase tracking-wide text-[10px]">Latest Build</p>
+									<p class="mt-1 text-foreground">
+										#{androidRelease.versionCode}
+										{#if installedVersionCode > 0}
+											<span class="text-muted-foreground"> · installed #{installedVersionCode}</span>
+										{/if}
+									</p>
 								</div>
 							</div>
 
