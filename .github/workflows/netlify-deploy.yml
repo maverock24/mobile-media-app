@@ -87,6 +87,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Resolve Netlify site URL
+        id: netlify_meta
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          NETLIFY_SITE_URL=$(curl -sf "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}" \
+            -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" | jq -r '.ssl_url // .url // empty')
+          echo "site_url=${NETLIFY_SITE_URL}" >> "$GITHUB_OUTPUT"
+          echo "Netlify site URL: ${NETLIFY_SITE_URL}"
+
       - name: Build Android APK
         env:
           ANDROID_VERSION_NAME: ${{ steps.android_meta.outputs.version_name }}
@@ -96,6 +107,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           PUBLIC_GOOGLE_CLIENT_ID: ${{ secrets.PUBLIC_GOOGLE_CLIENT_ID }}
           PUBLIC_BUILD_VERSION_CODE: ${{ github.run_number }}
+          PUBLIC_RELEASE_BASE_URL: ${{ steps.netlify_meta.outputs.site_url }}
         run: |
           pnpm build:mobile
           pnpm exec cap sync android
@@ -111,6 +123,7 @@ jobs:
           BUILD_TYPE: ${{ steps.android_build.outputs.build_type }}
           VERSION_NAME: ${{ steps.android_meta.outputs.version_name }}
           PACKAGE_VERSION: ${{ steps.android_meta.outputs.package_version }}
+          NETLIFY_SITE_URL: ${{ steps.netlify_meta.outputs.site_url }}
         run: |
           mkdir -p static/releases/android
           find static/releases/android -maxdepth 1 -type f \( -name '*.apk' -o -name '*.json' \) -delete
@@ -120,6 +133,12 @@ jobs:
           APK_SHA256=$(sha256sum "static/releases/android/latest.apk" | cut -d ' ' -f1)
           PUBLISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+          if [[ -n "$NETLIFY_SITE_URL" ]]; then
+            APK_URL="${NETLIFY_SITE_URL}/releases/android/latest.apk"
+          else
+            APK_URL="/releases/android/latest.apk"
+          fi
+
           cat <<EOF > static/releases/android/latest.json
           {
             "version": "$PACKAGE_VERSION",
@@ -127,7 +146,7 @@ jobs:
             "versionName": "$VERSION_NAME",
             "buildType": "$BUILD_TYPE",
             "fileName": "$APK_NAME",
-            "url": "/releases/android/latest.apk",
+            "url": "$APK_URL",
             "sizeBytes": $APK_SIZE,
             "sha256": "$APK_SHA256",
             "publishedAt": "$PUBLISHED_AT",
