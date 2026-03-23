@@ -25,9 +25,17 @@ export const mediaEngine = $state<NowPlayingState & {
 	updateTime(currentTime: number, duration: number): void;
 	setPlaying(playing: boolean): void;
 	clear(): void;
-	_nextHandler: (() => void) | null;
-	_prevHandler: (() => void) | null;
+	_nextHandler:  (() => void) | null;
+	_prevHandler:  (() => void) | null;
+	_playHandler:  (() => void) | null;
+	_pauseHandler: (() => void) | null;
+	_seekHandler:  ((positionSec: number) => void) | null;
 	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null): void;
+	setPlaybackHandlers(
+		play:  (() => void) | null,
+		pause: (() => void) | null,
+		seek:  ((positionSec: number) => void) | null
+	): void;
 }>({
 	item:        null as MediaItem | null,
 	isPlaying:   false as boolean,
@@ -65,11 +73,25 @@ export const mediaEngine = $state<NowPlayingState & {
 
 	_nextHandler: null as (() => void) | null,
 	_prevHandler: null as (() => void) | null,
+	_playHandler: null as (() => void) | null,
+	_pauseHandler: null as (() => void) | null,
+	_seekHandler: null as ((positionSec: number) => void) | null,
 
-	/** Register next/previous track callbacks (e.g. for Android Auto via MediaSession). */
+	/** Register next/previous track callbacks (e.g. for Android Auto / lock-screen). */
 	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null) {
 		this._nextHandler = next;
 		this._prevHandler = prev;
+	},
+
+	/** Register play/pause/seek callbacks for lock-screen / notification controls. */
+	setPlaybackHandlers(
+		play: (() => void) | null,
+		pause: (() => void) | null,
+		seek: ((positionSec: number) => void) | null
+	) {
+		this._playHandler  = play;
+		this._pauseHandler = pause;
+		this._seekHandler  = seek;
 	}
 });
 
@@ -79,6 +101,7 @@ export const mediaEngine = $state<NowPlayingState & {
 // ─────────────────────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 	$effect.root(() => {
+		// Sync metadata whenever the playing item changes
 		$effect(() => {
 			const item = mediaEngine.item;
 			if (!item) {
@@ -95,11 +118,42 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 			});
 		});
 
+		// Sync playback state so the lock screen shows the correct play/pause icon
 		$effect(() => {
-			const next = mediaEngine._nextHandler;
-			const prev = mediaEngine._prevHandler;
-			navigator.mediaSession.setActionHandler('nexttrack', next ?? null);
+			navigator.mediaSession.playbackState = mediaEngine.isPlaying ? 'playing' : 'paused';
+		});
+
+		// Sync position state for seek bar on lock screen / notification
+		$effect(() => {
+			if (mediaEngine.duration > 0) {
+				navigator.mediaSession.setPositionState({
+					duration:     mediaEngine.duration,
+					position:     Math.min(mediaEngine.currentTime, mediaEngine.duration),
+					playbackRate: 1,
+				});
+			}
+		});
+
+		// Register all action handlers whenever the callbacks change
+		$effect(() => {
+			const { _nextHandler: next, _prevHandler: prev,
+			        _playHandler: play, _pauseHandler: pause,
+			        _seekHandler: seek } = mediaEngine;
+
+			navigator.mediaSession.setActionHandler('play',          play ?? null);
+			navigator.mediaSession.setActionHandler('pause',         pause ?? null);
+			navigator.mediaSession.setActionHandler('stop',          pause ?? null);
+			navigator.mediaSession.setActionHandler('nexttrack',     next ?? null);
 			navigator.mediaSession.setActionHandler('previoustrack', prev ?? null);
+			navigator.mediaSession.setActionHandler('seekto', seek
+				? (d) => { if (d.seekTime != null) seek(d.seekTime); }
+				: null);
+			navigator.mediaSession.setActionHandler('seekforward', seek
+				? (d) => seek(Math.min(mediaEngine.currentTime + (d.seekOffset ?? 30), mediaEngine.duration))
+				: null);
+			navigator.mediaSession.setActionHandler('seekbackward', seek
+				? (d) => seek(Math.max(mediaEngine.currentTime - (d.seekOffset ?? 10), 0))
+				: null);
 		});
 	});
 }
