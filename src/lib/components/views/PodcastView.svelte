@@ -57,6 +57,7 @@
 	let searchResults      = $state<ItunesResult[]>([]);
 	let searchLoading      = $state(false);
 	let episodesLoading    = $state(false);
+	let episodesRefreshing = $state(false); // background refresh while episodes already shown
 	let episodesError      = $state<string | null>(null);
 
 	// ── Playback state ───────────────────────────────────────────
@@ -71,6 +72,16 @@
 		registerAudioSource('podcast', () => {
 			if (audioEl && isPlaying) audioEl.pause();
 		});
+	});
+
+	// ── Register MediaSession play/pause/seek handlers for lock-screen ──
+	$effect(() => {
+		mediaEngine.setPlaybackHandlers(
+			() => togglePlay(),
+			() => togglePlay(),
+			(pos) => { if (audioEl) { audioEl.currentTime = pos; currentTime = pos; } }
+		);
+		return () => mediaEngine.setPlaybackHandlers(null, null, null);
 	});
 
 	// ── Audio element event wiring ───────────────────────────────
@@ -192,15 +203,13 @@
 
 	// ── Subscribe/unsubscribe ────────────────────────────────────
 	function subscribeFromItunes(item: ItunesResult) {
-		let pod: Podcast;
 		if (podcastData.podcasts.some(p => p.itunesId === item.trackId)) {
 			// Already in list — just make sure it's subscribed
 			podcastData.podcasts = podcastData.podcasts.map(p =>
 				p.itunesId === item.trackId ? { ...p, subscribed: true } : p
 			);
-			pod = podcastData.podcasts.find(p => p.itunesId === item.trackId)!;
 		} else {
-			pod = {
+			const pod: Podcast = {
 				id:         ++podcastData.nextId,
 				itunesId:   item.trackId,
 				title:      item.trackName,
@@ -214,8 +223,6 @@
 			};
 			podcastData.podcasts = [...podcastData.podcasts, pod];
 		}
-		// Auto-open episode view so user can immediately play
-		openPodcast(pod);
 	}
 
 	function unsubscribe(podcast: Podcast) {
@@ -228,10 +235,15 @@
 	}
 
 	// ── Load episodes from RSS2JSON ──────────────────────────────
-	async function loadEpisodes(podcast: Podcast) {
-		if (podcast.episodesLoaded) return;
-		// Show spinner immediately — before any async work
-		episodesLoading = true; episodesError = null;
+	async function loadEpisodes(podcast: Podcast, force = false) {
+		if (!force && podcast.episodesLoaded) return;
+		// Background refresh: show subtle spinner without blocking the episode list
+		if (force && podcast.episodesLoaded) {
+			episodesRefreshing = true;
+		} else {
+			episodesLoading = true;
+		}
+		episodesError = null;
 		try {
 			if (!podcast.feedUrl) {
 				// Resolve feedUrl via iTunes lookup (no &entity param — gets the podcast object)
@@ -273,25 +285,44 @@
 				};
 			});
 			const feedImage = typeof data.feed?.image === 'string' ? data.feed.image : '';
+			// Merge: preserve played/progress/positionSec from already-known episodes
+			const existingMap = new Map(
+				(podcastData.podcasts.find(p => p.id === podcast.id)?.episodes ?? []).map(e => [e.id, e])
+			);
+			const mergedEps = eps.map(ep => {
+				const existing = existingMap.get(ep.id);
+				return existing
+					? { ...ep, played: existing.played, progress: existing.progress, positionSec: existing.positionSec }
+					: ep;
+			});
 			podcastData.podcasts = podcastData.podcasts.map(p =>
 				p.id === podcast.id
-					? { ...p, episodes: eps, episodesLoaded: true, artworkUrl: p.artworkUrl || feedImage }
+					? { ...p, episodes: mergedEps, episodesLoaded: true, artworkUrl: p.artworkUrl || feedImage }
 					: p
 			);
 			if (selectedPodcast?.id === podcast.id) {
 				selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
 			}
 		} catch (e: unknown) {
-			episodesError = e instanceof Error ? e.message : 'Failed to load episodes.';
+			// Suppress errors on background refresh — episodes already shown
+			if (!force || !podcast.episodesLoaded) {
+				episodesError = e instanceof Error ? e.message : 'Failed to load episodes.';
+			}
 		} finally {
 			episodesLoading = false;
+			episodesRefreshing = false;
 		}
 	}
 
 	function openPodcast(podcast: Podcast) {
 		selectedPodcast = podcast;
 		episodesError = null;
-		if (!podcast.episodesLoaded) loadEpisodes(podcast);
+		if (!podcast.episodesLoaded) {
+			loadEpisodes(podcast);
+		} else {
+			// Episodes cached — check for newer ones in the background
+			loadEpisodes(podcast, true);
+		}
 	}
 
 	// ── Playback ─────────────────────────────────────────────────
@@ -423,6 +454,12 @@
 					<p class="text-xs text-muted-foreground">{selectedPodcast.author}</p>
 				</div>
 			</div>
+			<Button variant="ghost" size="icon"
+				title="Refresh episodes"
+				disabled={episodesRefreshing || episodesLoading}
+				onclick={() => selectedPodcast && loadEpisodes(selectedPodcast, true)}>
+				<RefreshCw class="w-5 h-5 {episodesRefreshing ? 'animate-spin' : ''}" />
+			</Button>
 			<Button variant="ghost" size="icon" onclick={() => {
 				if (selectedPodcast) {
 					selectedPodcast.subscribed ? unsubscribe(selectedPodcast) : subscribeFromItunes({ trackId: selectedPodcast.itunesId, trackName: selectedPodcast.title, artistName: selectedPodcast.author, artworkUrl600: selectedPodcast.artworkUrl, feedUrl: selectedPodcast.feedUrl, primaryGenreName: selectedPodcast.category, trackCount: selectedPodcast.episodes.length });
@@ -626,10 +663,18 @@
 							<Button
 								variant={subscribed ? 'default' : 'outline'}
 								size="sm" class="shrink-0"
-								onclick={(e) => { e.stopPropagation(); subscribeFromItunes(item); }}
+								onclick={(e) => {
+									e.stopPropagation();
+									if (subscribed) {
+										const lp = podcastData.podcasts.find(p => p.itunesId === item.trackId);
+										if (lp) openPodcast(lp);
+									} else {
+										subscribeFromItunes(item);
+									}
+								}}
 							>
 								{#if subscribed}
-									<CheckCircle2 class="w-3.5 h-3.5 mr-1 " /> Subscribed
+									<CheckCircle2 class="w-3.5 h-3.5 mr-1" /> Subscribed
 								{:else}
 									<Plus class="w-3.5 h-3.5 mr-1" /> Subscribe
 								{/if}

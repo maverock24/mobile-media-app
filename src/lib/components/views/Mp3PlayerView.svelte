@@ -322,6 +322,16 @@
 		return () => mediaEngine.setSkipHandlers(null, null);
 	});
 
+	// ── register MediaSession play/pause/seek handlers for lock-screen notification ──
+	$effect(() => {
+		mediaEngine.setPlaybackHandlers(
+			() => { void togglePlay(); },
+			() => { void togglePlay(); },
+			(pos) => { if (audioEl) { audioEl.currentTime = pos; currentTime = pos; } }
+		);
+		return () => mediaEngine.setPlaybackHandlers(null, null, null);
+	});
+
 	// ── reload browse entries when path or folder version changes ──
 	$effect(() => {
 		const path = [...browsePath];
