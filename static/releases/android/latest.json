@@ -1,13 +1,13 @@
 {
   "version": "0.0.3",
-  "versionCode": 29,
-  "versionName": "0.0.3 (build 29)",
+  "versionCode": 30,
+  "versionName": "0.0.3 (build 30)",
   "buildType": "release",
-  "fileName": "media-hub-0.0.3-build-29.apk",
+  "fileName": "media-hub-0.0.3-build-30.apk",
   "url": "https://mobile-media-app-maverock24.netlify.app/releases/android/latest.apk",
-  "sizeBytes": 47097606,
-  "sha256": "5fbff2332c933e2583d2a6e5c1ff96ccae646e7b94bbe4e111aebb99a3bb07f6",
-  "publishedAt": "2026-03-23T09:33:03Z",
-  "commitSha": "36b7764158284ba24d6621f6a9e007f780336f35",
-  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/36b7764158284ba24d6621f6a9e007f780336f35"
+  "sizeBytes": 50192390,
+  "sha256": "26c615e287db3445d3f38e7558a9cbb9f141aa47552cd06c4f9a98f5746916ad",
+  "publishedAt": "2026-03-23T09:48:59Z",
+  "commitSha": "ed2aa47d62f7df52674387905de284591e8e45bd",
+  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/ed2aa47d62f7df52674387905de284591e8e45bd"
 }
