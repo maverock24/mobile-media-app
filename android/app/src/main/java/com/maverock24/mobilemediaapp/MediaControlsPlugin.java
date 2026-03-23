@@ -100,7 +100,7 @@ public class MediaControlsPlugin extends Plugin {
 	public void updateNowPlaying(PluginCall call) {
 		title = call.getString("title", "");
 		artist = call.getString("artist", "");
-		durationMs = secondsToMs(call.getDouble("durationSec", 0));
+		durationMs = secondsToMs(call.getDouble("durationSec", 0d));
 		ensureSession();
 		updateMetadata();
 		updatePlaybackState();
@@ -111,8 +111,8 @@ public class MediaControlsPlugin extends Plugin {
 	@PluginMethod
 	public void updatePlaybackState(PluginCall call) {
 		isPlaying = call.getBoolean("isPlaying", false);
-		positionMs = secondsToMs(call.getDouble("positionSec", 0));
-		long nextDurationMs = secondsToMs(call.getDouble("durationSec", 0));
+		positionMs = secondsToMs(call.getDouble("positionSec", 0d));
+		long nextDurationMs = secondsToMs(call.getDouble("durationSec", 0d));
 		if (nextDurationMs > 0) {
 			durationMs = nextDurationMs;
 		}
