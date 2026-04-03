@@ -1,13 +1,13 @@
 {
-  "version": "0.0.4",
-  "versionCode": 46,
-  "versionName": "0.0.4 (build 46)",
+  "version": "0.0.6",
+  "versionCode": 48,
+  "versionName": "0.0.6 (build 48)",
   "buildType": "release",
-  "fileName": "media-hub-0.0.4-build-46.apk",
+  "fileName": "media-hub-0.0.6-build-48.apk",
   "url": "https://mobile-media-app-maverock24.netlify.app/releases/android/latest.apk",
-  "sizeBytes": 78319850,
-  "sha256": "71e4eb2ed1c4c990d81eb9b6739874e59526a66a87caaf1588271687344b6b0e",
-  "publishedAt": "2026-04-03T19:37:40Z",
-  "commitSha": "5a2bae4023056f1117b4fc4a7b6e6f46c5665084",
-  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/5a2bae4023056f1117b4fc4a7b6e6f46c5665084"
+  "sizeBytes": 81538050,
+  "sha256": "11db2994b52c3c868b8a9d564fad9877fd8c9208289715cb1b04935add08d065",
+  "publishedAt": "2026-04-03T20:11:48Z",
+  "commitSha": "c786c00e456c2ed76369ce296bff9536f7a0dd35",
+  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/c786c00e456c2ed76369ce296bff9536f7a0dd35"
 }
