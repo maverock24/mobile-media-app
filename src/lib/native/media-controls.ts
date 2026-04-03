@@ -5,6 +5,7 @@ export interface MediaControlsPlugin {
 	updateNowPlaying(options: {
 		title: string;
 		artist: string;
+		album?: string;
 		durationSec?: number;
 	}): Promise<void>;
 	updatePlaybackState(options: {

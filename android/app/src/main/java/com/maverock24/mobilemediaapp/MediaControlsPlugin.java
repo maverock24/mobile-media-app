@@ -40,6 +40,7 @@ public class MediaControlsPlugin extends Plugin {
 
 	private String title = "";
 	private String artist = "";
+	private String album = "";
 	private long durationMs = 0L;
 	private long positionMs = 0L;
 	private boolean isPlaying = false;
@@ -117,6 +118,7 @@ public class MediaControlsPlugin extends Plugin {
 	public void updateNowPlaying(PluginCall call) {
 		title = call.getString("title", "");
 		artist = call.getString("artist", "");
+		album = call.getString("album", "");
 		durationMs = secondsToMs(call.getDouble("durationSec", 0d));
 		
 		updateService();
@@ -148,6 +150,7 @@ public class MediaControlsPlugin extends Plugin {
 	public void clear(PluginCall call) {
 		title = "";
 		artist = "";
+		album = "";
 		durationMs = 0L;
 		positionMs = 0L;
 		isPlaying = false;
@@ -155,7 +158,7 @@ public class MediaControlsPlugin extends Plugin {
 		hasPrevious = false;
 		
 		if (playbackService != null) {
-			playbackService.updateNotification("", "", false);
+			playbackService.updateNotification("", "", "", false);
 			playbackService.getMediaSession().setActive(false);
 		}
 		call.resolve();
@@ -178,7 +181,8 @@ public class MediaControlsPlugin extends Plugin {
 		MediaMetadataCompat.Builder metaBuilder = new MediaMetadataCompat.Builder()
 			.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
 			.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, title)
-			.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist);
+			.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
+			.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, album);
 		if (durationMs > 0) {
 			metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs);
 		}
@@ -201,7 +205,7 @@ public class MediaControlsPlugin extends Plugin {
 		playbackService.getMediaSession().setActive(!title.isEmpty());
 
 		// 3. Update Foreground Notification
-		playbackService.updateNotification(title, artist, isPlaying);
+		playbackService.updateNotification(title, artist, album, isPlaying);
 	}
 
 	private long secondsToMs(Double seconds) {

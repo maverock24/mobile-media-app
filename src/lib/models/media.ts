@@ -10,6 +10,7 @@ export interface MediaItem {
 	source: MediaSource;
 	title: string;
 	subtitle: string;           // artist / podcast name
+	album?: string;
 	audioUrl: string;
 	artworkUrl?: string;
 	duration?: number;          // seconds, if known ahead of time

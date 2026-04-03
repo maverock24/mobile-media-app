@@ -100,11 +100,16 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 		}
 	}
 
-	public void updateNotification(String title, String artist, boolean isPlaying) {
+	public void updateNotification(String title, String artist, String album, boolean isPlaying) {
+		String subtext = artist;
+		if (album != null && !album.isEmpty()) {
+			subtext = artist + " — " + album;
+		}
+
 		NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
 			.setSmallIcon(R.mipmap.ic_launcher)
 			.setContentTitle(title)
-			.setContentText(artist)
+			.setContentText(subtext)
 			.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 			.setOnlyAlertOnce(true)
 			.setShowWhen(false)

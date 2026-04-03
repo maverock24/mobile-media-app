@@ -298,14 +298,14 @@
 		mediaEngine.playbackRate = musicSettings.playbackSpeed;
 		mediaEngine.isShuffle = musicSettings.isShuffle;
 		mediaEngine.isRepeat = musicSettings.isRepeat;
+		mediaEngine.crossfadeDuration = musicSettings.crossfadeDuration;
+		mediaEngine.eqBands = musicSettings.eqBands;
 	});
 
 
-	$effect(() => {
-		import('$lib/stores/mediaEngine.svelte').then(m => {
-			m.updateGlobalEq(musicSettings.eqBands);
-		});
-	});
+	/*
+	  Manual EQ update removed - mediaEngine now watches its own state and applies DSP.
+	*/
 
 
 	// ─────────────────────────────────────────────────────────────
