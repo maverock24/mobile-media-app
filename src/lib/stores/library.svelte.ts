@@ -28,10 +28,14 @@ class LibraryStore {
 	#folderTree = $state<Map<string, { folders: BrowseEntry[], files: BrowseEntry[] }>>(new Map([["", { folders: [], files: [] }]]));
 	#treeUpdateTimer: ReturnType<typeof setTimeout> | null = null;
 	#isTreeSyncing = $state(false);
+	#isTruncated = $state(false);
+	#fileCount = $state(0);
 
 	get allFiles() { return this.#allFiles; }
 	get isLoading() { return this.#isLoading; }
 	get lastScanAt() { return this.#lastScanAt; }
+	get isTruncated() { return this.#isTruncated; }
+	get fileCount() { return this.#fileCount; }
 
 	// ── IndexedDB access ──────────────────────────────────────────
 	async #openIDB(): Promise<IDBDatabase> {
@@ -94,38 +98,46 @@ class LibraryStore {
 
 	async #rebuildFolderTree() {
 		this.#isTreeSyncing = true;
-		// Break the synchronous execution stack to allow UI frames
-		await new Promise(res => setTimeout(res, 0));
-
+		
 		const files = this.#allFiles;
 		const tree = new Map<string, { folders: BrowseEntry[], files: BrowseEntry[] }>();
 		tree.set("", { folders: [], files: [] });
 
-		for (const file of files) {
-			const rel = file.relativePath || file.name;
-			const segments = rel.split('/');
-			const fileName = segments.pop()!;
+		// Process in chunks to keep UI alive
+		const CHUNK_SIZE = 500;
+		for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+			const chunk = files.slice(i, i + CHUNK_SIZE);
 			
-			let currentPath = "";
-			for (const segment of segments) {
-				const parentPath = currentPath;
-				currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+			for (const file of chunk) {
+				const rel = file.relativePath || file.name;
+				const segments = rel.split('/');
+				const fileName = segments.pop()!;
 				
-				if (!tree.has(currentPath)) {
-					tree.set(currentPath, { folders: [], files: [] });
-					const parent = tree.get(parentPath)!;
-					if (!parent.folders.find(f => f.name === segment)) {
-						parent.folders.push({ kind: 'folder', name: segment, count: 0 });
+				let currentPath = "";
+				for (const segment of segments) {
+					const parentPath = currentPath;
+					currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+					
+					if (!tree.has(currentPath)) {
+						tree.set(currentPath, { folders: [], files: [] });
+						const parent = tree.get(parentPath)!;
+						if (!parent.folders.find(f => f.name === segment)) {
+							parent.folders.push({ kind: 'folder', name: segment, count: 0 });
+						}
 					}
 				}
+				
+				const fileFolder = tree.get(currentPath);
+				if (fileFolder) {
+					fileFolder.files.push({ kind: 'file', name: fileName, file });
+				}
 			}
-			
-			const fileFolder = tree.get(currentPath);
-			if (fileFolder) {
-				fileFolder.files.push({ kind: 'file', name: fileName, file });
-			}
+
+			// Yield to browser
+			await new Promise(res => setTimeout(res, 0));
 		}
 
+		// Calculate counts and sort
 		for (const [path, node] of tree.entries()) {
 			node.folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 			node.files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -200,6 +212,8 @@ class LibraryStore {
 			}));
 			this.#allFiles = files;
 			this.#lastScanAt = Date.now();
+			this.#isTruncated = result.truncated || false;
+			this.#fileCount = result.count || files.length;
 			await this.#saveToCache(files, treeUri);
 			this.scheduleTreeRebuild();
 		} catch (e) {

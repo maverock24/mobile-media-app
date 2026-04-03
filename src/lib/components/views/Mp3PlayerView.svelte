@@ -34,7 +34,7 @@
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, Heart, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
-		Cloud, RefreshCw, LogOut, Search, Star
+		Cloud, RefreshCw, LogOut, Search, Star, AlertTriangle
 	} from 'lucide-svelte';
 
 	interface Track {
@@ -1193,9 +1193,7 @@
 					console.warn('Unable to persist tree URI permission.', error);
 				}
 				void (async () => {
-					const cachedFiles = await collectAllFromPath([]);
-					library.setFiles(cachedFiles, folderName);
-					hydrateTracksFromLibrary(cachedFiles);
+					library.rescan();
 				})();
 			} catch (error) {
 				console.error('Failed to open native folder.', error);
@@ -1760,13 +1758,44 @@
 			{/if}
 			
 			<div class="flex-1 overflow-y-auto relative" bind:this={browseScrollEl}>
-				{#if browseLoading}
-					<div class="flex flex-col">
-						{#each Array(8) as _}
-							<SkeletonEntry />
-						{/each}
+				{#if library.isLoading || library.isTreeSyncing}
+					<div class="flex flex-col items-center justify-center py-20 px-6 text-center animate-in fade-in zoom-in duration-500">
+						<div class="relative w-16 h-16 mb-6">
+							<div class="absolute inset-0 border-4 border-primary/20 rounded-full"></div>
+							<div class="absolute inset-0 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+							<div class="absolute inset-0 flex items-center justify-center text-primary">
+								<RefreshCw class="w-6 h-6" />
+							</div>
+						</div>
+						<h3 class="text-base font-semibold text-foreground tracking-tight">
+							{library.isTreeSyncing ? 'Organizing Music...' : 'Scanning Folder...'}
+						</h3>
+						<p class="text-xs text-muted-foreground mt-2 max-w-[240px] leading-relaxed">
+							This standard Android scan may take a moment for large libraries.
+						</p>
 					</div>
-				{:else if filteredEntries.length === 0}
+				{:else}
+					{#if library.isTruncated}
+						<div class="mx-3 my-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-start gap-4">
+							<div class="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-500 shrink-0">
+								<AlertTriangle class="w-4 h-4" />
+							</div>
+							<div class="flex-1 min-w-0">
+								<h4 class="text-sm font-semibold text-amber-500">Library Truncated</h4>
+								<p class="text-[10px] text-amber-200/60 leading-relaxed mt-1">
+									This folder contains more than {library.fileCount} files. For performance, we've only loaded the first 10,000 items. Try selecting a more specific subfolder to see everything.
+								</p>
+							</div>
+						</div>
+					{/if}
+
+					{#if browseLoading}
+						<div class="flex flex-col">
+							{#each Array(8) as _}
+								<SkeletonEntry />
+							{/each}
+						</div>
+					{:else if filteredEntries.length === 0}
 					<p class="text-center text-muted-foreground text-sm py-12">
 						{#if fileSearchQuery.trim()}
 							No files match “{fileSearchQuery}”

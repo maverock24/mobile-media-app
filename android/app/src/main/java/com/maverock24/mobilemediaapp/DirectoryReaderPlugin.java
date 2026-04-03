@@ -75,17 +75,26 @@ public class DirectoryReaderPlugin extends Plugin {
 		}
 	}
 
+	private static final int MAX_FILES = 10000;
+	private int fileCount = 0;
+	private boolean isTruncated = false;
+
 	@PluginMethod
 	public void listAudioFiles(PluginCall call) {
 		try {
 			DocumentFile target = getTargetDirectory(call);
 			String basePath = call.getString("path", "");
 			JSArray files = new JSArray();
+			
+			fileCount = 0;
+			isTruncated = false;
 			collectFiles(target, basePath, files);
 
 			JSObject result = new JSObject();
 			result.put("folderName", target.getName() != null ? target.getName() : "Selected Folder");
 			result.put("files", files);
+			result.put("truncated", isTruncated);
+			result.put("count", fileCount);
 			call.resolve(result);
 		} catch (Exception exception) {
 			call.reject(exception.getMessage());
@@ -127,7 +136,14 @@ public class DirectoryReaderPlugin extends Plugin {
 	}
 
 	private void collectFiles(DocumentFile directory, String prefix, JSArray files) {
+		if (isTruncated) return;
+
 		for (DocumentFile child : directory.listFiles()) {
+			if (fileCount >= MAX_FILES) {
+				isTruncated = true;
+				return;
+			}
+
 			String childName = child.getName();
 			if (childName == null || childName.isEmpty()) {
 				continue;
@@ -144,6 +160,7 @@ public class DirectoryReaderPlugin extends Plugin {
 				continue;
 			}
 
+			fileCount++;
 			files.put(createFileObject(child, relativePath));
 		}
 	}

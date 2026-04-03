@@ -23,6 +23,8 @@ export interface ListDirectoryEntriesResult {
 export interface ListDirectoryFilesResult {
 	folderName: string;
 	files: NativeDirectoryFile[];
+	truncated?: boolean;
+	count?: number;
 }
 
 interface DirectoryReaderPlugin {
