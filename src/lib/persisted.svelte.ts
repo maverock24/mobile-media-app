@@ -31,7 +31,7 @@ export function persisted<T extends object>(key: string, defaults: T): T {
 		_debounceTimer = setTimeout(() => {
 			_debounceTimer = null;
 			flushToLocalStorage();
-		}, 500);
+		}, 2500); // Increased from 500ms to reduce JSON.stringify lag on large lists
 	}
 
 	// Watch for any change and write back to localStorage (debounced to avoid

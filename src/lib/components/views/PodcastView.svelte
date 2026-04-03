@@ -8,6 +8,8 @@
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
+	import { CapacitorHttp } from '@capacitor/core';
+	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
@@ -59,6 +61,28 @@
 	let episodesLoading    = $state(false);
 	let episodesRefreshing = $state(false); // background refresh while episodes already shown
 	let episodesError      = $state<string | null>(null);
+
+	// ── Virtualization ───────────────────────────────────────────
+	let episodeScrollEl = $state<HTMLElement | null>(null);
+	const virtualizerStore = $derived(
+		createVirtualizer({
+			count: selectedPodcast?.episodes.length ?? 0,
+			getScrollElement: () => episodeScrollEl,
+			estimateSize: () => 130, // average episode item height
+			overscan: 5,
+		})
+	);
+
+	function virtualMeasure(node: HTMLElement, index: number) {
+		node.dataset.index = String(index);
+		if ($virtualizerStore) $virtualizerStore.measureElement(node);
+		return {
+			update(newIndex: number) {
+				node.dataset.index = String(newIndex);
+				if ($virtualizerStore) $virtualizerStore.measureElement(node);
+			}
+		};
+	}
 
 	// ── Playback state ───────────────────────────────────────────
 	let currentEpisode = $state<{ podcast: Podcast; episode: Episode } | null>(null);
@@ -112,8 +136,7 @@
 	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
 	const rssCache = new Map<string, { data: unknown; ts: number }>();
-	async function fetchRss(feedUrl: string): Promise<unknown> {
-		// Validate that the feed URL is a legitimate HTTP(S) address
+	async function fetchRss(feedUrl: string) {
 		try {
 			const parsed = new URL(feedUrl);
 			if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
@@ -123,11 +146,47 @@
 			throw new Error('Invalid feed URL.');
 		}
 		const cached = rssCache.get(feedUrl);
-		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data;
-		const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`);
-		const data = await res.json();
-		if (data.status === 'ok') rssCache.set(feedUrl, { data, ts: Date.now() });
-		return data;
+		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data as { feed: { image: string }; items: any[] };
+
+		const res = await CapacitorHttp.get({ url: feedUrl });
+		const xmlStr = res.data;
+
+		// Browsers native fast C++ DOM deserialization
+		const parser = new DOMParser();
+		const doc = parser.parseFromString(xmlStr, 'application/xml');
+		const channel = doc.querySelector('channel');
+
+		// Handle parser errors embedded in document
+		if (!channel || doc.querySelector('parsererror')) {
+			throw new Error('Invalid RSS feed format.');
+		}
+
+		const feedImage = channel.querySelector('image url')?.textContent ?? '';
+
+		const items = Array.from(doc.querySelectorAll('item')).map(item => {
+			const title = item.querySelector('title')?.textContent ?? 'Untitled';
+			const rawDesc = item.querySelector('description')?.textContent 
+				?? item.getElementsByTagName('content:encoded')[0]?.textContent 
+				?? '';
+			
+			const description = rawDesc.replace(/<[^>]+>/g, '').trim().slice(0, 200);
+
+			const durationStr = item.querySelector('duration')?.textContent 
+				?? item.getElementsByTagName('itunes:duration')[0]?.textContent 
+				?? '0';
+			
+			const duration = parseDuration(durationStr);
+			const pubDate = item.querySelector('pubDate')?.textContent ?? '';
+
+			const enclosure = item.querySelector('enclosure');
+			const link = enclosure?.getAttribute('url') ?? item.querySelector('link')?.textContent ?? '';
+
+			return { title, description, duration, pubDate, link };
+		});
+
+		const result = { feed: { image: feedImage }, items };
+		rssCache.set(feedUrl, { data: result, ts: Date.now() });
+		return result;
 	}
 
 	// ── Helpers ─────────────────────────────────────────────────
@@ -256,28 +315,22 @@
 					selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
 				}
 			}
-			const data = await fetchRss(podcast.feedUrl) as Record<string, unknown>;
-			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
-			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
-				const enc = item.enclosure as { link?: string; length?: number } | null;
-				// itunes_duration is a string like "1:23:45" or seconds as number
-				const rawDur = item.itunes_duration ?? item.duration ?? 0;
+			const data = await fetchRss(podcast.feedUrl);
+			const eps: Episode[] = data.items.map((item, i: number) => {
 				return {
-			// prefix with itunesId so IDs are unique across podcasts
-				id:          `${podcast.itunesId}-${i}`,
-				title:       String(item.title ?? 'Untitled'),
-				description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
-				duration:    parseDuration(rawDur as string | number),
-				positionSec: 0,
-					publishedAt: String(item.pubDate ?? ''),
+					// prefix with itunesId so IDs are unique across podcasts
+					id:          `${podcast.itunesId}-${i}`,
+					title:       item.title,
+					description: item.description,
+					duration:    item.duration,
+					positionSec: 0,
+					publishedAt: item.pubDate,
 					played:      false,
 					progress:    0,
-					audioUrl:    enc?.link ?? String(item.link ?? ''),
+					audioUrl:    item.link,
 				};
 			});
-			const feedImage = typeof (data.feed as Record<string, unknown> | undefined)?.image === 'string'
-				? (data.feed as Record<string, unknown>).image as string
-				: '';
+			const feedImage = data.feed.image;
 			// Merge: preserve played/progress/positionSec from already-known episodes
 			const existingMap = new Map(
 				(podcastData.podcasts.find(p => p.id === podcast.id)?.episodes ?? []).map(e => [e.id, e])
@@ -436,7 +489,7 @@
 		</div>
 
 		<!-- Episode list body -->
-		<div class="flex-1 overflow-y-auto">
+		<div class="flex-1 overflow-y-auto relative" bind:this={episodeScrollEl}>
 			{#if episodesLoading}
 				<div class="flex flex-col items-center justify-center h-40 gap-3">
 					<div class="w-8 h-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin"></div>
@@ -456,51 +509,59 @@
 					<p class="text-sm">No episodes found</p>
 				</div>
 			{:else}
-				{#each selectedPodcast.episodes as episode}
-					<div class="p-4 border-b hover:bg-accent/40 transition-colors">
-						<div class="flex items-start gap-3">
-							<div class="flex-1 min-w-0">
-								<div class="flex items-center gap-2 mb-1">
-									{#if episode.played}
-										<CheckCircle2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-									{/if}
-									<p class="font-medium text-sm truncate {episode.played ? 'text-muted-foreground' : ''}">
-										{episode.title}
-									</p>
-								</div>
-								{#if episode.description}
-									<p class="text-xs text-muted-foreground line-clamp-2 mb-2">{episode.description}</p>
-								{/if}
-								<div class="flex items-center gap-3 text-xs text-muted-foreground">
-									{#if episode.duration > 0}
-										<span class="flex items-center gap-1">
-											<Clock class="w-3 h-3" />{formatTime(episode.duration)}
-										</span>
-									{/if}
-									{#if episode.publishedAt}
-										<span>{formatDate(episode.publishedAt)}</span>
-									{/if}
-								</div>
-								{#if episode.progress > 0 && episode.progress < 100}
-									<div class="mt-2 h-1 rounded-full bg-secondary overflow-hidden">
-										<div class="h-full bg-primary rounded-full" style="width: {episode.progress}%"></div>
+				<div style="height: {$virtualizerStore?.getTotalSize() ?? 0}px; width: 100%; position: relative;">
+					{#each $virtualizerStore?.getVirtualItems() ?? [] as virtualRow (virtualRow.index)}
+						{@const episode = selectedPodcast.episodes[virtualRow.index]}
+						<div
+							style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({virtualRow.start}px);"
+							use:virtualMeasure={virtualRow.index}
+						>
+							<div class="p-4 border-b hover:bg-accent/40 transition-colors">
+								<div class="flex items-start gap-3">
+									<div class="flex-1 min-w-0">
+										<div class="flex items-center gap-2 mb-1">
+											{#if episode.played}
+												<CheckCircle2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+											{/if}
+											<p class="font-medium text-sm truncate {episode.played ? 'text-muted-foreground' : ''}">
+												{episode.title}
+											</p>
+										</div>
+										{#if episode.description}
+											<p class="text-xs text-muted-foreground line-clamp-2 mb-2">{episode.description}</p>
+										{/if}
+										<div class="flex items-center gap-3 text-xs text-muted-foreground">
+											{#if episode.duration > 0}
+												<span class="flex items-center gap-1">
+													<Clock class="w-3 h-3" />{formatTime(episode.duration)}
+												</span>
+											{/if}
+											{#if episode.publishedAt}
+												<span>{formatDate(episode.publishedAt)}</span>
+											{/if}
+										</div>
+										{#if episode.progress > 0 && episode.progress < 100}
+											<div class="mt-2 h-1 rounded-full bg-secondary overflow-hidden">
+												<div class="h-full bg-primary rounded-full" style="width: {episode.progress}%"></div>
+											</div>
+										{/if}
 									</div>
-								{/if}
+									<Button
+										size="icon" variant={currentEpisode?.episode.id === episode.id && isPlaying ? 'default' : 'outline'}
+										class="shrink-0 w-9 h-9 rounded-full"
+										onclick={() => selectedPodcast && playEpisode(selectedPodcast, episode)}
+									>
+										{#if currentEpisode?.episode.id === episode.id && isPlaying}
+											<Pause class="w-4 h-4" />
+										{:else}
+											<Play class="w-4 h-4 ml-0.5" />
+										{/if}
+									</Button>
+								</div>
 							</div>
-							<Button
-								size="icon" variant={currentEpisode?.episode.id === episode.id && isPlaying ? 'default' : 'outline'}
-								class="shrink-0 w-9 h-9 rounded-full"
-								onclick={() => selectedPodcast && playEpisode(selectedPodcast, episode)}
-							>
-								{#if currentEpisode?.episode.id === episode.id && isPlaying}
-									<Pause class="w-4 h-4" />
-								{:else}
-									<Play class="w-4 h-4 ml-0.5" />
-								{/if}
-							</Button>
 						</div>
-					</div>
-				{/each}
+					{/each}
+				</div>
 			{/if}
 		</div>
 	</div>
@@ -556,6 +617,7 @@
 					>
 						{#if podcast.artworkUrl}
 							<img src={podcast.artworkUrl} alt={podcast.title}
+								loading="lazy"
 								class="w-13 h-13 rounded-xl object-cover shrink-0 w-[52px] h-[52px]" />
 						{:else}
 							<div class="w-[52px] h-[52px] rounded-xl bg-gradient-to-br {artGradient} flex items-center justify-center text-2xl shrink-0">
@@ -611,6 +673,7 @@
 						>
 							{#if item.artworkUrl600}
 								<img src={item.artworkUrl600} alt={item.trackName}
+									loading="lazy"
 									class="w-[52px] h-[52px] rounded-xl object-cover shrink-0" />
 							{:else}
 								<div class="w-[52px] h-[52px] rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-2xl shrink-0">

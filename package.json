@@ -40,6 +40,7 @@
 		"@capacitor/core": "^8.2.0",
 		"@capacitor/filesystem": "^8.1.2",
 		"@capawesome/capacitor-file-picker": "^8.0.2",
+		"@tanstack/svelte-virtual": "^3.13.23",
 		"bits-ui": "^2.16.3",
 		"clsx": "^2.1.1",
 		"lucide-svelte": "^0.577.0",

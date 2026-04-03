@@ -29,6 +29,7 @@
 	import SkeletonEntry from '$lib/components/ui/SkeletonEntry.svelte';
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, Heart, FolderOpen, Music2,
@@ -95,21 +96,16 @@
 		if (tracks.length === 0) {
 			musicSettings.lastTrackIndex = 0;
 			musicSettings.lastTrackTimestamp = 0;
-			currentTime = 0;
-			duration = 0;
-			isPlaying = false;
-			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+			mediaEngine.clear();
 			return;
 		}
 
 		if (resetToStart) {
 			// New folder: stop playback, clear audio, reset to track 0
-			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+			mediaEngine.clear();
 			isPlaying = false;
 			musicSettings.lastTrackIndex = 0;
 			musicSettings.lastTrackTimestamp = 0;
-			currentTime = 0;
-			duration = 0;
 		} else {
 			// Restore: keep saved position
 			musicSettings.lastTrackIndex = Math.min(musicSettings.lastTrackIndex, tracks.length - 1);
@@ -139,6 +135,25 @@
 	let isPlaying   = $derived(mediaEngine.isPlaying);
 
 
+	// ── default injected local UI states that were missing ──
+	let browsePath       = $state<string[]>((musicSettings.browsePath as string[]) || []);
+	let showQueue        = $state(false);
+	let showPanel        = $state<'none'|'speed'|'eq'>('none');
+	let isLiked          = $state(false);
+	let isRestoring      = $state(true);
+	let browseVersion    = $state(0);
+
+	let fileSearchQuery  = $state('');
+	let debouncedSearchQuery = $state('');
+	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	$effect(() => {
+		if (searchTimeout) clearTimeout(searchTimeout);
+		searchTimeout = setTimeout(() => {
+			debouncedSearchQuery = fileSearchQuery;
+		}, 300);
+	});
+
 	// ── folder browse state ──
 	let rootDirHandle    = $state<FileSystemDirectoryHandle | null>(null);
 	let nativeTreeUri    = $state<string | null>(null);
@@ -161,12 +176,33 @@
 
 	// ── Filtered browse entries (search by name) ─────────────────
 	const filteredEntries = $derived(
-		fileSearchQuery.trim().length === 0
+		debouncedSearchQuery.trim().length === 0
 			? browseEntries
 			: browseEntries.filter(e =>
-				e.name.toLowerCase().includes(fileSearchQuery.toLowerCase())
+				e.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
 			)
 	);
+
+	let browseScrollEl = $state<HTMLElement | null>(null);
+	const browseVirtualizerStore = $derived(
+		createVirtualizer({
+			count: filteredEntries.length,
+			getScrollElement: () => browseScrollEl,
+			estimateSize: () => 60, // approximate height of a row
+			overscan: 10,
+		})
+	);
+
+	function browseMeasure(node: HTMLElement, index: number) {
+		node.dataset.index = String(index);
+		if ($browseVirtualizerStore) $browseVirtualizerStore.measureElement(node);
+		return {
+			update(newIndex: number) {
+				node.dataset.index = String(newIndex);
+				if ($browseVirtualizerStore) $browseVirtualizerStore.measureElement(node);
+			}
+		};
+	}
 
 	// ── Drive folder picker dialog state ──
 	let showFolderPicker      = $state(false);
@@ -181,8 +217,9 @@
 	let filters: BiquadFilterNode[] = [];
 
 	// ── refs ──
-	let folderInputEl: HTMLInputElement;
-	let nativeFileInputEl: HTMLInputElement;
+	let folderInputEl = $state<HTMLInputElement | null>(null);
+	let nativeFileInputEl = $state<HTMLInputElement | null>(null);
+	let isLoading = $state(false);
 
 	// ── derived ──
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
@@ -205,20 +242,7 @@
 	});
 
 
-	function syncTrackToMediaEngine(index: number) {
-		const track = tracks[index];
-		if (!track) return;
-		if (mediaEngine.source && mediaEngine.source !== 'music') return;
-		mediaEngine.setNowPlaying({
-			id:         String(track.id),
-			source:     'music',
-			title:      track.title,
-			subtitle:   track.artist,
-			audioUrl:   '',
-			artworkUrl: undefined,
-			duration:   track.duration > 0 ? track.duration : undefined,
-		}, 'music');
-	}
+	// Removed syncTrackToMediaEngine - media engine handles syncing automatically.
 
 	$effect(() => {
 		const path = [...browsePath];
@@ -434,7 +458,7 @@
 		if (!track) return;
 		const pos = mp3TrackPositions.positions[getTrackKey(track.source)] ?? 0;
 		if (pos > 5) {
-			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = pos; }, { once: true });
+			setTimeout(() => mediaEngine.seek(pos), 250);
 		}
 	}
 
@@ -456,6 +480,21 @@
 	}
 
 	async function blobFromNativePath(path: string, mimeType?: string): Promise<Blob> {
+		// Prioritize Capacitor HTTP bridge to bypass native Base64 JS heap limits
+		if (Capacitor.isNativePlatform()) {
+			const candidate = Capacitor.convertFileSrc(path);
+			try {
+				const response = await fetch(candidate);
+				if (response.ok) {
+					const blob = await response.blob();
+					return new Blob([blob], { type: mimeType ?? blob.type ?? 'audio/mpeg' });
+				}
+			} catch {
+				/* fall back to direct file read if bridge fails */
+			}
+		}
+
+		// Fallback for non-native scenarios or bridge failure
 		try {
 			const result = await Filesystem.readFile({ path });
 			if (result.data instanceof Blob) {
@@ -466,23 +505,8 @@
 				type: mimeType ?? 'audio/mpeg',
 			});
 		} catch {
-			// Fall back to HTTP bridge reads for file:// paths if native read fails.
+			throw new Error(`Unable to read selected file at ${path}`);
 		}
-
-		const candidates = [Capacitor.convertFileSrc(path), path];
-
-		for (const candidate of candidates) {
-			try {
-				const response = await fetch(candidate);
-				if (response.ok) {
-					return await response.blob();
-				}
-			} catch {
-				// try next candidate
-			}
-		}
-
-		throw new Error(`Unable to read selected file at ${path}`);
 	}
 
 	function formatDriveAuthError(error: unknown): string {
@@ -774,12 +798,13 @@
 
 		const cacheKey = folderId ?? '_all';
 
+		try {
 			if (!forceRefresh) {
 				const cached = library.allFiles;
 				if (cached.length > 0 && !ctrl.signal.aborted) {
 					// Instant restore from Memory/IDB — use cached file list immediately
-					if (audioEl) { audioEl.pause(); audioEl.src = ''; }
-					isPlaying = false; currentTime = 0; duration = 0; tracks = [];
+					mediaEngine.clear();
+					tracks = [];
 					isDriveLoading = false;
 					activateDriveLibrary();
 
@@ -803,8 +828,8 @@
 			}
 
 			// Fresh scan — stop playback then stream files progressively into the UI
-			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
-			isPlaying = false; currentTime = 0; duration = 0; tracks = [];
+			mediaEngine.clear();
+			tracks = [];
 
 
 			const collectedFiles: StoredAudioFile[] = [];
@@ -879,12 +904,9 @@
 		}
 
 		if (tracks.some((track) => track.source.source === 'drive')) {
-			audioEl?.pause();
+			mediaEngine.clear();
 			revokeAll();
 			tracks = [];
-			currentTime = 0;
-			duration = 0;
-			isPlaying = false;
 		}
 
 		driveAccessToken = '';
@@ -990,30 +1012,13 @@
 	}
 
 	async function ensureTrackUrlForFile(f: StoredAudioFile, interactiveAuth = false): Promise<string | null> {
-		if (f.source === 'web') {
-			return URL.createObjectURL(f.file);
+		try {
+			const file = await materializeStoredFile(f, interactiveAuth);
+			return URL.createObjectURL(file);
+		} catch (error) {
+			console.error('Failed to ensure track URL:', error);
+			return null;
 		}
-		if (f.source === 'drive') {
-			try {
-				const blob = await downloadDriveFile(f.id, interactiveAuth);
-				if (!blob) return null;
-				return URL.createObjectURL(blob);
-			} catch (error) {
-				console.error('Failed to download drive file:', error);
-				return null;
-			}
-		}
-		if (f.source === 'native') {
-			try {
-				const blob = await readNativeFileAsBlob(f.path);
-				if (!blob) return null;
-				return URL.createObjectURL(blob);
-			} catch (error) {
-				console.error('Failed to read native file:', error);
-				return null;
-			}
-		}
-		return null;
 	}
 
 	async function collectAllFromPath(path: string[]): Promise<StoredAudioFile[]> {
@@ -1142,7 +1147,6 @@
 		musicSettings.lastTrackTimestamp = 0;
 		preloadedTrackIndex = null;
 		preloadRequestId += 1;
-		currentTime = 0; duration = 0; isPlaying = false;
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -1316,7 +1320,7 @@
 		// Hydrate specific track immediately
 		const trackFile = sorted[idx];
 		const url = await ensureTrackUrlForFile(trackFile);
-		mediaItems[idx].audioUrl = url;
+		mediaItems[idx].audioUrl = url || '';
 
 		mediaEngine.setQueue(mediaItems, idx);
 		mediaEngine.play(mediaItems[idx], 'music');
@@ -1408,12 +1412,6 @@
 		mediaEngine.prev();
 	}
 
-			applyTrackPosition(prevIndex);
-			void preloadNextTrack(prevIndex);
-			if (isPlaying) audioEl.play().catch(() => {});
-		}
-	}
-
 	function handleSeekInput(e: Event) {
 		// Track drag position visually without touching audio (prevents timeupdate reset)
 		seekingValue = parseFloat((e.target as HTMLInputElement).value);
@@ -1462,39 +1460,11 @@
 		}
 		void (async () => {
 			try {
-				const [handle, cachedLibrary] = await Promise.all([loadHandleFromIDB(), loadCachedLibrary()]);
-				if (cachedLibrary && cachedLibrary.files.length > 0) {
-					library.setFiles(restoreStoredFilesFromCache(cachedLibrary), cachedLibrary.folderName);
+				if (library.allFiles.length > 0) {
 					hydrateTracksFromLibrary(library.allFiles);
 					showQueue = true;
 					browseVersion++;
 				}
-				if (isNativeApp && musicSettings.nativeTreeUri) {
-					nativeTreeUri = musicSettings.nativeTreeUri;
-					rootDirHandle = null;
-					pendingHandle = null;
-					showQueue = true;
-					browseVersion++;
-				}
-				if (!('showDirectoryPicker' in window) || !handle) return;
-				type FSHandle = { queryPermission(o: object): Promise<string> };
-				// queryPermission is safe to call without a user gesture.
-				// If Chrome still has the permission in this session, we restore silently.
-				// Otherwise we show the "Reconnect" button — requestPermission happens there
-				// (inside reconnectFolder) where a real user gesture exists.
-				const perm = await (handle as unknown as FSHandle).queryPermission({ mode: 'read' });
-				if (perm === 'granted') {
-					rootDirHandle = handle;
-					nativeTreeUri = null;
-
-					browseVersion++;
-					showQueue = true;
-				} else {
-					// 'prompt' or 'denied' — need user gesture to re-request
-					pendingHandle = handle;
-				}
-			} catch {
-				// IDB or permission API unavailable — show plain Open Folder
 			} finally {
 				isRestoring = false;
 			}
@@ -1623,7 +1593,7 @@
 				<Button
 					variant="ghost" size="icon" class="w-9 h-9 rounded-xl transition-all"
 					title="Rescan library"
-					onclick={() => library.rescan({ rootDirHandle })}
+					onclick={() => library.rescan({ rootDirHandle: rootDirHandle ?? undefined })}
 					disabled={browseLoading}
 				>
 					<RefreshCw class="w-4 h-4 {browseLoading ? 'animate-spin text-primary' : ''}" />
@@ -1765,9 +1735,9 @@
 		{/if}
 
 		<!-- Entry list -->
-		<div class="flex-1 overflow-y-auto min-h-0">
+		<div class="flex flex-col flex-1 min-h-0">
 			{#if browseEntries.length > 0}
-				<div class="px-4 pt-3 pb-1">
+				<div class="px-4 py-2 border-b shrink-0 bg-background/50 backdrop-blur-md">
 					<div class="relative">
 						<Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
 						<input
@@ -1780,68 +1750,79 @@
 					</div>
 				</div>
 			{/if}
-			{#if browseLoading}
-				<div class="flex flex-col">
-					{#each Array(8) as _}
-						<SkeletonEntry />
-					{/each}
-				</div>
-			{:else if filteredEntries.length === 0}
-				<p class="text-center text-muted-foreground text-sm py-12">
-					{#if fileSearchQuery.trim()}
-						No files match “{fileSearchQuery}”
-					{:else if musicSettings.librarySource === 'drive'}
-						{driveSearch ? 'No Google Drive MP3s match your search' : 'No MP3 files were found in Google Drive'}
-					{:else}
-						No MP3 files or folders here
-					{/if}
-				</p>
-			{:else}
-				{#each filteredEntries as entry}
-					{#if entry.kind === 'folder'}
-					<!-- Folder row -->
-					<div in:fade={{ duration: 150 }} class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
-						<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
-							<Folder class="w-4.5 h-4.5 text-primary" />
-						</div>
-						<button class="flex-1 min-w-0 text-left" onclick={() => navigateInto(entry.name)}>
-							<p class="font-medium text-sm truncate">{entry.name}</p>
-							<p class="text-xs text-muted-foreground">{entry.count > 0 ? entry.count + ' MP3 file' + (entry.count !== 1 ? 's' : '') : 'folder'}</p>
-						</button>
-						<!-- Play all in this subfolder -->
-						<button
-							class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
-							onclick={() => playFolderPath([...browsePath, entry.name])}
-							aria-label="Play {entry.name}"
-						>
-							<Play class="w-4 h-4 ml-0.5" />
-						</button>
-						<!-- Navigate into -->
-						<button class="text-muted-foreground shrink-0" onclick={() => navigateInto(entry.name)} aria-label="Browse {entry.name}">
-							<ChevronRight class="w-5 h-5" />
-						</button>
+			
+			<div class="flex-1 overflow-y-auto relative" bind:this={browseScrollEl}>
+				{#if browseLoading}
+					<div class="flex flex-col">
+						{#each Array(8) as _}
+							<SkeletonEntry />
+						{/each}
 					</div>
-					{:else}
-					<!-- File row -->
-					<div in:fade={{ duration: 150 }} class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
-						<div class="w-9 h-9 rounded-lg bg-muted/40 flex items-center justify-center shrink-0">
-							<Music2 class="w-4 h-4 text-muted-foreground" />
-						</div>
-						<button class="flex-1 min-w-0 text-left" onclick={() => playBrowseFile(entry)}>
-							<p class="font-medium text-sm truncate">{parseFilename(entry.name).title}</p>
-							<p class="text-xs text-muted-foreground truncate">{parseFilename(entry.name).artist}</p>
-						</button>
-						<button
-							class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
-							onclick={() => playBrowseFile(entry)}
-							aria-label="Play {entry.name}"
-						>
-							<Play class="w-4 h-4 ml-0.5" />
-						</button>
+				{:else if filteredEntries.length === 0}
+					<p class="text-center text-muted-foreground text-sm py-12">
+						{#if fileSearchQuery.trim()}
+							No files match “{fileSearchQuery}”
+						{:else if musicSettings.librarySource === 'drive'}
+							{driveSearch ? 'No Google Drive MP3s match your search' : 'No MP3 files were found in Google Drive'}
+						{:else}
+							No MP3 files or folders here
+						{/if}
+					</p>
+				{:else}
+					<div style="height: {$browseVirtualizerStore?.getTotalSize() ?? 0}px; width: 100%; position: relative;">
+						{#each $browseVirtualizerStore?.getVirtualItems() ?? [] as virtualRow (virtualRow.index)}
+							{@const entry = filteredEntries[virtualRow.index]}
+							<div
+								style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({virtualRow.start}px);"
+								use:browseMeasure={virtualRow.index}
+							>
+								{#if entry.kind === 'folder'}
+								<!-- Folder row -->
+								<div in:fade={{ duration: 150 }} class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
+									<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+										<Folder class="w-4.5 h-4.5 text-primary" />
+									</div>
+									<button class="flex-1 min-w-0 text-left" onclick={() => navigateInto(entry.name)}>
+										<p class="font-medium text-sm truncate">{entry.name}</p>
+										<p class="text-xs text-muted-foreground">{entry.count > 0 ? entry.count + ' MP3 file' + (entry.count !== 1 ? 's' : '') : 'folder'}</p>
+									</button>
+									<!-- Play all in this subfolder -->
+									<button
+										class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
+										onclick={() => playFolderPath([...browsePath, entry.name])}
+										aria-label="Play {entry.name}"
+									>
+										<Play class="w-4 h-4 ml-0.5" />
+									</button>
+									<!-- Navigate into -->
+									<button class="text-muted-foreground shrink-0" onclick={() => navigateInto(entry.name)} aria-label="Browse {entry.name}">
+										<ChevronRight class="w-5 h-5" />
+									</button>
+								</div>
+								{:else}
+								<!-- File row -->
+								<div in:fade={{ duration: 150 }} class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
+									<div class="w-9 h-9 rounded-lg bg-muted/40 flex items-center justify-center shrink-0">
+										<Music2 class="w-4 h-4 text-muted-foreground" />
+									</div>
+									<button class="flex-1 min-w-0 text-left" onclick={() => playBrowseFile(entry)}>
+										<p class="font-medium text-sm truncate">{parseFilename(entry.name).title}</p>
+										<p class="text-xs text-muted-foreground truncate">{parseFilename(entry.name).artist}</p>
+									</button>
+									<button
+										class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
+										onclick={() => playBrowseFile(entry)}
+										aria-label="Play {entry.name}"
+									>
+										<Play class="w-4 h-4 ml-0.5" />
+									</button>
+								</div>
+								{/if}
+							</div>
+						{/each}
 					</div>
-					{/if}
-				{/each}
-			{/if}
+				{/if}
+			</div>
 		</div>
 
 
@@ -1922,7 +1903,7 @@
 				class="w-14 h-14 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg">
 				{#if isPlaying}<Pause class="w-7 h-7" />{:else}<Play class="w-7 h-7 ml-0.5" />{/if}
 			</Button>
-			<Button variant="ghost" size="icon" onclick={() => advanceTrack(isPlaying, true)}>
+			<Button variant="ghost" size="icon" onclick={() => advanceTrack(isPlaying)}>
 				<SkipForward class="w-8 h-8" />
 			</Button>
 			<Button variant="ghost" size="icon"
