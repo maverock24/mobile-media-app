@@ -7,7 +7,7 @@
 	let { kind = 'random' }: Props = $props();
 
 	// If random, decide once on mount to avoid flickering
-	const actualKind = kind === 'random' ? (Math.random() > 0.4 ? 'file' : 'folder') : kind;
+	const actualKind = $derived(kind === 'random' ? (Math.random() > 0.4 ? 'file' : 'folder') : kind);
 </script>
 
 <div class="flex items-center gap-3 px-4 py-3 border-b animate-pulse">

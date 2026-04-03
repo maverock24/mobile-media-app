@@ -89,10 +89,15 @@ jobs:
 
       - name: Resolve Netlify site URL
         id: netlify_meta
+        continue-on-error: true
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
+          if [[ -z "$NETLIFY_AUTH_TOKEN" || -z "$NETLIFY_SITE_ID" ]]; then
+            echo "Netlify secrets missing. Using fallback URL."
+            exit 0
+          fi
           NETLIFY_SITE_URL=$(curl -sf "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}" \
             -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" | jq -r '.ssl_url // .url // empty')
           echo "site_url=${NETLIFY_SITE_URL}" >> "$GITHUB_OUTPUT"
@@ -136,7 +141,8 @@ jobs:
           if [[ -n "$NETLIFY_SITE_URL" ]]; then
             APK_URL="${NETLIFY_SITE_URL}/releases/android/latest.apk"
           else
-            APK_URL="/releases/android/latest.apk"
+            # Fallback to the known production Nelify URL if resolution fails
+            APK_URL="https://mobile-media-app-maverock24.netlify.app/releases/android/latest.apk"
           fi
 
           cat <<EOF > static/releases/android/latest.json
