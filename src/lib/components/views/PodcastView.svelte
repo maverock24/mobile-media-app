@@ -102,20 +102,30 @@
 
 
 	// ── Sync track position & progress ───────────────────────────
+	let lastFlushTime = 0;
 	$effect(() => {
-		if (mediaEngine.source !== 'podcast' || !isPlaying || !currentEpisode) return;
+		if (mediaEngine.source !== 'podcast' || !currentEpisode) return;
 		
 		const cur = mediaEngine.currentTime;
 		const dur = mediaEngine.duration;
 		
+		// Update local episode object frequently (smooth UI)
 		currentEpisode.episode.positionSec = cur;
 		if (dur > 0) {
 			currentEpisode.episode.progress = Math.min(100, Math.round((cur / dur) * 100));
 		}
 
-		// Periodic save
-		podcastData.lastEpisodeId = currentEpisode.episode.id;
-		podcastData.lastPositionSec = cur;
+		// Only flush to the global persisted store (triggers Drive sync/persist)
+		// on pause OR every 30 seconds during active playback.
+		const isPlayingNow = mediaEngine.isPlaying;
+		const timeSinceFlush = Date.now() - lastFlushTime;
+
+		if (!isPlayingNow || timeSinceFlush > 30000) {
+			lastFlushTime = Date.now();
+			// These updates trigger LocalStorage/Drive sync via the driveConfigSync effect
+			podcastData.lastEpisodeId = currentEpisode.episode.id;
+			podcastData.lastPositionSec = cur;
+		}
 	});
 
 	// ── Sync playback speed ──────────────────────────────────────

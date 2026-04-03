@@ -265,11 +265,19 @@
 	});
 
 	// ── Sync track position & progress ──
+	let lastFlushTime = 0;
 	$effect(() => {
-		if (mediaEngine.source !== 'music' || !isPlaying) return;
-		// Persist position periodically for resume support
-		musicSettings.lastTrackTimestamp = mediaEngine.currentTime;
-		saveTrackPosition(musicSettings.lastTrackIndex, mediaEngine.currentTime);
+		if (mediaEngine.source !== 'music') return;
+		const cur = mediaEngine.currentTime;
+		const isPlayingNow = mediaEngine.isPlaying;
+
+		// Only flush to persisted settings on pause OR every 30 seconds.
+		// Frequent writes to LocalStorage/Drive cause lag on large libraries.
+		if (!isPlayingNow || (Date.now() - lastFlushTime > 30000)) {
+			lastFlushTime = Date.now();
+			musicSettings.lastTrackTimestamp = cur;
+			saveTrackPosition(musicSettings.lastTrackIndex, cur);
+		}
 	});
 
 	// ── Auto-save to Drive when key music settings change ──

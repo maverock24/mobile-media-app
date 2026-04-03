@@ -25,6 +25,9 @@ class LibraryStore {
 	#allFiles = $state<StoredAudioFile[]>([]);
 	#isLoading = $state(false);
 	#lastScanAt = $state<number | null>(null);
+	#folderTree = $state<Map<string, { folders: BrowseEntry[], files: BrowseEntry[] }>>(new Map([["", { folders: [], files: [] }]]));
+	#treeUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+	#isTreeSyncing = $state(false);
 
 	get allFiles() { return this.#allFiles; }
 	get isLoading() { return this.#isLoading; }
@@ -80,21 +83,29 @@ class LibraryStore {
 		db.close();
 	}
 
-	// ── Folder Tree Derivation ───────────────────────────────────
-	// Pre-calculated index for $derived folder navigation
-	// Map<"path/to/folder", { folders: [], files: [] }>
-	#folderTree = $derived.by(() => {
+	// ── Async Folder Tree Rebuild (Debounced) ───────────────────
+	scheduleTreeRebuild() {
+		if (this.#treeUpdateTimer) clearTimeout(this.#treeUpdateTimer);
+		this.#treeUpdateTimer = setTimeout(() => {
+			this.#treeUpdateTimer = null;
+			void this.#rebuildFolderTree();
+		}, 300);
+	}
+
+	async #rebuildFolderTree() {
+		this.#isTreeSyncing = true;
+		// Break the synchronous execution stack to allow UI frames
+		await new Promise(res => setTimeout(res, 0));
+
+		const files = this.#allFiles;
 		const tree = new Map<string, { folders: BrowseEntry[], files: BrowseEntry[] }>();
-		
-		// Root is empty string ""
 		tree.set("", { folders: [], files: [] });
 
-		for (const file of this.#allFiles) {
+		for (const file of files) {
 			const rel = file.relativePath || file.name;
 			const segments = rel.split('/');
 			const fileName = segments.pop()!;
 			
-			// Traverse path segments to build tree
 			let currentPath = "";
 			for (const segment of segments) {
 				const parentPath = currentPath;
@@ -102,7 +113,6 @@ class LibraryStore {
 				
 				if (!tree.has(currentPath)) {
 					tree.set(currentPath, { folders: [], files: [] });
-					// Add this folder to its parent
 					const parent = tree.get(parentPath)!;
 					if (!parent.folders.find(f => f.name === segment)) {
 						parent.folders.push({ kind: 'folder', name: segment, count: 0 });
@@ -110,12 +120,12 @@ class LibraryStore {
 				}
 			}
 			
-			// Add file to its folder
-			const fileFolder = tree.get(currentPath)!;
-			fileFolder.files.push({ kind: 'file', name: fileName, file });
+			const fileFolder = tree.get(currentPath);
+			if (fileFolder) {
+				fileFolder.files.push({ kind: 'file', name: fileName, file });
+			}
 		}
 
-		// Calculate counts and sort
 		for (const [path, node] of tree.entries()) {
 			node.folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 			node.files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -129,11 +139,13 @@ class LibraryStore {
 			}
 		}
 
-		return tree;
-	});
+		this.#folderTree = tree;
+		this.#isTreeSyncing = false;
+	}
 
 
 	get folderTree() { return this.#folderTree; }
+	get isTreeSyncing() { return this.#isTreeSyncing; }
 
 	getBrowseEntries(path: string[]): BrowseEntry[] {
 		const pathStr = path.join('/');
@@ -151,6 +163,7 @@ class LibraryStore {
 		const cached = await this.#loadFromCache(folderName);
 		if (cached) {
 			this.#allFiles = cached;
+			void this.#rebuildFolderTree(); // Sync now for instant cache hit
 		}
 	}
 
@@ -188,6 +201,7 @@ class LibraryStore {
 			this.#allFiles = files;
 			this.#lastScanAt = Date.now();
 			await this.#saveToCache(files, treeUri);
+			this.scheduleTreeRebuild();
 		} catch (e) {
 			console.error('Native rescan failed', e);
 		}
@@ -215,6 +229,7 @@ class LibraryStore {
 		this.#allFiles = files;
 		this.#lastScanAt = Date.now();
 		await this.#saveToCache(files, handle.name);
+		this.scheduleTreeRebuild();
 	}
 
 	async #rescanDrive() {
@@ -238,12 +253,14 @@ class LibraryStore {
 		this.#allFiles = files;
 		this.#lastScanAt = Date.now();
 		await this.#saveToCache(files, musicSettings.driveFolderId || '_all');
+		this.scheduleTreeRebuild();
 	}
 
 	setFiles(files: StoredAudioFile[], folderName: string) {
 		this.#allFiles = files;
 		this.#lastScanAt = Date.now();
 		void this.#saveToCache(files, folderName);
+		this.scheduleTreeRebuild();
 	}
 }
 

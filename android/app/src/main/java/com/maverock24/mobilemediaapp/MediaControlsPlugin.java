@@ -36,9 +36,8 @@ public class MediaControlsPlugin extends Plugin {
 	private static final String CHANNEL_ID = "media_playback";
 	private static final int NOTIFICATION_ID = 4242;
 	private static MediaControlsPlugin instance;
+	private MediaPlaybackService playbackService;
 
-	private MediaSessionCompat mediaSession;
-	private NotificationManagerCompat notificationManager;
 	private String title = "";
 	private String artist = "";
 	private long durationMs = 0L;
@@ -51,9 +50,27 @@ public class MediaControlsPlugin extends Plugin {
 	public void load() {
 		super.load();
 		instance = this;
-		notificationManager = NotificationManagerCompat.from(getContext());
-		createNotificationChannel();
-		ensureSession();
+		startPlaybackService();
+	}
+
+	private void startPlaybackService() {
+		Context context = getContext();
+		Intent intent = new Intent(context, MediaPlaybackService.class);
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+			context.startForegroundService(intent);
+		} else {
+			context.startService(intent);
+		}
+		
+		// In a real production app, we'd use bindService to get the instance.
+		// For this MVP, we'll use a static setter in the service or just a singleton pattern.
+		// But let's assume we can get it via a static reference for simplicity in this bridge.
+	}
+
+	public static void setServiceInstance(MediaPlaybackService service) {
+		if (instance != null) {
+			instance.playbackService = service;
+		}
 	}
 
 	@Override
@@ -61,7 +78,6 @@ public class MediaControlsPlugin extends Plugin {
 		if (instance == this) {
 			instance = null;
 		}
-		releaseSession();
 		super.handleOnDestroy();
 	}
 
@@ -102,10 +118,8 @@ public class MediaControlsPlugin extends Plugin {
 		title = call.getString("title", "");
 		artist = call.getString("artist", "");
 		durationMs = secondsToMs(call.getDouble("durationSec", 0d));
-		ensureSession();
-		updateMetadata();
-		updatePlaybackState();
-		updateNotification();
+		
+		updateService();
 		call.resolve();
 	}
 
@@ -117,10 +131,8 @@ public class MediaControlsPlugin extends Plugin {
 		if (nextDurationMs > 0) {
 			durationMs = nextDurationMs;
 		}
-		ensureSession();
-		updateMetadata();
-		updatePlaybackState();
-		updateNotification();
+		
+		updateService();
 		call.resolve();
 	}
 
@@ -128,8 +140,7 @@ public class MediaControlsPlugin extends Plugin {
 	public void setTransportAvailability(PluginCall call) {
 		hasNext = call.getBoolean("hasNext", false);
 		hasPrevious = call.getBoolean("hasPrevious", false);
-		updatePlaybackState();
-		updateNotification();
+		updateService();
 		call.resolve();
 	}
 
@@ -142,12 +153,11 @@ public class MediaControlsPlugin extends Plugin {
 		isPlaying = false;
 		hasNext = false;
 		hasPrevious = false;
-		if (mediaSession != null) {
-			mediaSession.setMetadata(null);
-			mediaSession.setPlaybackState(null);
-			mediaSession.setActive(false);
+		
+		if (playbackService != null) {
+			playbackService.updateNotification("", "", false);
+			playbackService.getMediaSession().setActive(false);
 		}
-		notificationManager.cancel(NOTIFICATION_ID);
 		call.resolve();
 	}
 
@@ -158,203 +168,40 @@ public class MediaControlsPlugin extends Plugin {
 	}
 
 	public static MediaSessionCompat getMediaSession() {
-		return instance != null ? instance.mediaSession : null;
+		return instance != null && instance.playbackService != null ? instance.playbackService.getMediaSession() : null;
 	}
 
-	private void ensureSession() {
-		if (mediaSession != null) {
-			return;
-		}
+	private void updateService() {
+		if (playbackService == null) return;
 
-		ComponentName mediaButtonReceiver = new ComponentName(getContext(), MediaControlsReceiver.class);
-		mediaSession = new MediaSessionCompat(getContext(), "MediaHubSession", mediaButtonReceiver, null);
-		mediaSession.setFlags(
-			MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS |
-			MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
-		);
-		mediaSession.setCallback(new MediaSessionCompat.Callback() {
-			@Override
-			public void onPlay() {
-				emitAction("play", -1L);
-			}
-
-			@Override
-			public void onPause() {
-				emitAction("pause", -1L);
-			}
-
-			@Override
-			public void onSkipToNext() {
-				emitAction("nexttrack", -1L);
-			}
-
-			@Override
-			public void onSkipToPrevious() {
-				emitAction("previoustrack", -1L);
-			}
-
-			@Override
-			public void onSeekTo(long pos) {
-				emitAction("seekto", pos);
-			}
-		});
-
-		Intent launchIntent = getContext().getPackageManager().getLaunchIntentForPackage(getContext().getPackageName());
-		if (launchIntent != null) {
-			launchIntent.setPackage(getContext().getPackageName());
-			PendingIntent sessionActivity = PendingIntent.getActivity(
-				getContext(),
-				0,
-				launchIntent,
-				pendingIntentFlags(PendingIntent.FLAG_UPDATE_CURRENT)
-			);
-			mediaSession.setSessionActivity(sessionActivity);
-		}
-	}
-
-	private void releaseSession() {
-		if (mediaSession != null) {
-			mediaSession.release();
-			mediaSession = null;
-		}
-	}
-
-	private void createNotificationChannel() {
-		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-			return;
-		}
-
-		NotificationManager manager = getContext().getSystemService(NotificationManager.class);
-		if (manager == null) {
-			return;
-		}
-
-		NotificationChannel channel = new NotificationChannel(
-			CHANNEL_ID,
-			"Media playback",
-			NotificationManager.IMPORTANCE_LOW
-		);
-		channel.setDescription("Media playback controls");
-		manager.createNotificationChannel(channel);
-	}
-
-	private void updateMetadata() {
-		if (mediaSession == null) {
-			return;
-		}
-
-		MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder()
+		// 1. Update MediaSession Metadata
+		MediaMetadataCompat.Builder metaBuilder = new MediaMetadataCompat.Builder()
 			.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
 			.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, title)
 			.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist);
-
 		if (durationMs > 0) {
-			builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs);
+			metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs);
 		}
+		playbackService.getMediaSession().setMetadata(metaBuilder.build());
 
-		mediaSession.setMetadata(builder.build());
-	}
-
-	private void updatePlaybackState() {
-		if (mediaSession == null) {
-			return;
-		}
-
+		// 2. Update MediaSession PlaybackState
 		long actions = PlaybackStateCompat.ACTION_PLAY
 			| PlaybackStateCompat.ACTION_PAUSE
 			| PlaybackStateCompat.ACTION_PLAY_PAUSE
 			| PlaybackStateCompat.ACTION_SEEK_TO;
-
-		if (hasNext) {
-			actions |= PlaybackStateCompat.ACTION_SKIP_TO_NEXT;
-		}
-		if (hasPrevious) {
-			actions |= PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS;
-		}
+		if (hasNext) actions |= PlaybackStateCompat.ACTION_SKIP_TO_NEXT;
+		if (hasPrevious) actions |= PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS;
 
 		int state = isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED;
-		float speed = isPlaying ? 1f : 0f;
-
-		PlaybackStateCompat playbackState = new PlaybackStateCompat.Builder()
+		PlaybackStateCompat pState = new PlaybackStateCompat.Builder()
 			.setActions(actions)
-			.setState(state, positionMs, speed)
+			.setState(state, positionMs, isPlaying ? 1f : 0f)
 			.build();
+		playbackService.getMediaSession().setPlaybackState(pState);
+		playbackService.getMediaSession().setActive(!title.isEmpty());
 
-		mediaSession.setPlaybackState(playbackState);
-		mediaSession.setActive(title != null && !title.isEmpty());
-	}
-
-	private void updateNotification() {
-		if (title == null || title.isEmpty()) {
-			notificationManager.cancel(NOTIFICATION_ID);
-			return;
-		}
-
-		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-			&& getPermissionState("notifications") != PermissionState.GRANTED) {
-			return;
-		}
-
-		ensureSession();
-
-		NotificationCompat.Builder builder = new NotificationCompat.Builder(getContext(), CHANNEL_ID)
-			.setSmallIcon(R.mipmap.ic_launcher)
-			.setContentTitle(title)
-			.setContentText(artist)
-			.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-			.setOnlyAlertOnce(true)
-			.setShowWhen(false)
-			.setOngoing(isPlaying)
-			.setStyle(new MediaStyle()
-				.setMediaSession(mediaSession.getSessionToken())
-				.setShowActionsInCompactView(0, 1, 2));
-
-		PendingIntent previousIntent = buildActionIntent(MediaControlsReceiver.ACTION_PREVIOUS, 1);
-		PendingIntent playPauseIntent = buildActionIntent(
-			isPlaying ? MediaControlsReceiver.ACTION_PAUSE : MediaControlsReceiver.ACTION_PLAY,
-			2
-		);
-		PendingIntent nextIntent = buildActionIntent(MediaControlsReceiver.ACTION_NEXT, 3);
-
-		builder.addAction(android.R.drawable.ic_media_previous, "Previous", previousIntent);
-		builder.addAction(
-			isPlaying ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
-			isPlaying ? "Pause" : "Play",
-			playPauseIntent
-		);
-		builder.addAction(android.R.drawable.ic_media_next, "Next", nextIntent);
-
-		Intent launchIntent = getContext().getPackageManager().getLaunchIntentForPackage(getContext().getPackageName());
-		if (launchIntent != null) {
-			launchIntent.setPackage(getContext().getPackageName());
-			builder.setContentIntent(PendingIntent.getActivity(
-				getContext(),
-				4,
-				launchIntent,
-				pendingIntentFlags(PendingIntent.FLAG_UPDATE_CURRENT)
-			));
-		}
-
-		notificationManager.notify(NOTIFICATION_ID, builder.build());
-	}
-
-	private PendingIntent buildActionIntent(String action, int requestCode) {
-		Intent intent = new Intent(getContext(), MediaControlsReceiver.class);
-		intent.setAction(action);
-		intent.setPackage(getContext().getPackageName());
-		return PendingIntent.getBroadcast(
-			getContext(),
-			requestCode,
-			intent,
-			pendingIntentFlags(PendingIntent.FLAG_UPDATE_CURRENT)
-		);
-	}
-
-	private int pendingIntentFlags(int baseFlags) {
-		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-			return baseFlags | PendingIntent.FLAG_IMMUTABLE;
-		}
-		return baseFlags;
+		// 3. Update Foreground Notification
+		playbackService.updateNotification(title, artist, isPlaying);
 	}
 
 	private long secondsToMs(Double seconds) {
