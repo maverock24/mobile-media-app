@@ -13,4 +13,6 @@ export interface MediaItem {
 	audioUrl: string;
 	artworkUrl?: string;
 	duration?: number;          // seconds, if known ahead of time
+	/** Optional callback to resolve a dynamic URL (e.g. temporary Blob or Drive URL) */
+	resolveUrl?: () => Promise<string | null>;
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
+	import { fade, fly } from 'svelte/transition';
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
@@ -23,7 +24,9 @@
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { mp3TrackPositions } from '$lib/stores/settings.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
+	import { library, type StoredAudioFile, type BrowseEntry } from '$lib/stores/library.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
+	import SkeletonEntry from '$lib/components/ui/SkeletonEntry.svelte';
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import {
@@ -40,27 +43,6 @@
 		source: StoredAudioFile;
 	}
 
-	type StoredAudioFile =
-		| { source: 'web'; name: string; relativePath: string; file: File }
-		| { source: 'native'; name: string; relativePath: string; path: string; mimeType?: string; modifiedAt?: number }
-		| {
-			source: 'drive';
-			name: string;
-			relativePath: string;
-			fileId: string;
-			mimeType?: string;
-			modifiedAt?: number;
-			sizeBytes?: number;
-			webViewLink?: string;
-		};
-
-	type BrowseEntry =
-		| { kind: 'folder'; name: string; count: number }
-		| { kind: 'file'; name: string; file: StoredAudioFile };
-
-	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
-	const googleDriveConfigured = isGoogleDriveConfigured();
-	const googleDriveClientId = getGoogleDriveClientId();
 	type CachedWebLibraryFile = { source: 'web'; name: string; relativePath: string; file: File };
 	type CachedNativeLibraryFile = {
 		source: 'native';
@@ -73,157 +55,26 @@
 	type CachedLibraryFile = CachedWebLibraryFile | CachedNativeLibraryFile;
 	type CachedLibrary = { folderName: string; files: CachedLibraryFile[]; savedAt: number };
 
+	const isNativeApp = Capacitor.isNativePlatform();
+	const googleDriveConfigured = isGoogleDriveConfigured();
+	const googleDriveClientId = getGoogleDriveClientId();
+
 	// ── IndexedDB persistence for FileSystemDirectoryHandle ──────
-	function openIDB(): Promise<IDBDatabase> {
-		return new Promise((res, rej) => {
-			const req = indexedDB.open('music-app', 2);
-			req.onupgradeneeded = () => {
-				const db = req.result;
-				if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles');
-				if (!db.objectStoreNames.contains('libraries')) db.createObjectStore('libraries');
-			};
-			req.onsuccess = () => res(req.result);
-			req.onerror  = () => rej(req.error);
-		});
-	}
-	async function saveHandleToIDB(handle: FileSystemDirectoryHandle) {
-		try {
-			const db = await openIDB();
-			const tx = db.transaction('handles', 'readwrite');
-			tx.objectStore('handles').put(handle, 'last-dir');
-			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
-			db.close();
-		} catch { /* storage unavailable */ }
-	}
-	async function loadHandleFromIDB(): Promise<FileSystemDirectoryHandle | null> {
-		try {
-			const db = await openIDB();
-			const tx = db.transaction('handles', 'readonly');
-			const result = await new Promise<FileSystemDirectoryHandle | null>((res, rej) => {
-				const req = tx.objectStore('handles').get('last-dir');
-				req.onsuccess = () => res((req.result as FileSystemDirectoryHandle) ?? null);
-				req.onerror  = () => rej(req.error);
-			});
-			db.close();
-			return result;
-		} catch { return null; }
-	}
-	async function saveCachedLibrary(folderName: string, files: StoredAudioFile[]) {
-		const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
-			if (file.source === 'web') {
-				accumulator.push({
-					source: 'web',
-					name: file.name,
-					relativePath: file.relativePath,
-					file: file.file,
-				});
-				return accumulator;
-			}
-
-			if (file.source === 'native') {
-				accumulator.push({
-					source: 'native',
-					name: file.name,
-					relativePath: file.relativePath,
-					path: file.path,
-					mimeType: file.mimeType,
-					modifiedAt: file.modifiedAt,
-				});
-			}
-
-			return accumulator;
-		}, []);
-
-		if (cachedFiles.length === 0) return;
-
-		try {
-			const db = await openIDB();
-			const tx = db.transaction('libraries', 'readwrite');
-			tx.objectStore('libraries').put({ folderName, files: cachedFiles, savedAt: Date.now() } satisfies CachedLibrary, 'last-library');
-			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
-			db.close();
-		} catch {
-			// Ignore cache write failures.
-		}
-	}
-	async function loadCachedLibrary(): Promise<CachedLibrary | null> {
-		try {
-			const db = await openIDB();
-			const tx = db.transaction('libraries', 'readonly');
-			const result = await new Promise<CachedLibrary | null>((res, rej) => {
-				const req = tx.objectStore('libraries').get('last-library');
-				req.onsuccess = () => res((req.result as CachedLibrary) ?? null);
-				req.onerror = () => rej(req.error);
-			});
-			db.close();
-			return result;
-		} catch {
-			return null;
-		}
-	}
-
-	// ── Separate IDB for Google Drive file list cache (avoids version conflicts with music-app) ─
-	const DRIVE_CACHE_TTL = 60 * 60 * 1000;
-	function openDriveCacheIDB(): Promise<IDBDatabase> {
-		return new Promise((res, rej) => {
-			const req = indexedDB.open('music-app-drive-cache', 1);
-			req.onupgradeneeded = () => {
-				const db = req.result;
-				if (!db.objectStoreNames.contains('drive-files')) db.createObjectStore('drive-files');
-			};
-			req.onsuccess = () => res(req.result);
-			req.onerror  = () => rej(req.error);
-		});
-	}
-	async function saveDriveCache(cacheKey: string, files: GoogleDriveFile[]) {
-		try {
-			const db = await openDriveCacheIDB();
-			const tx = db.transaction('drive-files', 'readwrite');
-			tx.objectStore('drive-files').put({ files, savedAt: Date.now() }, cacheKey);
-			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
-			db.close();
-		} catch { /* ignore cache write failures */ }
-	}
-	async function loadDriveCache(cacheKey: string): Promise<GoogleDriveFile[] | null> {
-		try {
-			const db = await openDriveCacheIDB();
-			const tx = db.transaction('drive-files', 'readonly');
-			const entry = await new Promise<{ files: GoogleDriveFile[]; savedAt: number } | null>((res, rej) => {
-				const req = tx.objectStore('drive-files').get(cacheKey);
-				req.onsuccess = () => res((req.result as { files: GoogleDriveFile[]; savedAt: number }) ?? null);
-				req.onerror = () => rej(req.error);
-			});
-			db.close();
-			if (!entry || Date.now() - entry.savedAt > DRIVE_CACHE_TTL) return null;
-			return entry.files;
-		} catch { return null; }
-	}
 	async function bustDriveCache(cacheKey: string) {
-		try {
-			const db = await openDriveCacheIDB();
-			const tx = db.transaction('drive-files', 'readwrite');
-			tx.objectStore('drive-files').delete(cacheKey);
-			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
-			db.close();
-		} catch { /* ignore */ }
+		await library.bustCache();
 	}
 
-	function restoreStoredFilesFromCache(cachedLibrary: CachedLibrary): StoredAudioFile[] {
-		return cachedLibrary.files.map((file) => {
+
+	function restoreStoredFilesFromCache(cachedFiles: StoredAudioFile[]): StoredAudioFile[] {
+		return cachedFiles.map((file) => {
 			if (file.source === 'web') {
 				return createStoredWebAudioFile(file.file, file.relativePath);
 			}
 
-			return {
-				source: 'native',
-				name: file.name,
-				relativePath: file.relativePath,
-				path: file.path,
-				mimeType: file.mimeType,
-				modifiedAt: file.modifiedAt,
-			} satisfies StoredAudioFile;
+			return { ...file } as StoredAudioFile;
 		});
 	}
+
 
 	function hydrateTracksFromLibrary(files: StoredAudioFile[], resetToStart = false) {
 		const sorted = sortFiles(files);
@@ -279,28 +130,23 @@
 
 	// ── ephemeral playback state ──
 	let tracks      = $state<Track[]>([]);
-	let currentTime = $state(0);
-	let duration    = $state(0);
-	let isPlaying   = $state(false);
-	let isLiked     = $state(false);
-	let isLoading   = $state(false);
-	let showQueue   = $state(false);   // true → browse / folder view
-	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
-	let isRestoring = $state(true);  // true until IDB check finishes (prevents empty-state flash)
 	let preloadedTrackIndex = $state<number | null>(null);
 	let preloadRequestId = 0;
 
+	// Helper to track playback from mediaEngine
+	let currentTime = $derived(mediaEngine.currentTime);
+	let duration    = $derived(mediaEngine.duration);
+	let isPlaying   = $derived(mediaEngine.isPlaying);
+
+
 	// ── folder browse state ──
-	// rootDirHandle and allFiles MUST be $state so hasFolderLoaded $derived updates
 	let rootDirHandle    = $state<FileSystemDirectoryHandle | null>(null);
 	let nativeTreeUri    = $state<string | null>(null);
 	let pendingHandle    = $state<FileSystemDirectoryHandle | null>(null); // needs permission
-	let allFiles         = $state<StoredAudioFile[]>([]);     // web/native metadata-backed library
-	let browsePath       = $state<string[]>([]);                 // navigation stack
-	let browseEntries    = $state<BrowseEntry[]>([]);
-	let fileSearchQuery  = $state('');
-	let browseLoading    = $state(false);
-	let browseVersion    = $state(0);                          // bump to force reload
+
+	let browseLoading    = $derived(library.isLoading);
+	let browseEntries    = $derived(library.getBrowseEntries(browsePath));
+
 	let driveAccessToken = $state('');
 	let driveTokenExpiresAt = $state(0);
 	let driveUser        = $state<GoogleDriveUser | null>(null);
@@ -335,14 +181,13 @@
 	let filters: BiquadFilterNode[] = [];
 
 	// ── refs ──
-	let audioEl: HTMLAudioElement;
 	let folderInputEl: HTMLInputElement;
 	let nativeFileInputEl: HTMLInputElement;
 
 	// ── derived ──
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
 
-	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
+	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || library.allFiles.length > 0);
 	const progressPercent = $derived(
 		seekingValue !== null ? seekingValue : (duration > 0 ? (currentTime / duration) * 100 : 0)
 	);
@@ -350,35 +195,15 @@
 		musicSettings.librarySource === 'drive' ? 'Google Drive' : musicSettings.lastFolderName || 'Library'
 	);
 
-	// ── register stop-callback for cross-view audio exclusivity ──
+	// ── register MediaSession & hardware key callbacks ──
 	$effect(() => {
-		registerAudioSource('music', () => {
-			if (audioEl && isPlaying) {
-				// Save position before yielding so resuming feels seamless
-				musicSettings.lastTrackTimestamp = audioEl.currentTime;
-				audioEl.pause();
-			}
-		});
-	});
-
-	// ── register MediaSession skip handlers for Android Auto / lock-screen controls ──
-	$effect(() => {
-		mediaEngine.setSkipHandlers(
+		mediaEngine.setCallbacks(
 			() => { void advanceTrack(isPlaying); },
 			() => { void prevTrack(); }
 		);
-		return () => mediaEngine.setSkipHandlers(null, null);
+		return () => mediaEngine.setCallbacks(null, null);
 	});
 
-	// ── register MediaSession play/pause/seek handlers for lock-screen notification ──
-	$effect(() => {
-		mediaEngine.setPlaybackHandlers(
-			() => { void togglePlay(); },
-			() => { void togglePlay(); },
-			(pos) => { if (audioEl) { audioEl.currentTime = pos; currentTime = pos; } }
-		);
-		return () => mediaEngine.setPlaybackHandlers(null, null, null);
-	});
 
 	function syncTrackToMediaEngine(index: number) {
 		const track = tracks[index];
@@ -395,78 +220,33 @@
 		}, 'music');
 	}
 
-	// ── reload browse entries when path or folder version changes ──
 	$effect(() => {
 		const path = [...browsePath];
-		const driveFilter = driveSearch.trim().toLowerCase();
-		browseVersion; // reactive dependency
-		musicSettings.librarySource;
-		void loadBrowseEntries(path, driveFilter);
+		// Persist path whenever it changes
+		if (JSON.stringify(musicSettings.browsePath) !== JSON.stringify(path)) {
+			musicSettings.browsePath = path;
+		}
 	});
 
-	// ── audio element event wiring ──
+
+	onMount(() => {
+		void library.initialize().then(() => {
+			if (library.allFiles.length > 0) {
+				hydrateTracksFromLibrary(library.allFiles);
+				isRestoring = false;
+			} else {
+				isRestoring = false; // nothing found
+			}
+		});
+	});
+
+	// ── Sync track position & progress ──
 	$effect(() => {
-		if (!audioEl) return;
-		// Throttle timeupdate to ~4Hz — smooth for seek bar, 15× less CPU than 60fps
-		let _lastTimeUpdate = 0;
-		const onTimeUpdate = () => {
-			if (seekingValue !== null) return;
-			const now = Date.now();
-			if (now - _lastTimeUpdate < 250) return;
-			_lastTimeUpdate = now;
-			currentTime = audioEl.currentTime;
-			mediaEngine.updateTime(audioEl.currentTime, isFinite(audioEl.duration) ? audioEl.duration : 0);
-		};
-		const onLoadedMetadata = () => {
-			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
-			tracks = tracks.map((t, i) =>
-				i === musicSettings.lastTrackIndex
-					? { ...t, duration: isFinite(audioEl.duration) ? Math.round(audioEl.duration) : 0 }
-					: t
-			);
-		};
-		const onPlay  = () => { isPlaying = true;  mediaEngine.setPlaying(true);  };
-		const onPause = () => {
-			isPlaying = false;
-			mediaEngine.setPlaying(false);
-			// Persist position so it's visible in settings and survives any future restore
-			musicSettings.lastTrackTimestamp = audioEl.currentTime;
-			// Per-track resume: save current position
-			saveTrackPosition(musicSettings.lastTrackIndex, audioEl.currentTime);
-		};
-		const onEnded = () => {
-			// Track finished — clear any saved resume position
-			clearTrackPosition(musicSettings.lastTrackIndex);
-			if (musicSettings.isRepeat) { audioEl.currentTime = 0; audioEl.play().catch(() => {}); }
-			else void advanceTrack(true, false);
-		};
-		const onError = () => { void advanceTrack(true, false); };
-		audioEl.volume = musicSettings.volume / 100;
-		audioEl.muted  = musicSettings.isMuted;
-		audioEl.playbackRate = musicSettings.playbackSpeed;
-		audioEl.addEventListener('timeupdate',     onTimeUpdate);
-		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
-		audioEl.addEventListener('play',  onPlay);
-		audioEl.addEventListener('pause', onPause);
-		audioEl.addEventListener('ended', onEnded);
-		audioEl.addEventListener('error', onError);
-		return () => {
-			audioEl?.removeEventListener('timeupdate',     onTimeUpdate);
-			audioEl?.removeEventListener('loadedmetadata', onLoadedMetadata);
-			audioEl?.removeEventListener('play',  onPlay);
-			audioEl?.removeEventListener('pause', onPause);
-			audioEl?.removeEventListener('ended', onEnded);
-			audioEl?.removeEventListener('error', onError);
-		};
+		if (mediaEngine.source !== 'music' || !isPlaying) return;
+		// Persist position periodically for resume support
+		musicSettings.lastTrackTimestamp = mediaEngine.currentTime;
+		saveTrackPosition(musicSettings.lastTrackIndex, mediaEngine.currentTime);
 	});
-
-	// ── Sync volume / mute ──
-	$effect(() => {
-		if (audioEl) { audioEl.volume = musicSettings.volume / 100; audioEl.muted = musicSettings.isMuted; }
-	});
-
-	// ── Sync playback speed ──
-	$effect(() => { if (audioEl) audioEl.playbackRate = musicSettings.playbackSpeed; });
 
 	// ── Auto-save to Drive when key music settings change ──
 	$effect(() => {
@@ -480,37 +260,30 @@
 		driveConfigSync.scheduleSave();
 	});
 
-	// ── Sync EQ gains ──
+	// ── Sync with global mediaEngine ──
 	$effect(() => {
-		musicSettings.eqBands.forEach((gain, i) => {
-			if (filters[i]) filters[i].gain.value = gain;
+		mediaEngine.volume = musicSettings.volume;
+		mediaEngine.playbackRate = musicSettings.playbackSpeed;
+		mediaEngine.isShuffle = musicSettings.isShuffle;
+		mediaEngine.isRepeat = musicSettings.isRepeat;
+	});
+
+
+	$effect(() => {
+		import('$lib/stores/mediaEngine.svelte').then(m => {
+			m.updateGlobalEq(musicSettings.eqBands);
 		});
 	});
+
 
 	// ─────────────────────────────────────────────────────────────
 	// Web Audio API
 	// ─────────────────────────────────────────────────────────────
+	// Note: EQ logic has been moved to mediaEngine global persistence.
 	function initAudioContext() {
-		if (!audioEl) return;
-		if (audioCtx) { if (audioCtx.state === 'suspended') audioCtx.resume(); return; }
-		try {
-			const ctx = new AudioContext();
-			const src = ctx.createMediaElementSource(audioEl);
-			const bands = EQ_FREQS.map((freq, i) => {
-				const f = ctx.createBiquadFilter();
-				f.type = (i === 0 ? 'lowshelf' : i === EQ_FREQS.length - 1 ? 'highshelf' : 'peaking') as BiquadFilterType;
-				f.frequency.value = freq;
-				if (f.type === 'peaking') f.Q.value = 1.4;
-				f.gain.value = musicSettings.eqBands[i] ?? 0;
-				return f;
-			});
-			let node: AudioNode = src;
-			for (const b of bands) { node.connect(b); node = b; }
-			node.connect(ctx.destination);
-			filters = bands;
-			audioCtx = ctx;
-		} catch { /* AudioContext not available */ }
+		// No-op here, initialized in layout or mediaEngine
 	}
+
 
 	// ─────────────────────────────────────────────────────────────
 	// EQ helpers
@@ -964,16 +737,15 @@
 			nativeTreeUri = fav.treeUri;
 			musicSettings.nativeTreeUri = fav.treeUri;
 			pendingHandle = null;
-			allFiles = [];
+
 			activateDeviceLibrary(fav.name);
 			browsePath = [];
 			browseVersion++;
 			showQueue = true;
 			void (async () => {
 				const cachedFiles = await collectAllFromPath([]);
-				allFiles = cachedFiles;
+				library.setFiles(cachedFiles, fav.name);
 				hydrateTracksFromLibrary(cachedFiles);
-				await saveCachedLibrary(fav.name, cachedFiles);
 			})();
 		}
 		} finally {
@@ -1002,17 +774,14 @@
 
 		const cacheKey = folderId ?? '_all';
 
-		try {
 			if (!forceRefresh) {
-				const cached = await loadDriveCache(cacheKey);
-				if (cached && !ctrl.signal.aborted) {
-					// Instant restore from IDB — use cached file list immediately
+				const cached = library.allFiles;
+				if (cached.length > 0 && !ctrl.signal.aborted) {
+					// Instant restore from Memory/IDB — use cached file list immediately
 					if (audioEl) { audioEl.pause(); audioEl.src = ''; }
 					isPlaying = false; currentTime = 0; duration = 0; tracks = [];
-					allFiles = cached.map(createStoredDriveAudioFile);
-					driveLoadProgress = { filesFound: cached.length, foldersScanned: 0, foldersQueued: 0 };
-					activateDriveLibrary();
 					isDriveLoading = false;
+					activateDriveLibrary();
 
 					// Background refresh — update silently without blocking UI
 					void (async () => {
@@ -1023,9 +792,9 @@
 								freshFiles.push(...batch.files);
 							}
 							if (!ctrl.signal.aborted) {
-								allFiles = freshFiles.map(createStoredDriveAudioFile);
+								const mapped = freshFiles.map(createStoredDriveAudioFile);
+								library.setFiles(mapped, folderId || '_all');
 								browseVersion += 1;
-								await saveDriveCache(cacheKey, freshFiles);
 							}
 						} catch { /* ignore background refresh errors */ }
 					})();
@@ -1036,22 +805,23 @@
 			// Fresh scan — stop playback then stream files progressively into the UI
 			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
 			isPlaying = false; currentTime = 0; duration = 0; tracks = [];
-			allFiles = [];
 
-			const collectedFiles: GoogleDriveFile[] = [];
+
+			const collectedFiles: StoredAudioFile[] = [];
 			let libraryActivated = false;
 
 			for await (const batch of streamGoogleDriveMp3Files(token, { folderId, signal: ctrl.signal })) {
 				if (ctrl.signal.aborted) break;
-				collectedFiles.push(...batch.files);
+				const newMapped = batch.files.map(createStoredDriveAudioFile);
+				collectedFiles.push(...newMapped);
 				driveLoadProgress = {
 					filesFound: collectedFiles.length,
 					foldersScanned: batch.foldersScanned,
 					foldersQueued: batch.foldersQueued
 				};
-				// Append batch to the reactive array as a single assignment (not one-at-a-time)
-				const newMapped = batch.files.map(createStoredDriveAudioFile);
-				allFiles = [...allFiles, ...newMapped];
+				
+				// Append batch to the reactive store
+				library.setFiles([...collectedFiles], folderId || '_all');
 				browseVersion += 1; // trigger browse view to refresh with new files
 
 				// Activate the library UI as soon as the first files arrive
@@ -1063,7 +833,6 @@
 
 			if (!ctrl.signal.aborted) {
 				if (!libraryActivated) activateDriveLibrary();
-				await saveDriveCache(cacheKey, collectedFiles);
 			}
 		} catch (error) {
 			if (!ctrl.signal.aborted) {
@@ -1126,7 +895,7 @@
 		driveConfigSync.disconnect();
 
 		if (musicSettings.librarySource === 'drive') {
-			allFiles = [];
+			library.setFiles([], '');
 			browseEntries = [];
 			browsePath = [];
 			showQueue = false;
@@ -1174,100 +943,7 @@
 	// ─────────────────────────────────────────────────────────────
 	// Browse — async entry loading
 	// ─────────────────────────────────────────────────────────────
-	async function loadBrowseEntries(path: string[], driveFilter = '') {
-		browseLoading = true;
-		try {
-			if (musicSettings.librarySource === 'drive' && driveFilter.trim()) {
-			// Search mode: flat filtered list across all Drive files
-			const filter = driveFilter.trim();
-			const files = sortFiles(allFiles).filter((file) => {
-				if (file.source !== 'drive') return false;
-				const parsed = parseFilename(file.name);
-				const haystack = `${file.name} ${parsed.title} ${parsed.artist}`.toLowerCase();
-				return haystack.includes(filter);
-			});
-			browseEntries = files.map((file) => ({ kind: 'file', name: file.name, file }));
-		} else if (rootDirHandle) {
-				// Navigate to the directory at `path`
-				let dir: FileSystemDirectoryHandle = rootDirHandle;
-				for (const segment of path) {
-					let found = false;
-					for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-						if (handle.kind === 'directory' && name === segment) {
-							dir = handle as FileSystemDirectoryHandle; found = true; break;
-						}
-					}
-					if (!found) break;
-				}
-				const folders: BrowseEntry[] = [];
-				const files: BrowseEntry[] = [];
-				for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-					if (handle.kind === 'directory') {
-						let count = 0;
-						try {
-							for await (const [n2, h2] of (handle as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-								if (h2.kind === 'file' && n2.toLowerCase().endsWith('.mp3')) count++;
-							}
-						} catch { /* skip */ }
-						folders.push({ kind: 'folder', name, count });
-					} else if (handle.kind === 'file' && name.toLowerCase().endsWith('.mp3')) {
-						files.push({ kind: 'file', name, file: createStoredAudioFile(await (handle as FileSystemFileHandle).getFile()) });
-					}
-				}
-				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				browseEntries = [...folders, ...files];
-			} else if (nativeTreeUri) {
-				const result = await DirectoryReader.listEntries({ treeUri: nativeTreeUri, path: pathToString(path) });
-				const folders: BrowseEntry[] = [];
-				const files: BrowseEntry[] = [];
 
-				for (const entry of result.entries) {
-					if (entry.kind === 'folder') {
-						folders.push({ kind: 'folder', name: entry.name, count: 0 });
-					} else {
-						files.push({ kind: 'file', name: entry.name, file: createStoredNativeAudioFile(entry) });
-					}
-				}
-
-				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				browseEntries = [...folders, ...files];
-			} else if (allFiles.length > 0) {
-				const prefix = path.length > 0 ? path.join('/') + '/' : '';
-				const seen = new Set<string>();
-				const folders: BrowseEntry[] = [];
-				const files: BrowseEntry[] = [];
-				for (const file of allFiles) {
-					const normalized = getRelativePath(file);
-					if (!normalized.startsWith(prefix)) continue;
-					const remaining = normalized.slice(prefix.length);
-					if (!remaining) continue;
-					const slash = remaining.indexOf('/');
-					if (slash === -1) {
-						files.push({ kind: 'file', name: remaining, file });
-					} else {
-						const folderName = remaining.slice(0, slash);
-						if (!seen.has(folderName)) {
-							seen.add(folderName);
-							const subPrefix = prefix + folderName + '/';
-							const count = allFiles.filter(f => {
-								const p = getRelativePath(f);
-								return p.startsWith(subPrefix);
-							}).length;
-							folders.push({ kind: 'folder', name: folderName, count });
-						}
-					}
-				}
-				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				browseEntries = [...folders, ...files];
-			} else {
-				browseEntries = [];
-			}
-		} catch { browseEntries = []; }
-		browseLoading = false;
-	}
 
 	// ── Collect all MP3s from a directory handle recursively ──
 	async function collectFilesFromDirHandle(dir: FileSystemDirectoryHandle): Promise<File[]> {
@@ -1297,7 +973,6 @@
 		}
 		return result;
 	}
-
 	// ── Navigate to a dir handle following a path ──
 	async function resolveDirAtPath(path: string[]): Promise<FileSystemDirectoryHandle | null> {
 		if (!rootDirHandle) return null;
@@ -1314,29 +989,57 @@
 		return dir;
 	}
 
-	// ── Collect all files under a browse path ──
+	async function ensureTrackUrlForFile(f: StoredAudioFile, interactiveAuth = false): Promise<string | null> {
+		if (f.source === 'web') {
+			return URL.createObjectURL(f.file);
+		}
+		if (f.source === 'drive') {
+			try {
+				const blob = await downloadDriveFile(f.id, interactiveAuth);
+				if (!blob) return null;
+				return URL.createObjectURL(blob);
+			} catch (error) {
+				console.error('Failed to download drive file:', error);
+				return null;
+			}
+		}
+		if (f.source === 'native') {
+			try {
+				const blob = await readNativeFileAsBlob(f.path);
+				if (!blob) return null;
+				return URL.createObjectURL(blob);
+			} catch (error) {
+				console.error('Failed to read native file:', error);
+				return null;
+			}
+		}
+		return null;
+	}
+
 	async function collectAllFromPath(path: string[]): Promise<StoredAudioFile[]> {
 		if (musicSettings.librarySource === 'drive') {
 			const prefix = path.length > 0 ? path.join('/') + '/' : '';
-			return sortFiles(allFiles.filter(f => {
+			return sortFiles(library.allFiles.filter(f => {
 				const p = getRelativePath(f);
 				return prefix ? p.startsWith(prefix) : true;
 			}));
 		} else if (rootDirHandle) {
+
 			const dir = await resolveDirAtPath(path);
 			return dir ? (await collectFilesFromDirHandle(dir)).map((file) => createStoredAudioFile(file)) : [];
 		} else if (nativeTreeUri) {
 			const result = await DirectoryReader.listAudioFiles({ treeUri: nativeTreeUri, path: pathToString(path) });
 			return result.files.map((file) => createStoredNativeAudioFile(file));
-		} else if (allFiles.length > 0) {
+		} else if (library.allFiles.length > 0) {
 			const prefix = path.length > 0 ? path.join('/') + '/' : '';
-			return allFiles.filter(f => {
+			return library.allFiles.filter(f => {
 				const p = getRelativePath(f);
 				return p.startsWith(prefix);
 			});
 		}
 		return [];
 	}
+
 
 	async function ensureTrackUrl(index: number, interactiveAuth = false): Promise<string | null> {
 		const track = tracks[index];
@@ -1467,7 +1170,7 @@
 				nativeTreeUri = treeUri;
 				musicSettings.nativeTreeUri = treeUri;
 				pendingHandle = null;
-				allFiles = [];
+
 				activateDeviceLibrary(folderName);
 				browsePath = [];
 				browseVersion++;
@@ -1479,9 +1182,8 @@
 				}
 				void (async () => {
 					const cachedFiles = await collectAllFromPath([]);
-					allFiles = cachedFiles;
+					library.setFiles(cachedFiles, folderName);
 					hydrateTracksFromLibrary(cachedFiles);
-					await saveCachedLibrary(folderName, cachedFiles);
 				})();
 			} catch (error) {
 				console.error('Failed to open native folder.', error);
@@ -1504,17 +1206,15 @@
 				rootDirHandle = dirHandle;
 				musicSettings.nativeTreeUri = '';
 				pendingHandle = null;
-				allFiles = [];
+
 				activateDeviceLibrary(dirHandle.name);
 				browsePath = [];
 				browseVersion++;  // triggers browse entry reload
 				showQueue = true;
-				void saveHandleToIDB(dirHandle);
 				void (async () => {
 					const cachedFiles = await collectStoredFilesFromDirHandle(dirHandle);
-					allFiles = cachedFiles;
+					library.setFiles(cachedFiles, dirHandle.name);
 					hydrateTracksFromLibrary(cachedFiles);
-					await saveCachedLibrary(dirHandle.name, cachedFiles);
 				})();
 			} catch { /* user cancelled */ }
 		} else {
@@ -1529,13 +1229,13 @@
 		rootDirHandle = null;
 		nativeTreeUri = null;
 		musicSettings.nativeTreeUri = '';
-		allFiles = files.map((file) => createStoredAudioFile(file));
+		const mapped = files.map((file) => createStoredAudioFile(file));
+		library.setFiles(mapped, files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files');
 		activateDeviceLibrary(files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files');
 		browsePath = [];
 		browseVersion++;  // triggers browse entry reload
 		showQueue = true;
-		hydrateTracksFromLibrary(allFiles);
-		void saveCachedLibrary(musicSettings.lastFolderName || 'Selected Files', allFiles);
+		hydrateTracksFromLibrary(mapped);
 		input.value = '';
 	}
 
@@ -1555,13 +1255,13 @@
 		nativeTreeUri = null;
 		musicSettings.nativeTreeUri = '';
 		pendingHandle = null;
-		allFiles = files.map((file) => createStoredAudioFile(file));
+		const mapped = files.map((file) => createStoredAudioFile(file));
+		library.setFiles(mapped, 'Selected Files');
 		activateDeviceLibrary('Selected Files');
 		browsePath = [];
 		browseVersion++;
 		showQueue = true;
-		hydrateTracksFromLibrary(allFiles, true);
-		void saveCachedLibrary('Selected Files', allFiles);
+		hydrateTracksFromLibrary(mapped, true);
 		input.value = '';
 	}
 
@@ -1578,16 +1278,14 @@
 				nativeTreeUri = null;
 				musicSettings.nativeTreeUri = '';
 				pendingHandle = null;
-				allFiles = [];
+
 				activateDeviceLibrary(rootDirHandle.name);
 				browseVersion++;
 				showQueue = true;
-				void saveHandleToIDB(rootDirHandle);
 				void (async () => {
 					const cachedFiles = await collectStoredFilesFromDirHandle(rootDirHandle);
-					allFiles = cachedFiles;
+					library.setFiles(cachedFiles, rootDirHandle.name);
 					hydrateTracksFromLibrary(cachedFiles);
-					await saveCachedLibrary(rootDirHandle.name, cachedFiles);
 				})();
 			}
 		} catch { /* user denied */ }
@@ -1600,45 +1298,57 @@
 	// Play a single file → load all siblings as context
 	async function playBrowseFile(entry: BrowseEntry & { kind: 'file' }) {
 		const siblings = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
-		loadTracks(siblings, browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName);
+		
 		const sorted = sortFiles(siblings);
 		const idx = sorted.findIndex(f => f === entry.file);
-		musicSettings.lastTrackIndex = Math.max(0, idx);
-		currentTime = 0; duration = 0;
-		if (audioEl && tracks.length > 0) {
-			const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
-			if (!url) {
-				alert('Unable to load this track.');
-				return;
-			}
-			audioEl.src = url;
-			audioEl.load();
-			syncTrackToMediaEngine(musicSettings.lastTrackIndex);
-			applyTrackPosition(musicSettings.lastTrackIndex);
-			void preloadNextTrack(musicSettings.lastTrackIndex);
-			claimAudio('music');
-			initAudioContext();
-			audioEl.play().catch(() => {});
-		}
+		
+		const mediaItems = sorted.map((f, i) => ({
+			id: String(i),
+			source: 'music' as const,
+			title: parseFilename(f.name).title,
+			subtitle: parseFilename(f.name).artist,
+			audioUrl: '', // Will be hydrated when played
+			duration: 0,
+			// Custom field for materialization
+			_file: f
+		}));
+
+		// Hydrate specific track immediately
+		const trackFile = sorted[idx];
+		const url = await ensureTrackUrlForFile(trackFile);
+		mediaItems[idx].audioUrl = url;
+
+		mediaEngine.setQueue(mediaItems, idx);
+		mediaEngine.play(mediaItems[idx], 'music');
+		
+		musicSettings.lastFolderName = browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName;
+		musicSettings.lastTrackIndex = idx;
+		musicSettings.lastTrackTimestamp = 0;
 	}
+
 
 	// Play only the files visible in the current folder view (no recursion)
 	async function playCurrentFolder() {
 		const files = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
 		if (files.length === 0) { alert('No MP3 files found.'); return; }
-		const label = browsePath.length > 0 ? browsePath[browsePath.length - 1] : (musicSettings.lastFolderName || 'Library');
-		loadTracks(files, label);
-		if (audioEl && tracks.length > 0) {
-			const url = await ensureTrackUrl(0, true);
-			if (!url) { alert('Unable to load tracks from this folder.'); return; }
-			audioEl.src = url;
-			audioEl.load();
-			syncTrackToMediaEngine(0);
-			void preloadNextTrack(0);
-			claimAudio('music');
-			initAudioContext();
-			audioEl.play().catch(() => {});
-		}
+		const sorted = sortFiles(files);
+		
+		const mediaItems = sorted.map((f, i) => ({
+			id: String(i),
+			source: 'music' as const,
+			title: parseFilename(f.name).title,
+			subtitle: parseFilename(f.name).artist,
+			audioUrl: '',
+			duration: 0,
+			resolveUrl: () => ensureTrackUrlForFile(f)
+		}));
+
+		mediaEngine.setQueue(mediaItems, 0);
+		void mediaEngine.play(mediaItems[0], 'music');
+		
+		musicSettings.lastFolderName = browsePath.length > 0 ? browsePath[browsePath.length - 1] : (musicSettings.lastFolderName || 'Library');
+		musicSettings.lastTrackIndex = 0;
+		musicSettings.lastTrackTimestamp = 0;
 	}
 
 	// Play all files under a given browse path (recursively)
@@ -1647,22 +1357,26 @@
 		const files = await collectAllFromPath(path);
 		isLoading = false;
 		if (files.length === 0) { alert('No MP3 files found.'); return; }
-		loadTracks(files, path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName);
-		if (audioEl && tracks.length > 0) {
-			const url = await ensureTrackUrl(0, true);
-			if (!url) {
-				alert('Unable to load tracks from this folder.');
-				return;
-			}
-			audioEl.src = url;
-			audioEl.load();
-			syncTrackToMediaEngine(0);
-			void preloadNextTrack(0);
-			claimAudio('music');
-			initAudioContext();
-			audioEl.play().catch(() => {});
-		}
+		const sorted = sortFiles(files);
+
+		const mediaItems = sorted.map((f, i) => ({
+			id: String(i),
+			source: 'music' as const,
+			title: parseFilename(f.name).title,
+			subtitle: parseFilename(f.name).artist,
+			audioUrl: '',
+			duration: 0,
+			resolveUrl: () => ensureTrackUrlForFile(f)
+		}));
+
+		mediaEngine.setQueue(mediaItems, 0);
+		void mediaEngine.play(mediaItems[0], 'music');
+		
+		musicSettings.lastFolderName = path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName;
+		musicSettings.lastTrackIndex = 0;
+		musicSettings.lastTrackTimestamp = 0;
 	}
+
 
 	function navigateInto(name: string) { browsePath = [...browsePath, name]; }
 	function navigateUp() {
@@ -1670,93 +1384,30 @@
 		else showQueue = false;
 	}
 
+
 	// ─────────────────────────────────────────────────────────────
 	// Playback controls
 	// ─────────────────────────────────────────────────────────────
 	async function togglePlay() {
-		if (!audioEl || !currentTrack) return;
-		initAudioContext();
-		if (isPlaying) { audioEl.pause(); }
-		else {
-			claimAudio('music');
-			if (!audioEl.src || audioEl.src === window.location.href) {
-				const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
-				if (!url) {
-					alert('Unable to load this track.');
-					return;
-				}
-				audioEl.src = url;
-				audioEl.load();
-				syncTrackToMediaEngine(musicSettings.lastTrackIndex);
-				applyTrackPosition(musicSettings.lastTrackIndex);
-			}
-			void preloadNextTrack(musicSettings.lastTrackIndex);
-			audioEl.play().catch(() => {});
-		}
+		mediaEngine.toggle();
 	}
+
 
 	async function selectTrack(index: number) {
-		releaseTrackUrl(musicSettings.lastTrackIndex);
+		mediaEngine.playFromQueue(index);
 		musicSettings.lastTrackIndex = index;
 		musicSettings.lastTrackTimestamp = 0;
-		currentTime = 0; duration = 0;
-		if (audioEl && tracks[index]) {
-			const url = await ensureTrackUrl(index, true);
-			if (!url) {
-				alert('Unable to load this track.');
-				return;
-			}
-			audioEl.src = url; audioEl.load();
-			syncTrackToMediaEngine(index);
-			applyTrackPosition(index);
-			void preloadNextTrack(index);
-			claimAudio('music');
-			audioEl.play().catch(() => {});
-		}
 	}
 
-	async function advanceTrack(wasPlaying: boolean, interactiveAuth = false) {
-		if (tracks.length === 0) return;
-		const idx = musicSettings.lastTrackIndex;
-		const nextIndex = getNextTrackIndex(idx);
-		if (nextIndex === null) {
-			isPlaying = false; currentTime = 0;
-			if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
-			return;
-		}
-		releaseTrackUrl(idx);
-		musicSettings.lastTrackIndex = nextIndex;
-		musicSettings.lastTrackTimestamp = 0;
-		currentTime = 0; duration = 0;
-		if (audioEl && tracks[nextIndex]) {
-			const url = await ensureTrackUrl(nextIndex, interactiveAuth);
-			if (!url) {
-				isPlaying = false;
-				return;
-			}
-			audioEl.src = url; audioEl.load();
-			syncTrackToMediaEngine(nextIndex);
-			applyTrackPosition(nextIndex);
-			void preloadNextTrack(nextIndex);
-			if (wasPlaying) audioEl.play().catch(() => { isPlaying = false; });
-		}
+
+	async function advanceTrack(wasPlaying: boolean) {
+		mediaEngine.next();
 	}
 
 	async function prevTrack() {
-		if (tracks.length === 0) return;
-		if (musicSettings.rewindOnPrev && currentTime > 3 && audioEl) { audioEl.currentTime = 0; return; }
-		releaseTrackUrl(musicSettings.lastTrackIndex);
-		const prevIndex = (musicSettings.lastTrackIndex - 1 + tracks.length) % tracks.length;
-		musicSettings.lastTrackIndex = prevIndex;
-		musicSettings.lastTrackTimestamp = 0;
-		currentTime = 0; duration = 0;
-		if (audioEl && tracks[prevIndex]) {
-			const url = await ensureTrackUrl(prevIndex, true);
-			if (!url) {
-				return;
-			}
-			audioEl.src = url; audioEl.load();
-			syncTrackToMediaEngine(prevIndex);
+		mediaEngine.prev();
+	}
+
 			applyTrackPosition(prevIndex);
 			void preloadNextTrack(prevIndex);
 			if (isPlaying) audioEl.play().catch(() => {});
@@ -1768,12 +1419,10 @@
 		seekingValue = parseFloat((e.target as HTMLInputElement).value);
 	}
 	function handleSeekCommit(e: Event) {
-		// User released – now actually seek the audio
 		const pct = parseFloat((e.target as HTMLInputElement).value);
 		const newTime = (pct / 100) * duration;
 		seekingValue = null;
-		currentTime = newTime;
-		if (audioEl) audioEl.currentTime = newTime;
+		mediaEngine.seek(newTime);
 	}
 	function handleVolume(e: Event) {
 		const input = e.target as HTMLInputElement;
@@ -1783,7 +1432,9 @@
 	function toggleMute() { musicSettings.isMuted = !musicSettings.isMuted; }
 	function togglePanel(p: 'speed' | 'eq') {
 		showPanel = showPanel === p ? 'none' : p;
-		if (showPanel !== 'none') initAudioContext();
+		if (showPanel === 'eq') {
+			import('$lib/stores/mediaEngine.svelte').then(m => m.initGlobalAudioContext());
+		}
 	}
 
 	// ── Restore last folder handle from IndexedDB on mount ───────
@@ -1813,9 +1464,8 @@
 			try {
 				const [handle, cachedLibrary] = await Promise.all([loadHandleFromIDB(), loadCachedLibrary()]);
 				if (cachedLibrary && cachedLibrary.files.length > 0) {
-					allFiles = restoreStoredFilesFromCache(cachedLibrary);
-					activateDeviceLibrary(cachedLibrary.folderName);
-					hydrateTracksFromLibrary(allFiles);
+					library.setFiles(restoreStoredFilesFromCache(cachedLibrary), cachedLibrary.folderName);
+					hydrateTracksFromLibrary(library.allFiles);
 					showQueue = true;
 					browseVersion++;
 				}
@@ -1836,7 +1486,7 @@
 				if (perm === 'granted') {
 					rootDirHandle = handle;
 					nativeTreeUri = null;
-					allFiles = cachedLibrary?.files.length ? allFiles : [];
+
 					browseVersion++;
 					showQueue = true;
 				} else {
@@ -1852,11 +1502,8 @@
 		});
 	});
 
-	$effect(() => { return () => { revokeAll(); audioCtx?.close(); }; });
+	$effect(() => { return () => { revokeAll(); }; });
 </script>
-
-<!-- Hidden audio element -->
-<audio bind:this={audioEl} preload="none"></audio>
 
 <!-- Hidden folder input fallback -->
 <input
@@ -1949,53 +1596,65 @@
 	<div class="flex flex-col h-full">
 
 		<!-- Header -->
-		<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0">
-			<Button variant="ghost" size="icon" class="shrink-0" onclick={navigateUp}>
+		<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0 bg-background/50 backdrop-blur-md">
+			<Button variant="ghost" size="icon" class="shrink-0 w-9 h-9 rounded-xl" onclick={navigateUp}>
 				<ChevronLeft class="w-5 h-5" />
 			</Button>
 
 			<!-- Breadcrumb -->
 			<div class="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
-				<button class="text-sm text-muted-foreground hover:text-foreground truncate shrink-0 max-w-[90px]"
+				<button class="text-sm font-bold text-muted-foreground hover:text-foreground truncate shrink-0 max-w-[90px] transition-colors"
 					onclick={() => (browsePath = [])}
 				>{currentLibraryLabel}</button>
-				{#each browsePath as seg, i}
-					<ChevronRight class="w-3 h-3 text-muted-foreground shrink-0" />
-					<button
-						class="text-sm truncate max-w-[90px] {i === browsePath.length - 1 ? 'text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}"
-						onclick={() => (browsePath = browsePath.slice(0, i + 1))}
-					>{seg}</button>
+				{#each browsePath as seg, i (i + seg)}
+					<div class="flex items-center gap-1 shrink-0" in:fly={{ x: 5, duration: 200 }}>
+						<ChevronRight class="w-3 h-3 text-muted-foreground/50 shrink-0" />
+						<button
+							class="text-sm truncate max-w-[100px] transition-colors {i === browsePath.length - 1 ? 'text-primary font-bold' : 'text-muted-foreground hover:text-foreground'}"
+							onclick={() => (browsePath = browsePath.slice(0, i + 1))}
+						>{seg}</button>
+					</div>
 				{/each}
 			</div>
 
-			<!-- Play All current path + Change folder -->
+			<!-- Actions -->
 			<div class="flex items-center gap-1 shrink-0">
-				<Button size="sm" variant="default" class="gap-1 text-xs h-9 px-3"
-					onclick={playCurrentFolder} disabled={isLoading}>
-					{#if isLoading}
-						<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-					{:else}
-						<Play class="w-4 h-4 ml-0.5" />
-					{/if}
-					All
+				<!-- Rescan / Refresh -->
+				<Button
+					variant="ghost" size="icon" class="w-9 h-9 rounded-xl transition-all"
+					title="Rescan library"
+					onclick={() => library.rescan({ rootDirHandle })}
+					disabled={browseLoading}
+				>
+					<RefreshCw class="w-4 h-4 {browseLoading ? 'animate-spin text-primary' : ''}" />
 				</Button>
+
+				<Button size="sm" variant="secondary" class="gap-1.5 text-[11px] h-8 px-2.5 rounded-lg font-bold"
+					onclick={playCurrentFolder} disabled={browseLoading}>
+					<Play class="w-3.5 h-3.5 fill-current" />
+					ALL
+				</Button>
+
 				{#if currentFolderAsFavorite()}
-					<Button variant="ghost" size="icon" class={`h-10 w-10 ${isCurrentFolderFavorited() ? 'text-yellow-400' : ''}`} onclick={toggleCurrentFolderFavorite} aria-label={isCurrentFolderFavorited() ? 'Remove from favorites' : 'Add to favorites'} title={isCurrentFolderFavorited() ? 'Remove from favorites' : 'Add to favorites'}>
+					<Button variant="ghost" size="icon" class={`h-9 w-9 rounded-xl ${isCurrentFolderFavorited() ? 'text-yellow-500' : 'text-muted-foreground'}`} onclick={toggleCurrentFolderFavorite} title={isCurrentFolderFavorited() ? 'Remove from favorites' : 'Add to favorites'}>
 						<Star class="w-5 h-5" fill={isCurrentFolderFavorited() ? 'currentColor' : 'none'} />
 					</Button>
 				{/if}
-				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openFolder} aria-label="Open local folder" title="Open local folder">
+
+				<Button variant="ghost" size="icon" class="h-9 w-9 rounded-xl text-muted-foreground hover:text-foreground" onclick={openFolder} title="Open different folder">
 					<FolderOpen class="w-5 h-5" />
 				</Button>
-				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={driveUser ? changeDriveFolder : connectGoogleDrive} disabled={isDriveAuthenticating} aria-label={driveUser ? 'Change Drive folder' : 'Connect Google Drive'} title={driveUser ? 'Change Google Drive folder' : 'Connect Google Drive'}>
+
+				<Button variant="ghost" size="icon" class="h-9 w-9 rounded-xl text-muted-foreground hover:text-foreground" onclick={driveUser ? changeDriveFolder : connectGoogleDrive} disabled={isDriveAuthenticating} title={driveUser ? 'Google Drive settings' : 'Connect Google Drive'}>
 					{#if isDriveAuthenticating}
-						<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+						<div class="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
 					{:else}
-						<Cloud class="w-5 h-5" />
+						<Cloud class="w-5 h-5 {driveUser ? 'text-primary' : ''}" />
 					{/if}
 				</Button>
 			</div>
 		</div>
+
 
 		{#if musicSettings.librarySource === 'drive'}
 			<div class="px-4 py-3 border-b space-y-3 bg-card/40 shrink-0">
@@ -2004,9 +1663,10 @@
 						<p class="text-sm font-medium truncate">{driveUser?.displayName || 'Google Drive'}</p>
 						<p class="text-xs text-muted-foreground truncate">
 							{driveUser?.emailAddress || 'Connected account'}
-							{#if allFiles.length > 0}
-								· {allFiles.length} MP3 file{allFiles.length === 1 ? '' : 's'}
+							{#if library.allFiles.length > 0}
+								· {library.allFiles.length} MP3 file{library.allFiles.length === 1 ? '' : 's'}
 							{/if}
+
 						</p>
 						{#if musicSettings.driveFolderName}
 							<p class="text-xs text-primary truncate mt-0.5">
@@ -2121,8 +1781,10 @@
 				</div>
 			{/if}
 			{#if browseLoading}
-				<div class="flex items-center justify-center h-32">
-					<div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+				<div class="flex flex-col">
+					{#each Array(8) as _}
+						<SkeletonEntry />
+					{/each}
 				</div>
 			{:else if filteredEntries.length === 0}
 				<p class="text-center text-muted-foreground text-sm py-12">
@@ -2138,7 +1800,7 @@
 				{#each filteredEntries as entry}
 					{#if entry.kind === 'folder'}
 					<!-- Folder row -->
-					<div class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
+					<div in:fade={{ duration: 150 }} class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
 						<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
 							<Folder class="w-4.5 h-4.5 text-primary" />
 						</div>
@@ -2161,7 +1823,7 @@
 					</div>
 					{:else}
 					<!-- File row -->
-					<div class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
+					<div in:fade={{ duration: 150 }} class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
 						<div class="w-9 h-9 rounded-lg bg-muted/40 flex items-center justify-center shrink-0">
 							<Music2 class="w-4 h-4 text-muted-foreground" />
 						</div>
@@ -2182,56 +1844,7 @@
 			{/if}
 		</div>
 
-		<!-- ─── Mini player bar ─── -->
-		{#if currentTrack}
-		<div class="border-t bg-background shrink-0 pb-safe">
-			<!-- Track info row – tap to expand full player -->
-			<div class="flex items-center gap-3 px-4 pt-3 pb-1">
-				<button class="flex items-center gap-3 flex-1 min-w-0 text-left" onclick={() => (showQueue = false)}>
-					<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-800 flex items-center justify-center shrink-0">
-						{#if isPlaying}
-							<span class="flex gap-0.5 items-end h-4">
-								<span class="w-0.5 rounded bg-white animate-[bar1_0.8s_ease-in-out_infinite]" style="height:55%"></span>
-								<span class="w-0.5 rounded bg-white animate-[bar2_0.8s_ease-in-out_infinite_0.2s]" style="height:100%"></span>
-								<span class="w-0.5 rounded bg-white animate-[bar1_0.8s_ease-in-out_infinite_0.4s]" style="height:40%"></span>
-							</span>
-						{:else}
-							<Music2 class="w-5 h-5 text-white" />
-						{/if}
-					</div>
-					<div class="flex-1 min-w-0">
-						<p class="text-sm font-semibold truncate">{currentTrack.title}</p>
-						<p class="text-xs text-muted-foreground truncate">{currentTrack.artist}</p>
-					</div>
-				</button>
-				<!-- Playback controls -->
-				<div class="flex items-center gap-2 shrink-0">
-					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={prevTrack} aria-label="Previous">
-						<SkipBack class="w-6 h-6" />
-					</button>
-					<button class="w-12 h-12 flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-md" onclick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
-						{#if isPlaying}<Pause class="w-6 h-6" />{:else}<Play class="w-6 h-6 ml-0.5" />{/if}
-					</button>
-					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={() => advanceTrack(isPlaying, true)} aria-label="Next">
-						<SkipForward class="w-6 h-6" />
-					</button>
-				</div>
-			</div>
-			<!-- Seek slider + times -->
-			<div class="px-4 pb-3 space-y-0.5">
-				<input
-					type="range" min="0" max="100" value={progressPercent}
-					oninput={handleSeekInput}
-					onchange={handleSeekCommit}
-					class="w-full h-2 rounded-full appearance-none cursor-pointer bg-secondary accent-primary"
-				/>
-				<div class="flex justify-between text-[10px] text-muted-foreground">
-					<span>{formatTime(currentTime)}</span>
-					<span>{formatTime(duration)}</span>
-				</div>
-			</div>
-		</div>
-		{/if}
+
 	</div>
 
 	<!-- ════════════════════════════════ PLAYER VIEW ════════════════════════════════ -->

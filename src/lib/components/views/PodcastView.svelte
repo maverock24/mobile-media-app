@@ -62,75 +62,41 @@
 
 	// ── Playback state ───────────────────────────────────────────
 	let currentEpisode = $state<{ podcast: Podcast; episode: Episode } | null>(null);
-	let isPlaying      = $state(false);
-	let currentTime    = $state(0);
-	let duration       = $state(0);
-	let audioEl: HTMLAudioElement;
+	let currentTime = $derived(mediaEngine.currentTime);
+	let duration    = $derived(mediaEngine.duration);
+	let isPlaying   = $derived(mediaEngine.isPlaying);
 
-	// ── Register stop-callback ───────────────────────────────────
-	$effect(() => {
-		registerAudioSource('podcast', () => {
-			if (audioEl && isPlaying) audioEl.pause();
-		});
-	});
 
-	// ── Register MediaSession play/pause/seek handlers for lock-screen ──
+	// ── Register MediaSession callbacks ──────────────────────────
 	$effect(() => {
-		mediaEngine.setPlaybackHandlers(
-			() => togglePlay(),
-			() => togglePlay(),
-			(pos) => { if (audioEl) { audioEl.currentTime = pos; currentTime = pos; } }
+		mediaEngine.setCallbacks(
+			() => { /* No-op for now, could play next episode */ },
+			() => { /* No-op for now */ }
 		);
-		return () => mediaEngine.setPlaybackHandlers(null, null, null);
+		return () => mediaEngine.setCallbacks(null, null);
 	});
 
-	// ── Audio element event wiring ───────────────────────────────
+
+	// ── Sync track position & progress ───────────────────────────
 	$effect(() => {
-		if (!audioEl) return;
-		// Throttle timeupdate to ~4Hz — smooth for seek bar, 15× less CPU than 60fps
-		let _lastTimeUpdate = 0;
-		const onTimeUpdate = () => {
-			const now = Date.now();
-			if (now - _lastTimeUpdate < 250) return;
-			_lastTimeUpdate = now;
-			currentTime = audioEl.currentTime;
-			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
-			if (currentEpisode && duration > 0) {
-				currentEpisode.episode.progress = Math.min(100, Math.round((audioEl.currentTime / duration) * 100));
-				currentEpisode.episode.positionSec = audioEl.currentTime;
-			}
-		};
-		const onLoadedMetadata = () => {
-			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
-			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
-		};
-		const onPlay  = () => { isPlaying = true;  mediaEngine.setPlaying(true);  };
-		const onPause = () => { isPlaying = false; mediaEngine.setPlaying(false); };
-		const onEnded = () => {
-			isPlaying = false;
-			mediaEngine.setPlaying(false);
-			if (currentEpisode) {
-				currentEpisode.episode.played = true;
-				currentEpisode.episode.progress = 100;
-				currentEpisode.episode.positionSec = 0;
-			}
-		};
-		audioEl.addEventListener('timeupdate',     onTimeUpdate);
-		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
-		audioEl.addEventListener('play',  onPlay);
-		audioEl.addEventListener('pause', onPause);
-		audioEl.addEventListener('ended', onEnded);
-		return () => {
-			audioEl?.removeEventListener('timeupdate',     onTimeUpdate);
-			audioEl?.removeEventListener('loadedmetadata', onLoadedMetadata);
-			audioEl?.removeEventListener('play',  onPlay);
-			audioEl?.removeEventListener('pause', onPause);
-			audioEl?.removeEventListener('ended', onEnded);
-		};
+		if (mediaEngine.source !== 'podcast' || !isPlaying || !currentEpisode) return;
+		
+		const cur = mediaEngine.currentTime;
+		const dur = mediaEngine.duration;
+		
+		currentEpisode.episode.positionSec = cur;
+		if (dur > 0) {
+			currentEpisode.episode.progress = Math.min(100, Math.round((cur / dur) * 100));
+		}
+
+		// Periodic save
+		podcastData.lastEpisodeId = currentEpisode.episode.id;
+		podcastData.lastPositionSec = cur;
 	});
 
 	// ── Sync playback speed ──────────────────────────────────────
-	$effect(() => { if (audioEl) audioEl.playbackRate = podcastSettings.playbackSpeed; });
+	$effect(() => { mediaEngine.playbackRate = podcastSettings.playbackSpeed; });
+
 
 	// ── Auto-save podcast data to Drive when subscriptions/progress change ──
 	$effect(() => {
@@ -355,21 +321,14 @@
 	// ── Playback ─────────────────────────────────────────────────
 	function playEpisode(podcast: Podcast, episode: Episode) {
 		if (!episode.audioUrl) return;
-		claimAudio('podcast');
+		
 		currentEpisode = { podcast, episode };
-		duration = episode.duration;
-		currentTime = 0;
-		audioEl.src = episode.audioUrl;
-		audioEl.playbackRate = podcastSettings.playbackSpeed;
-		audioEl.load();
+		
 		const resumeAt = (episode.positionSec ?? 0) > 10
 			? episode.positionSec
 			: Math.round((episode.progress / 100) * (episode.duration || 0));
-		if (resumeAt > 10) {
-			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = resumeAt; }, { once: true });
-		}
-		audioEl.play().catch(() => {});
-		mediaEngine.setNowPlaying({
+
+		mediaEngine.setQueue([{
 			id:         episode.id,
 			source:     'podcast',
 			title:      episode.title,
@@ -377,17 +336,18 @@
 			audioUrl:   episode.audioUrl,
 			artworkUrl: podcast.artworkUrl,
 			duration:   episode.duration
-		}, 'podcast');
+		}], 0);
+
+		void mediaEngine.play(mediaEngine.queue[0], 'podcast');
+		
+		if (resumeAt > 10) {
+			// Seek after a short delay to ensure source is loaded
+			setTimeout(() => mediaEngine.seek(resumeAt), 200);
+		}
 	}
 
 	function togglePlay() {
-		if (!audioEl || !currentEpisode) return;
-		if (isPlaying) {
-			audioEl.pause();
-		} else {
-			claimAudio('podcast');
-			audioEl.play().catch(() => {});
-		}
+		mediaEngine.toggle();
 	}
 
 	function prevEpisode() {
@@ -409,65 +369,28 @@
 	}
 
 	function handleSeekSeconds(seconds: number) {
-		currentTime = seconds;
-		if (audioEl) audioEl.currentTime = seconds;
+		mediaEngine.seek(seconds);
 	}
 
 	function handleSeek(e: Event) {
 		const input = e.target as HTMLInputElement;
 		const newTime = (parseFloat(input.value) / 100) * duration;
-		currentTime = newTime;
-		if (audioEl) audioEl.currentTime = newTime;
+		mediaEngine.seek(newTime);
 	}
 
 
-	// ── Persist position on pause / end; sync episode progress into the store ──
-	$effect(() => {
-		if (!audioEl) return;
-		const onPause = () => {
-			if (!currentEpisode) return;
-			podcastData.lastEpisodeId   = currentEpisode.episode.id;
-			podcastData.lastPodcastId   = currentEpisode.podcast.id;
-			podcastData.lastPositionSec = audioEl.currentTime;
-			// Update only the target episode in-place to avoid cloning the whole array
-			const pod = podcastData.podcasts.find(p => p.id === currentEpisode!.podcast.id);
-			const ep  = pod?.episodes.find(e => e.id === currentEpisode!.episode.id);
-			if (ep) {
-				ep.played      = currentEpisode.episode.played;
-				ep.progress    = currentEpisode.episode.progress;
-				ep.positionSec = currentEpisode.episode.positionSec ?? 0;
-			}
-		};
-		audioEl.addEventListener('pause', onPause);
-		audioEl.addEventListener('ended', onPause);
-		return () => {
-			audioEl?.removeEventListener('pause', onPause);
-			audioEl?.removeEventListener('ended', onPause);
-		};
-	});
 
-	// ── Restore last-played episode on mount ──────────────────────
-	$effect(() => {
-		if (!podcastData.lastEpisodeId || podcastData.lastPodcastId < 0) return;
-		const pod = podcastData.podcasts.find(p => p.id === podcastData.lastPodcastId);
-		if (!pod) return;
-		const ep = pod.episodes.find(e => e.id === podcastData.lastEpisodeId);
-		if (!ep) return;
-		currentEpisode = { podcast: pod, episode: ep };
-		duration = ep.duration;
-		currentTime = podcastData.lastPositionSec;
-	});
+	// Effects handled in mediaEngine sync logic
 
-	$effect(() => { return () => { audioEl?.pause(); }; });
 
 	// iTunes result already-subscribed check
 	function isSubscribed(itunesId: number) {
 		return podcastData.podcasts.some(p => p.itunesId === itunesId && p.subscribed);
 	}
+
 </script>
 
-<!-- Hidden audio element -->
-<audio bind:this={audioEl} preload="none"></audio>
+
 
 <div class="flex flex-col h-full bg-background/85">
 
@@ -732,37 +655,4 @@
 	</div>
 {/if}
 
-	<!-- ── Now Playing Bar ── -->
-	{#if currentEpisode}
-		<div class="border-t bg-background shrink-0 pb-safe">
-			<!-- Track info row -->
-			<div class="flex items-center gap-3 px-4 pt-3 pb-1">
-				<div class="shrink-0">
-					{#if currentEpisode.podcast.artworkUrl}
-						<img src={currentEpisode.podcast.artworkUrl} alt="" class="w-10 h-10 rounded-xl object-cover" />
-					{:else}
-						<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-700 flex items-center justify-center">
-							<Mic2 class="w-5 h-5 text-white" />
-						</div>
-					{/if}
-				</div>
-				<div class="flex-1 min-w-0">
-					<p class="text-sm font-semibold truncate">{currentEpisode.episode.title}</p>
-					<p class="text-xs text-muted-foreground truncate">{currentEpisode.podcast.title}</p>
-				</div>
-			</div>
-			<div class="px-4 pb-3">
-				<PlayerControls
-					isPlaying={isPlaying}
-					currentTime={currentTime}
-					duration={duration}
-					showTrackNav={true}
-					onPlayToggle={togglePlay}
-					onSeek={handleSeekSeconds}
-					onPrev={prevEpisode}
-					onNext={nextEpisode}
-				/>
-			</div>
-		</div>
-	{/if}
 </div>

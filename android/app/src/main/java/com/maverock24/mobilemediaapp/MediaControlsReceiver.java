@@ -3,6 +3,9 @@ package com.maverock24.mobilemediaapp;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.view.KeyEvent;
+import androidx.media.session.MediaButtonReceiver;
+import android.support.v4.media.session.MediaSessionCompat;
 
 public class MediaControlsReceiver extends BroadcastReceiver {
 	public static final String ACTION_PLAY = "com.maverock24.mobilemediaapp.media.PLAY";
@@ -13,6 +16,14 @@ public class MediaControlsReceiver extends BroadcastReceiver {
 	@Override
 	public void onReceive(Context context, Intent intent) {
 		if (intent == null || intent.getAction() == null) {
+			return;
+		}
+		
+		if (Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction())) {
+			MediaSessionCompat session = MediaControlsPlugin.getMediaSession();
+			if (session != null) {
+				MediaButtonReceiver.handleIntent(session, intent);
+			}
 			return;
 		}
 

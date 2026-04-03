@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { env } from '$env/dynamic/public';
 	import { Capacitor } from '@capacitor/core';
+	import { CapacitorHttp } from '@capacitor/core';
 	import { Filesystem, Directory } from '@capacitor/filesystem';
 	import { DirectoryReader } from '$lib/native/directory-reader';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { appSettings, musicSettings, podcastSettings, weatherSettings } from '$lib/stores/settings.svelte';
+	import { library } from '$lib/stores/library.svelte';
 	import {
 		Music2,
 		Mic2,
@@ -77,20 +79,31 @@
 		releaseError = '';
 
 		try {
-			const response = await fetch(resolveReleaseUrl(`/releases/android/latest.json?ts=${Date.now()}`), {
-				cache: 'no-store'
-			});
+			const url = resolveReleaseUrl(`/releases/android/latest.json?ts=${Date.now()}`);
+			let release: AndroidReleaseInfo;
 
-			if (response.status === 404) {
-				androidRelease = null;
-				return;
+			if (Capacitor.isNativePlatform()) {
+				const response = await CapacitorHttp.get({ url });
+				if (response.status === 404) {
+					androidRelease = null;
+					return;
+				}
+				if (response.status !== 200) {
+					throw new Error(`Unable to load the latest Android build (${response.status})`);
+				}
+				release = response.data as AndroidReleaseInfo;
+			} else {
+				const response = await fetch(url, { cache: 'no-store' });
+				if (response.status === 404) {
+					androidRelease = null;
+					return;
+				}
+				if (!response.ok) {
+					throw new Error(`Unable to load the latest Android build (${response.status})`);
+				}
+				release = (await response.json()) as AndroidReleaseInfo;
 			}
 
-			if (!response.ok) {
-				throw new Error(`Unable to load the latest Android build (${response.status})`);
-			}
-
-			const release = (await response.json()) as AndroidReleaseInfo;
 			androidRelease = {
 				...release,
 				url: resolveReleaseUrl(release.url)
@@ -426,6 +439,24 @@
 								</button>
 							</label>
 						{/each}
+					</div>
+
+					<!-- Re-scan button -->
+					<div class="pt-2">
+						<Button
+							variant="outline"
+							class="w-full gap-2 border-primary/30 hover:bg-primary/5"
+							disabled={library.isLoading}
+							onclick={() => library.rescan()}
+						>
+							<RefreshCw class="w-4 h-4 {library.isLoading ? 'animate-spin' : ''}" />
+							{library.isLoading ? 'Scanning...' : 'Re-scan Current Library'}
+						</Button>
+						{#if library.lastScanAt}
+							<p class="text-[10px] text-center text-muted-foreground mt-2">
+								Last scanned: {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(library.lastScanAt))}
+							</p>
+						{/if}
 					</div>
 				</div>
 			{/if}

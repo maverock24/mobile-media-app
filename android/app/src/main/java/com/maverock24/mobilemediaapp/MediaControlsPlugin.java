@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
@@ -156,12 +157,17 @@ public class MediaControlsPlugin extends Plugin {
 		}
 	}
 
+	public static MediaSessionCompat getMediaSession() {
+		return instance != null ? instance.mediaSession : null;
+	}
+
 	private void ensureSession() {
 		if (mediaSession != null) {
 			return;
 		}
 
-		mediaSession = new MediaSessionCompat(getContext(), "MediaHubSession");
+		ComponentName mediaButtonReceiver = new ComponentName(getContext(), MediaControlsReceiver.class);
+		mediaSession = new MediaSessionCompat(getContext(), "MediaHubSession", mediaButtonReceiver, null);
 		mediaSession.setFlags(
 			MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS |
 			MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS

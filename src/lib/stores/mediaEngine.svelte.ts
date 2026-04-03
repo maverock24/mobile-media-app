@@ -1,10 +1,12 @@
 /**
  * Global media engine — single source of truth for playback state across
- * Music and Podcasts.
- *
- * Existing per-view audio elements remain in place and continue to work.
- * This store acts as a coordination layer on top, exposing unified reactive
- * state that the MiniPlayer and MediaSession integration consume.
+ * Music and Podcasts. 
+ * 
+ * This store owns the singleton HTMLAudioElement and manages all playback
+ * events (MediaSession, Capacitor MediaControls, time tracking).
+ * 
+ * Individual views (Music, Podcasts) connect to this engine to start
+ * playback and update their UI state.
  */
 
 import { Capacitor } from '@capacitor/core';
@@ -23,87 +25,273 @@ export interface NowPlayingState {
 // Reactive state — read anywhere via `import { mediaEngine } from …`
 // ─────────────────────────────────────────────────────────────────────────────
 export const mediaEngine = $state<NowPlayingState & {
-	setNowPlaying(item: MediaItem, source: MediaSource): void;
+	// --- State & Config ---
+	queue:       MediaItem[];
+	currentIndex: number;
+	volume:      number;
+	playbackRate: number;
+	isShuffle:    boolean;
+	isRepeat:     boolean;
+	isTransitioning: boolean;
+
+	// --- Central Commands ---
+	play(item: MediaItem, source: MediaSource): void;
+	playFromQueue(index: number): void;
+	setQueue(items: MediaItem[], startIndex?: number): void;
+	pause(): void;
+	resume(): void;
+	toggle(): void;
+	next(): void;
+	prev(): void;
+	seek(time: number): void;
+
+	// --- Internal Hookups (called by audio listeners) ---
 	updateTime(currentTime: number, duration: number): void;
 	setPlaying(playing: boolean): void;
 	clear(): void;
-	_nextHandler:  (() => void) | null;
-	_prevHandler:  (() => void) | null;
-	_playHandler:  (() => void) | null;
-	_pauseHandler: (() => void) | null;
-	_seekHandler:  ((positionSec: number) => void) | null;
-	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null): void;
-	setPlaybackHandlers(
-		play:  (() => void) | null,
-		pause: (() => void) | null,
-		seek:  ((positionSec: number) => void) | null
-	): void;
+
+	// --- Callbacks for views to override behavior ---
+	_onNext: (() => void) | null;
+	_onPrev: (() => void) | null;
+	setCallbacks(next: (() => void) | null, prev: (() => void) | null): void;
 }>({
-	item:        null as MediaItem | null,
-	isPlaying:   false as boolean,
+	item:        null,
+	isPlaying:   false,
 	currentTime: 0,
 	duration:    0,
-	source:      null as MediaSource | null,
+	source:      null,
 
-	/** Called by a view when it starts or selects a new track. */
-	setNowPlaying(item: MediaItem, source: MediaSource) {
-		this.item        = item;
-		this.source      = source;
+	queue:       [],
+	currentIndex: -1,
+	volume:      100,
+	playbackRate: 1,
+	isShuffle:    false,
+	isRepeat:     false,
+	isTransitioning: false,
+
+	_onNext: null,
+	_onPrev: null,
+
+	/** Core Playback: starts a new track immediately. */
+	async play(item: MediaItem, source: MediaSource) {
+		const audio = getAudioElement();
+		if (!audio) return;
+
+		this.item = item;
+		this.source = source;
+		this.isPlaying = true;
+
+		// Resolve dynamic URL if needed
+		let url = item.audioUrl;
+		if (item.resolveUrl) {
+			this.isTransitioning = true;
+			try {
+				const resolved = await item.resolveUrl();
+				if (resolved) url = resolved;
+			} catch (e) {
+				console.error('Failed to resolve track URL:', e);
+			} finally {
+				this.isTransitioning = false;
+			}
+		}
+
+		if (!url) {
+			this.isPlaying = false;
+			return;
+		}
+
 		this.currentTime = 0;
-		this.duration    = item.duration ?? 0;
+		this.duration = item.duration ?? 0;
+
+		// Set the actual source only if it's different to avoid re-buffering
+		if (audio.src !== url) {
+			audio.src = url;
+			audio.load();
+		}
+
+		audio.play().catch(() => {
+			// Browser might block auto-play if no user interaction occurred
+			this.isPlaying = false;
+		});
 	},
 
-	/** Called each tick from the view's timeupdate handler. */
+	playFromQueue(index: number) {
+		if (index < 0 || index >= this.queue.length) return;
+		this.currentIndex = index;
+		const track = this.queue[index];
+		this.play(track, track.source);
+	},
+
+	setQueue(items: MediaItem[], startIndex = 0) {
+		this.queue = items;
+		this.currentIndex = startIndex;
+	},
+
+	pause() {
+		const audio = getAudioElement();
+		if (audio) audio.pause();
+		this.isPlaying = false;
+	},
+
+	resume() {
+		const audio = getAudioElement();
+		if (audio) {
+			audio.play().catch(() => {});
+			this.isPlaying = true;
+		}
+	},
+
+	toggle() {
+		if (this.isPlaying) this.pause();
+		else this.resume();
+	},
+
+	next() {
+		if (this._onNext) {
+			this._onNext();
+			return;
+		}
+
+		if (this.queue.length === 0) return;
+
+		let nextIndex = this.currentIndex;
+		if (this.isRepeat) {
+			// Stay on current index or go to start if ended
+			nextIndex = this.currentIndex;
+		} else if (this.isShuffle) {
+			nextIndex = Math.floor(Math.random() * this.queue.length);
+		} else {
+			nextIndex = this.currentIndex + 1;
+		}
+
+		if (nextIndex >= 0 && nextIndex < this.queue.length) {
+			this.playFromQueue(nextIndex);
+		} else {
+			this.clear(); // End of queue
+		}
+	},
+
+	prev() {
+		if (this.currentTime > 3) {
+			this.seek(0);
+			return;
+		}
+		if (this._onPrev) {
+			this._onPrev();
+		} else if (this.currentIndex > 0) {
+			this.playFromQueue(this.currentIndex - 1);
+		}
+	},
+
+	seek(time: number) {
+		const audio = getAudioElement();
+		if (audio) {
+			const target = Math.max(0, Math.min(time, this.duration));
+			audio.currentTime = target;
+			this.currentTime = target;
+		}
+	},
+
 	updateTime(currentTime: number, duration: number) {
 		this.currentTime = currentTime;
 		if (duration > 0) this.duration = duration;
 	},
 
-	/** Called by the view's play/pause event listeners. */
 	setPlaying(playing: boolean) {
 		this.isPlaying = playing;
 	},
 
-	/** Called when a source stops completely (no track loaded). */
 	clear() {
-		this.item        = null;
-		this.isPlaying   = false;
+		const audio = getAudioElement();
+		if (audio) { audio.pause(); audio.src = ''; }
+		this.item = null;
+		this.isPlaying = false;
 		this.currentTime = 0;
-		this.duration    = 0;
-		this.source      = null;
+		this.duration = 0;
+		this.source = null;
 	},
 
-	_nextHandler: null as (() => void) | null,
-	_prevHandler: null as (() => void) | null,
-	_playHandler: null as (() => void) | null,
-	_pauseHandler: null as (() => void) | null,
-	_seekHandler: null as ((positionSec: number) => void) | null,
-
-	/** Register next/previous track callbacks (e.g. for Android Auto / lock-screen). */
-	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null) {
-		this._nextHandler = next;
-		this._prevHandler = prev;
-	},
-
-	/** Register play/pause/seek callbacks for lock-screen / notification controls. */
-	setPlaybackHandlers(
-		play: (() => void) | null,
-		pause: (() => void) | null,
-		seek: ((positionSec: number) => void) | null
-	) {
-		this._playHandler  = play;
-		this._pauseHandler = pause;
-		this._seekHandler  = seek;
+	setCallbacks(next, prev) {
+		this._onNext = next;
+		this._onPrev = prev;
 	}
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Media Session API integration — kept here so no view owns it.
-// Activated once the engine has an active item.
+// Audio Element Lifecycle
+// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Audio Element Lifecycle
+// ─────────────────────────────────────────────────────────────────────────────
+let _audio: HTMLAudioElement | null = null;
+let _audioCtx: AudioContext | null = null;
+let _filters: BiquadFilterNode[] = [];
+
+const EQ_FREQS = [60, 170, 350, 1000, 3500, 10000];
+
+function getAudioElement(): HTMLAudioElement | null {
+	if (typeof window === 'undefined') return null;
+	if (!_audio) {
+		_audio = new Audio();
+		_audio.preload = 'metadata';
+
+		_audio.addEventListener('play', () => { mediaEngine.setPlaying(true); });
+		_audio.addEventListener('pause', () => { mediaEngine.setPlaying(false); });
+		_audio.addEventListener('ended', () => { mediaEngine.next(); });
+		_audio.addEventListener('timeupdate', () => {
+			mediaEngine.updateTime(_audio!.currentTime, _audio!.duration);
+		});
+		_audio.addEventListener('loadedmetadata', () => {
+			if (_audio!.duration > 0) mediaEngine.duration = _audio!.duration;
+		});
+		_audio.addEventListener('error', (e) => {
+			console.error('Audio playback error:', e);
+			mediaEngine.setPlaying(false);
+		});
+
+		// Sync volume and speed reactively
+		$effect.root(() => {
+			$effect(() => { if (_audio) _audio.volume = mediaEngine.volume / 100; });
+			$effect(() => { if (_audio) _audio.playbackRate = mediaEngine.playbackRate; });
+		});
+	}
+	return _audio;
+}
+
+export function initGlobalAudioContext() {
+	if (!_audio || _audioCtx) return;
+	try {
+		_audioCtx = new AudioContext();
+		const src = _audioCtx.createMediaElementSource(_audio);
+		_filters = EQ_FREQS.map((freq, i) => {
+			const f = _audioCtx!.createBiquadFilter();
+			f.type = (i === 0 ? 'lowshelf' : i === EQ_FREQS.length - 1 ? 'highshelf' : 'peaking') as BiquadFilterType;
+			f.frequency.value = freq;
+			if (f.type === 'peaking') f.Q.value = 1.4;
+			f.gain.value = 0;
+			return f;
+		});
+		let node: AudioNode = src;
+		for (const b of _filters) { node.connect(b); node = b; }
+		node.connect(_audioCtx.destination);
+	} catch (e) {
+		console.error('Failed to init global audio context:', e);
+	}
+}
+
+export function updateGlobalEq(gains: number[]) {
+	if (!_filters.length) initGlobalAudioContext();
+	_filters.forEach((f, i) => {
+		if (gains[i] !== undefined) f.gain.value = gains[i];
+	});
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Browser Media Session Integration
 // ─────────────────────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 	$effect.root(() => {
-		// Sync metadata whenever the playing item changes
 		$effect(() => {
 			const item = mediaEngine.item;
 			if (!item) {
@@ -120,105 +308,63 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 			});
 		});
 
-		// Sync playback state so the lock screen shows the correct play/pause icon
 		$effect(() => {
 			navigator.mediaSession.playbackState = mediaEngine.isPlaying ? 'playing' : 'paused';
 		});
 
-		// Sync position state for seek bar on lock screen / notification
-		// Throttled to once per second — no need to call native API at 60fps
-		let _positionStateTimer: ReturnType<typeof setTimeout> | null = null;
 		$effect(() => {
 			const duration    = mediaEngine.duration;
 			const currentTime = mediaEngine.currentTime;
-			if (duration <= 0) return;
-			if (_positionStateTimer !== null) return; // already scheduled
-			_positionStateTimer = setTimeout(() => {
-				_positionStateTimer = null;
-				if (mediaEngine.duration > 0) {
-					navigator.mediaSession.setPositionState({
-						duration:     mediaEngine.duration,
-						position:     Math.min(mediaEngine.currentTime, mediaEngine.duration),
-						playbackRate: 1,
-					});
-				}
-			}, 1000);
-		});
-
-		// Register all action handlers whenever the callbacks change
-		$effect(() => {
-			const { _nextHandler: next, _prevHandler: prev,
-			        _playHandler: play, _pauseHandler: pause,
-			        _seekHandler: seek } = mediaEngine;
-
-			navigator.mediaSession.setActionHandler('play',          play ?? null);
-			navigator.mediaSession.setActionHandler('pause',         pause ?? null);
-			navigator.mediaSession.setActionHandler('stop',          pause ?? null);
-			navigator.mediaSession.setActionHandler('nexttrack',     next ?? null);
-			navigator.mediaSession.setActionHandler('previoustrack', prev ?? null);
-			navigator.mediaSession.setActionHandler('seekto', seek
-				? (d) => { if (d.seekTime != null) seek(d.seekTime); }
-				: null);
-			navigator.mediaSession.setActionHandler('seekforward', seek
-				? (d) => seek(Math.min(mediaEngine.currentTime + (d.seekOffset ?? 30), mediaEngine.duration))
-				: null);
-			navigator.mediaSession.setActionHandler('seekbackward', seek
-				? (d) => seek(Math.max(mediaEngine.currentTime - (d.seekOffset ?? 10), 0))
-				: null);
-		});
-
-		return () => {
-			if (_positionStateTimer !== null) {
-				clearTimeout(_positionStateTimer);
-				_positionStateTimer = null;
+			if (duration > 0 && isFinite(currentTime)) {
+				navigator.mediaSession.setPositionState({
+					duration:     duration,
+					position:     Math.min(currentTime, duration),
+					playbackRate: 1,
+				});
 			}
-		};
+		});
+
+		$effect(() => {
+			navigator.mediaSession.setActionHandler('play',          () => mediaEngine.resume());
+			navigator.mediaSession.setActionHandler('pause',         () => mediaEngine.pause());
+			navigator.mediaSession.setActionHandler('stop',          () => mediaEngine.pause());
+			navigator.mediaSession.setActionHandler('nexttrack',     () => mediaEngine.next());
+			navigator.mediaSession.setActionHandler('previoustrack', () => mediaEngine.prev());
+			navigator.mediaSession.setActionHandler('seekto', (d) => {
+				if (d.seekTime != null) mediaEngine.seek(d.seekTime);
+			});
+			navigator.mediaSession.setActionHandler('seekforward', (d) => {
+				mediaEngine.seek(mediaEngine.currentTime + (d.seekOffset ?? 30));
+			});
+			navigator.mediaSession.setActionHandler('seekbackward', (d) => {
+				mediaEngine.seek(mediaEngine.currentTime - (d.seekOffset ?? 10));
+			});
+		});
 	});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Native Android lock-screen controls bridge for Capacitor.
-// WebView MediaSession support is not sufficient on many Android devices.
+// Capacitor Native Media Controls Integration
 // ─────────────────────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 	$effect.root(() => {
-		let permissionRequested = false;
-		let nativePositionTimer: ReturnType<typeof setTimeout> | null = null;
 		let mediaActionHandle: Promise<{ remove: () => Promise<void> }> | null = null;
 
 		$effect(() => {
-			if (mediaActionHandle !== null) {
-				return;
-			}
-
 			mediaActionHandle = MediaControls.addListener('mediaAction', (event) => {
 				switch (event.action) {
-					case 'play':
-						mediaEngine._playHandler?.();
-						break;
-					case 'pause':
-						mediaEngine._pauseHandler?.();
-						break;
-					case 'nexttrack':
-						mediaEngine._nextHandler?.();
-						break;
-					case 'previoustrack':
-						mediaEngine._prevHandler?.();
-						break;
+					case 'play':          mediaEngine.resume(); break;
+					case 'pause':         mediaEngine.pause();  break;
+					case 'nexttrack':     mediaEngine.next();   break;
+					case 'previoustrack': mediaEngine.prev();   break;
 					case 'seekto':
-						if (event.positionSec != null) {
-							mediaEngine._seekHandler?.(event.positionSec);
-						}
-						break;
-					default:
+						if (event.positionSec != null) mediaEngine.seek(event.positionSec);
 						break;
 				}
 			});
-
 			return () => {
 				if (mediaActionHandle) {
-					void mediaActionHandle.then((handle) => handle.remove());
-					mediaActionHandle = null;
+					void mediaActionHandle.then((h) => h.remove());
 				}
 			};
 		});
@@ -229,12 +375,6 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 				void MediaControls.clear().catch(() => {});
 				return;
 			}
-
-			if (!permissionRequested) {
-				permissionRequested = true;
-				void MediaControls.ensureNotificationPermission().catch(() => {});
-			}
-
 			void MediaControls.updateNowPlaying({
 				title: item.title,
 				artist: item.subtitle,
@@ -244,42 +384,17 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 
 		$effect(() => {
 			void MediaControls.setTransportAvailability({
-				hasNext: mediaEngine._nextHandler !== null,
-				hasPrevious: mediaEngine._prevHandler !== null,
+				hasNext: mediaEngine.currentIndex < mediaEngine.queue.length - 1 || mediaEngine._onNext !== null,
+				hasPrevious: mediaEngine.currentIndex > 0 || mediaEngine._onPrev !== null,
 			}).catch(() => {});
 		});
 
 		$effect(() => {
-			const isPlaying = mediaEngine.isPlaying;
-			const currentTime = mediaEngine.currentTime;
-			const duration = mediaEngine.duration;
-			void isPlaying;
-			void currentTime;
-			void duration;
-
-			if (nativePositionTimer !== null) {
-				return;
-			}
-
-			nativePositionTimer = setTimeout(() => {
-				nativePositionTimer = null;
-				void MediaControls.updatePlaybackState({
-					isPlaying: mediaEngine.isPlaying,
-					positionSec: mediaEngine.currentTime,
-					durationSec: mediaEngine.duration,
-				}).catch(() => {});
-			}, 1000);
+			void MediaControls.updatePlaybackState({
+				isPlaying: mediaEngine.isPlaying,
+				positionSec: mediaEngine.currentTime,
+				durationSec: mediaEngine.duration,
+			}).catch(() => {});
 		});
-
-		return () => {
-			if (nativePositionTimer !== null) {
-				clearTimeout(nativePositionTimer);
-				nativePositionTimer = null;
-			}
-			if (mediaActionHandle) {
-				void mediaActionHandle.then((handle) => handle.remove());
-				mediaActionHandle = null;
-			}
-		};
 	});
 }
