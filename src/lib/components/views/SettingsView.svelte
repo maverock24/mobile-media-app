@@ -51,11 +51,8 @@
 			return configuredBaseUrl;
 		}
 
-		if (Capacitor.isNativePlatform()) {
-			return 'https://mobile-media-app-maverock24.netlify.app';
-		}
-
-		return '';
+		// Fallback to the known production Nelify URL so update checks work by default
+		return 'https://mobile-media-app-maverock24.netlify.app';
 	})();
 
 	function resolveReleaseUrl(path: string): string {
@@ -82,14 +79,17 @@
 			const url = resolveReleaseUrl(`/releases/android/latest.json?ts=${Date.now()}`);
 			let release: AndroidReleaseInfo;
 
-			if (Capacitor.isNativePlatform()) {
+			// Prefer CapacitorHttp for native bypass, fallback to browser fetch
+			const isNative = Capacitor.isNativePlatform();
+			
+			if (isNative) {
 				const response = await CapacitorHttp.get({ url });
 				if (response.status === 404) {
 					androidRelease = null;
 					return;
 				}
 				if (response.status !== 200) {
-					throw new Error(`Unable to load the latest Android build (${response.status})`);
+					throw new Error(`Unable to load release info — server returned ${response.status}`);
 				}
 				release = response.data as AndroidReleaseInfo;
 			} else {
@@ -99,7 +99,7 @@
 					return;
 				}
 				if (!response.ok) {
-					throw new Error(`Unable to load the latest Android build (${response.status})`);
+					throw new Error(`Unable to load release info — server returned ${response.status}`);
 				}
 				release = (await response.json()) as AndroidReleaseInfo;
 			}
@@ -110,7 +110,9 @@
 			};
 		} catch (error) {
 			androidRelease = null;
-			releaseError = error instanceof Error ? error.message : 'Unable to load the latest Android build.';
+			releaseError = error instanceof Error ? 
+				(error.message.includes('Failed to fetch') ? 'Update server unreachable (check network)' : error.message) 
+				: 'Unable to load the latest Android build.';
 		} finally {
 			isCheckingRelease = false;
 		}
