@@ -165,8 +165,12 @@ public class MediaControlsPlugin extends Plugin {
 	}
 
 	public static void dispatchAction(String action) {
+		dispatchAction(action, -1L);
+	}
+
+	public static void dispatchAction(String action, long positionMs) {
 		if (instance != null) {
-			instance.emitAction(action, -1L);
+			instance.emitAction(action, positionMs);
 		}
 	}
 

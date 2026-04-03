@@ -77,31 +77,39 @@
 
 		try {
 			const url = resolveReleaseUrl(`/releases/android/latest.json?ts=${Date.now()}`);
-			let release: AndroidReleaseInfo;
+			let release: AndroidReleaseInfo | null = null;
+			let lastStatusCode = 0;
 
-			// Prefer CapacitorHttp for native bypass, fallback to browser fetch
-			const isNative = Capacitor.isNativePlatform();
-			
-			if (isNative) {
+			// 1. Try Native Bridge (CapacitorHttp) first for CORS bypass
+			try {
 				const response = await CapacitorHttp.get({ url });
-				if (response.status === 404) {
+				lastStatusCode = response.status;
+				if (response.status === 200) {
+					release = response.data as AndroidReleaseInfo;
+				} else if (response.status === 404) {
 					androidRelease = null;
 					return;
 				}
-				if (response.status !== 200) {
-					throw new Error(`Unable to load release info — server returned ${response.status}`);
-				}
-				release = response.data as AndroidReleaseInfo;
-			} else {
+			} catch (bridgeError) {
+				// Fallback to standard fetch if bridge is missing or failed
+				console.warn('Native bridge fetch failed, falling back to browser fetch:', bridgeError);
+			}
+
+			// 2. Fallback to Standard Fetch if native failed or returned error
+			if (!release) {
 				const response = await fetch(url, { cache: 'no-store' });
+				lastStatusCode = response.status;
 				if (response.status === 404) {
 					androidRelease = null;
 					return;
 				}
-				if (!response.ok) {
-					throw new Error(`Unable to load release info — server returned ${response.status}`);
+				if (response.ok) {
+					release = (await response.json()) as AndroidReleaseInfo;
 				}
-				release = (await response.json()) as AndroidReleaseInfo;
+			}
+
+			if (!release) {
+				throw new Error(`Unable to load release info — server returned ${lastStatusCode}`);
 			}
 
 			androidRelease = {
