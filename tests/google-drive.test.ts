@@ -47,6 +47,16 @@ test.describe('Google Drive music library', () => {
 		});
 
 		await page.route('https://www.googleapis.com/drive/v3/files?*', async (route) => {
+			const url = new URL(route.request().url());
+			// Return empty for appDataFolder config-sync queries so findConfigFileId returns null
+			if (url.searchParams.get('spaces') === 'appDataFolder') {
+				await route.fulfill({
+					status: 200,
+					contentType: 'application/json',
+					body: JSON.stringify({ files: [] })
+				});
+				return;
+			}
 			await route.fulfill({
 				status: 200,
 				contentType: 'application/json',
@@ -79,7 +89,11 @@ test.describe('Google Drive music library', () => {
 
 		await page.getByRole('button', { name: /Connect Google Drive/i }).click();
 
-		await expect(page.getByText('drive.tester@example.com')).toBeVisible();
+		// A folder-selection dialog appears after connecting. Select all to load files.
+		// locator.click() has built-in auto-waiting so it will wait for the button to appear.
+		await page.getByRole('button', { name: /Select all/i }).click();
+
+		await expect(page.getByText('drive.tester@example.com')).toBeVisible({ timeout: 5000 });
 		await expect(page.getByText('Drive Song')).toBeVisible();
 
 		await page.getByText('Drive Song').click();

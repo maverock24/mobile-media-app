@@ -8,8 +8,6 @@
 	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
-	import { CapacitorHttp } from '@capacitor/core';
-	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
@@ -62,75 +60,82 @@
 	let episodesRefreshing = $state(false); // background refresh while episodes already shown
 	let episodesError      = $state<string | null>(null);
 
-	// ── Virtualization ───────────────────────────────────────────
-	let episodeScrollEl = $state<HTMLElement | null>(null);
-	const virtualizerStore = $derived(
-		createVirtualizer({
-			count: selectedPodcast?.episodes.length ?? 0,
-			getScrollElement: () => episodeScrollEl,
-			estimateSize: () => 130, // average episode item height
-			overscan: 5,
-		})
-	);
-
-	function virtualMeasure(node: HTMLElement, index: number) {
-		node.dataset.index = String(index);
-		if ($virtualizerStore) $virtualizerStore.measureElement(node);
-		return {
-			update(newIndex: number) {
-				node.dataset.index = String(newIndex);
-				if ($virtualizerStore) $virtualizerStore.measureElement(node);
-			}
-		};
-	}
-
 	// ── Playback state ───────────────────────────────────────────
 	let currentEpisode = $state<{ podcast: Podcast; episode: Episode } | null>(null);
-	let currentTime = $derived(mediaEngine.currentTime);
-	let duration    = $derived(mediaEngine.duration);
-	let isPlaying   = $derived(mediaEngine.isPlaying);
+	let isPlaying      = $state(false);
+	let currentTime    = $state(0);
+	let duration       = $state(0);
+	let audioEl: HTMLAudioElement;
 
-
-	// ── Register MediaSession callbacks ──────────────────────────
+	// ── Register stop-callback ───────────────────────────────────
 	$effect(() => {
-		mediaEngine.setCallbacks(
-			() => { /* No-op for now, could play next episode */ },
-			() => { /* No-op for now */ }
-		);
-		return () => mediaEngine.setCallbacks(null, null);
+		registerAudioSource('podcast', () => {
+			if (audioEl && isPlaying) audioEl.pause();
+		});
 	});
 
-
-	// ── Sync track position & progress ───────────────────────────
-	let lastFlushTime = 0;
+	// ── Register MediaSession play/pause/seek handlers for lock-screen ──
 	$effect(() => {
-		if (mediaEngine.source !== 'podcast' || !currentEpisode) return;
-		
-		const cur = mediaEngine.currentTime;
-		const dur = mediaEngine.duration;
-		
-		// Update local episode object frequently (smooth UI)
-		currentEpisode.episode.positionSec = cur;
-		if (dur > 0) {
-			currentEpisode.episode.progress = Math.min(100, Math.round((cur / dur) * 100));
-		}
+		// Guard: methods may not be accessible if the $state proxy wraps them
+		if (typeof mediaEngine.setPlaybackHandlers !== 'function') return;
+		mediaEngine.setPlaybackHandlers(
+			() => togglePlay(),
+			() => togglePlay(),
+			(pos) => { if (audioEl) { audioEl.currentTime = pos; currentTime = pos; } }
+		);
+		return () => {
+			if (typeof mediaEngine.setPlaybackHandlers === 'function')
+				mediaEngine.setPlaybackHandlers(null, null, null);
+		};
+	});
 
-		// Only flush to the global persisted store (triggers Drive sync/persist)
-		// on pause OR every 30 seconds during active playback.
-		const isPlayingNow = mediaEngine.isPlaying;
-		const timeSinceFlush = Date.now() - lastFlushTime;
-
-		if (!isPlayingNow || timeSinceFlush > 30000) {
-			lastFlushTime = Date.now();
-			// These updates trigger LocalStorage/Drive sync via the driveConfigSync effect
-			podcastData.lastEpisodeId = currentEpisode.episode.id;
-			podcastData.lastPositionSec = cur;
-		}
+	// ── Audio element event wiring ───────────────────────────────
+	$effect(() => {
+		if (!audioEl) return;
+		// Throttle timeupdate to ~4Hz — smooth for seek bar, 15× less CPU than 60fps
+		let _lastTimeUpdate = 0;
+		const onTimeUpdate = () => {
+			const now = Date.now();
+			if (now - _lastTimeUpdate < 250) return;
+			_lastTimeUpdate = now;
+			currentTime = audioEl.currentTime;
+			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
+			if (currentEpisode && duration > 0) {
+				currentEpisode.episode.progress = Math.min(100, Math.round((audioEl.currentTime / duration) * 100));
+				currentEpisode.episode.positionSec = audioEl.currentTime;
+			}
+		};
+		const onLoadedMetadata = () => {
+			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
+			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
+		};
+		const onPlay  = () => { isPlaying = true;  mediaEngine.setPlaying(true);  };
+		const onPause = () => { isPlaying = false; mediaEngine.setPlaying(false); };
+		const onEnded = () => {
+			isPlaying = false;
+			mediaEngine.setPlaying(false);
+			if (currentEpisode) {
+				currentEpisode.episode.played = true;
+				currentEpisode.episode.progress = 100;
+				currentEpisode.episode.positionSec = 0;
+			}
+		};
+		audioEl.addEventListener('timeupdate',     onTimeUpdate);
+		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
+		audioEl.addEventListener('play',  onPlay);
+		audioEl.addEventListener('pause', onPause);
+		audioEl.addEventListener('ended', onEnded);
+		return () => {
+			audioEl?.removeEventListener('timeupdate',     onTimeUpdate);
+			audioEl?.removeEventListener('loadedmetadata', onLoadedMetadata);
+			audioEl?.removeEventListener('play',  onPlay);
+			audioEl?.removeEventListener('pause', onPause);
+			audioEl?.removeEventListener('ended', onEnded);
+		};
 	});
 
 	// ── Sync playback speed ──────────────────────────────────────
-	$effect(() => { mediaEngine.playbackRate = podcastSettings.playbackSpeed; });
-
+	$effect(() => { if (audioEl) audioEl.playbackRate = podcastSettings.playbackSpeed; });
 
 	// ── Auto-save podcast data to Drive when subscriptions/progress change ──
 	$effect(() => {
@@ -146,7 +151,8 @@
 	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
 	const rssCache = new Map<string, { data: unknown; ts: number }>();
-	async function fetchRss(feedUrl: string) {
+	async function fetchRss(feedUrl: string): Promise<unknown> {
+		// Validate that the feed URL is a legitimate HTTP(S) address
 		try {
 			const parsed = new URL(feedUrl);
 			if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
@@ -156,47 +162,11 @@
 			throw new Error('Invalid feed URL.');
 		}
 		const cached = rssCache.get(feedUrl);
-		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data as { feed: { image: string }; items: any[] };
-
-		const res = await CapacitorHttp.get({ url: feedUrl });
-		const xmlStr = res.data;
-
-		// Browsers native fast C++ DOM deserialization
-		const parser = new DOMParser();
-		const doc = parser.parseFromString(xmlStr, 'application/xml');
-		const channel = doc.querySelector('channel');
-
-		// Handle parser errors embedded in document
-		if (!channel || doc.querySelector('parsererror')) {
-			throw new Error('Invalid RSS feed format.');
-		}
-
-		const feedImage = channel.querySelector('image url')?.textContent ?? '';
-
-		const items = Array.from(doc.querySelectorAll('item')).map(item => {
-			const title = item.querySelector('title')?.textContent ?? 'Untitled';
-			const rawDesc = item.querySelector('description')?.textContent 
-				?? item.getElementsByTagName('content:encoded')[0]?.textContent 
-				?? '';
-			
-			const description = rawDesc.replace(/<[^>]+>/g, '').trim().slice(0, 200);
-
-			const durationStr = item.querySelector('duration')?.textContent 
-				?? item.getElementsByTagName('itunes:duration')[0]?.textContent 
-				?? '0';
-			
-			const duration = parseDuration(durationStr);
-			const pubDate = item.querySelector('pubDate')?.textContent ?? '';
-
-			const enclosure = item.querySelector('enclosure');
-			const link = enclosure?.getAttribute('url') ?? item.querySelector('link')?.textContent ?? '';
-
-			return { title, description, duration, pubDate, link };
-		});
-
-		const result = { feed: { image: feedImage }, items };
-		rssCache.set(feedUrl, { data: result, ts: Date.now() });
-		return result;
+		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data;
+		const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`);
+		const data = await res.json();
+		if (data.status === 'ok') rssCache.set(feedUrl, { data, ts: Date.now() });
+		return data;
 	}
 
 	// ── Helpers ─────────────────────────────────────────────────
@@ -264,13 +234,15 @@
 
 	// ── Subscribe/unsubscribe ────────────────────────────────────
 	function subscribeFromItunes(item: ItunesResult) {
+		let pod: Podcast;
 		if (podcastData.podcasts.some(p => p.itunesId === item.trackId)) {
 			// Already in list — just make sure it's subscribed
 			podcastData.podcasts = podcastData.podcasts.map(p =>
 				p.itunesId === item.trackId ? { ...p, subscribed: true } : p
 			);
+			pod = podcastData.podcasts.find(p => p.itunesId === item.trackId)!;
 		} else {
-			const pod: Podcast = {
+			pod = {
 				id:         ++podcastData.nextId,
 				itunesId:   item.trackId,
 				title:      item.trackName,
@@ -284,6 +256,8 @@
 			};
 			podcastData.podcasts = [...podcastData.podcasts, pod];
 		}
+		// Auto-open the episode view after subscribing
+		openPodcast(pod);
 	}
 
 	function unsubscribe(podcast: Podcast) {
@@ -325,22 +299,28 @@
 					selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
 				}
 			}
-			const data = await fetchRss(podcast.feedUrl);
-			const eps: Episode[] = data.items.map((item, i: number) => {
+			const data = await fetchRss(podcast.feedUrl) as Record<string, unknown>;
+			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
+			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
+				const enc = item.enclosure as { link?: string; length?: number } | null;
+				// itunes_duration is a string like "1:23:45" or seconds as number
+				const rawDur = item.itunes_duration ?? item.duration ?? 0;
 				return {
-					// prefix with itunesId so IDs are unique across podcasts
-					id:          `${podcast.itunesId}-${i}`,
-					title:       item.title,
-					description: item.description,
-					duration:    item.duration,
-					positionSec: 0,
-					publishedAt: item.pubDate,
+			// prefix with itunesId so IDs are unique across podcasts
+				id:          `${podcast.itunesId}-${i}`,
+				title:       String(item.title ?? 'Untitled'),
+				description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
+				duration:    parseDuration(rawDur as string | number),
+				positionSec: 0,
+					publishedAt: String(item.pubDate ?? ''),
 					played:      false,
 					progress:    0,
-					audioUrl:    item.link,
+					audioUrl:    enc?.link ?? String(item.link ?? ''),
 				};
 			});
-			const feedImage = data.feed.image;
+			const feedImage = typeof (data.feed as Record<string, unknown> | undefined)?.image === 'string'
+				? (data.feed as Record<string, unknown>).image as string
+				: '';
 			// Merge: preserve played/progress/positionSec from already-known episodes
 			const existingMap = new Map(
 				(podcastData.podcasts.find(p => p.id === podcast.id)?.episodes ?? []).map(e => [e.id, e])
@@ -384,14 +364,21 @@
 	// ── Playback ─────────────────────────────────────────────────
 	function playEpisode(podcast: Podcast, episode: Episode) {
 		if (!episode.audioUrl) return;
-		
+		claimAudio('podcast');
 		currentEpisode = { podcast, episode };
-		
+		duration = episode.duration;
+		currentTime = 0;
+		audioEl.src = episode.audioUrl;
+		audioEl.playbackRate = podcastSettings.playbackSpeed;
+		audioEl.load();
 		const resumeAt = (episode.positionSec ?? 0) > 10
 			? episode.positionSec
 			: Math.round((episode.progress / 100) * (episode.duration || 0));
-
-		mediaEngine.setQueue([{
+		if (resumeAt > 10) {
+			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = resumeAt; }, { once: true });
+		}
+		audioEl.play().catch(() => {});
+		mediaEngine.setNowPlaying({
 			id:         episode.id,
 			source:     'podcast',
 			title:      episode.title,
@@ -399,18 +386,17 @@
 			audioUrl:   episode.audioUrl,
 			artworkUrl: podcast.artworkUrl,
 			duration:   episode.duration
-		}], 0);
-
-		void mediaEngine.play(mediaEngine.queue[0], 'podcast');
-		
-		if (resumeAt > 10) {
-			// Seek after a short delay to ensure source is loaded
-			setTimeout(() => mediaEngine.seek(resumeAt), 200);
-		}
+		}, 'podcast');
 	}
 
 	function togglePlay() {
-		mediaEngine.toggle();
+		if (!audioEl || !currentEpisode) return;
+		if (isPlaying) {
+			audioEl.pause();
+		} else {
+			claimAudio('podcast');
+			audioEl.play().catch(() => {});
+		}
 	}
 
 	function prevEpisode() {
@@ -432,28 +418,65 @@
 	}
 
 	function handleSeekSeconds(seconds: number) {
-		mediaEngine.seek(seconds);
+		currentTime = seconds;
+		if (audioEl) audioEl.currentTime = seconds;
 	}
 
 	function handleSeek(e: Event) {
 		const input = e.target as HTMLInputElement;
 		const newTime = (parseFloat(input.value) / 100) * duration;
-		mediaEngine.seek(newTime);
+		currentTime = newTime;
+		if (audioEl) audioEl.currentTime = newTime;
 	}
 
 
+	// ── Persist position on pause / end; sync episode progress into the store ──
+	$effect(() => {
+		if (!audioEl) return;
+		const onPause = () => {
+			if (!currentEpisode) return;
+			podcastData.lastEpisodeId   = currentEpisode.episode.id;
+			podcastData.lastPodcastId   = currentEpisode.podcast.id;
+			podcastData.lastPositionSec = audioEl.currentTime;
+			// Update only the target episode in-place to avoid cloning the whole array
+			const pod = podcastData.podcasts.find(p => p.id === currentEpisode!.podcast.id);
+			const ep  = pod?.episodes.find(e => e.id === currentEpisode!.episode.id);
+			if (ep) {
+				ep.played      = currentEpisode.episode.played;
+				ep.progress    = currentEpisode.episode.progress;
+				ep.positionSec = currentEpisode.episode.positionSec ?? 0;
+			}
+		};
+		audioEl.addEventListener('pause', onPause);
+		audioEl.addEventListener('ended', onPause);
+		return () => {
+			audioEl?.removeEventListener('pause', onPause);
+			audioEl?.removeEventListener('ended', onPause);
+		};
+	});
 
-	// Effects handled in mediaEngine sync logic
+	// ── Restore last-played episode on mount ──────────────────────
+	$effect(() => {
+		if (!podcastData.lastEpisodeId || podcastData.lastPodcastId < 0) return;
+		const pod = podcastData.podcasts.find(p => p.id === podcastData.lastPodcastId);
+		if (!pod) return;
+		const ep = pod.episodes.find(e => e.id === podcastData.lastEpisodeId);
+		if (!ep) return;
+		currentEpisode = { podcast: pod, episode: ep };
+		duration = ep.duration;
+		currentTime = podcastData.lastPositionSec;
+	});
 
+	$effect(() => { return () => { audioEl?.pause(); }; });
 
 	// iTunes result already-subscribed check
 	function isSubscribed(itunesId: number) {
 		return podcastData.podcasts.some(p => p.itunesId === itunesId && p.subscribed);
 	}
-
 </script>
 
-
+<!-- Hidden audio element -->
+<audio bind:this={audioEl} preload="none"></audio>
 
 <div class="flex flex-col h-full bg-background/85">
 
@@ -499,7 +522,7 @@
 		</div>
 
 		<!-- Episode list body -->
-		<div class="flex-1 overflow-y-auto relative" bind:this={episodeScrollEl}>
+		<div class="flex-1 overflow-y-auto">
 			{#if episodesLoading}
 				<div class="flex flex-col items-center justify-center h-40 gap-3">
 					<div class="w-8 h-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin"></div>
@@ -519,59 +542,57 @@
 					<p class="text-sm">No episodes found</p>
 				</div>
 			{:else}
-				<div style="height: {$virtualizerStore?.getTotalSize() ?? 0}px; width: 100%; position: relative;">
-					{#each $virtualizerStore?.getVirtualItems() ?? [] as virtualRow (virtualRow.index)}
-						{@const episode = selectedPodcast.episodes[virtualRow.index]}
-						<div
-							style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({virtualRow.start}px);"
-							use:virtualMeasure={virtualRow.index}
-						>
-							<div class="p-4 border-b hover:bg-accent/40 transition-colors">
-								<div class="flex items-start gap-3">
-									<div class="flex-1 min-w-0">
-										<div class="flex items-center gap-2 mb-1">
-											{#if episode.played}
-												<CheckCircle2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-											{/if}
-											<p class="font-medium text-sm truncate {episode.played ? 'text-muted-foreground' : ''}">
-												{episode.title}
-											</p>
-										</div>
-										{#if episode.description}
-											<p class="text-xs text-muted-foreground line-clamp-2 mb-2">{episode.description}</p>
-										{/if}
-										<div class="flex items-center gap-3 text-xs text-muted-foreground">
-											{#if episode.duration > 0}
-												<span class="flex items-center gap-1">
-													<Clock class="w-3 h-3" />{formatTime(episode.duration)}
-												</span>
-											{/if}
-											{#if episode.publishedAt}
-												<span>{formatDate(episode.publishedAt)}</span>
-											{/if}
-										</div>
-										{#if episode.progress > 0 && episode.progress < 100}
-											<div class="mt-2 h-1 rounded-full bg-secondary overflow-hidden">
-												<div class="h-full bg-primary rounded-full" style="width: {episode.progress}%"></div>
-											</div>
-										{/if}
-									</div>
-									<Button
-										size="icon" variant={currentEpisode?.episode.id === episode.id && isPlaying ? 'default' : 'outline'}
-										class="shrink-0 w-9 h-9 rounded-full"
-										onclick={() => selectedPodcast && playEpisode(selectedPodcast, episode)}
-									>
-										{#if currentEpisode?.episode.id === episode.id && isPlaying}
-											<Pause class="w-4 h-4" />
-										{:else}
-											<Play class="w-4 h-4 ml-0.5" />
-										{/if}
-									</Button>
+				{#each selectedPodcast.episodes as episode}
+					<div class="p-4 border-b hover:bg-accent/40 transition-colors">
+						<div class="flex items-start gap-3">
+							<div class="flex-1 min-w-0">
+								<div class="flex items-center gap-2 mb-1">
+									{#if episode.played}
+										<CheckCircle2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+									{/if}
+									<p class="font-medium text-sm truncate {episode.played ? 'text-muted-foreground' : ''}">
+										{episode.title}
+									</p>
 								</div>
+								{#if episode.description}
+									<p class="text-xs text-muted-foreground line-clamp-2 mb-2">{episode.description}</p>
+								{/if}
+								<div class="flex items-center gap-3 text-xs text-muted-foreground">
+									{#if episode.duration > 0}
+										<span class="flex items-center gap-1">
+											<Clock class="w-3 h-3" />{formatTime(episode.duration)}
+										</span>
+									{/if}
+									{#if episode.publishedAt}
+										<span>{formatDate(episode.publishedAt)}</span>
+									{/if}
+								</div>
+								{#if episode.progress > 0 && episode.progress < 100}
+									<div class="mt-2 h-1 rounded-full bg-secondary overflow-hidden">
+										<div class="h-full bg-primary rounded-full" style="width: {episode.progress}%"></div>
+									</div>
+								{/if}
 							</div>
+							<Button
+								size="icon" variant={currentEpisode?.episode.id === episode.id && isPlaying ? 'default' : 'outline'}
+								class="shrink-0 w-9 h-9 rounded-full"
+								onclick={() => {
+									if (currentEpisode?.episode.id === episode.id) {
+										togglePlay();
+									} else if (selectedPodcast) {
+										playEpisode(selectedPodcast, episode);
+									}
+								}}
+							>
+								{#if currentEpisode?.episode.id === episode.id && isPlaying}
+									<Pause class="w-4 h-4" />
+								{:else}
+									<Play class="w-4 h-4 ml-0.5" />
+								{/if}
+							</Button>
 						</div>
-					{/each}
-				</div>
+					</div>
+				{/each}
 			{/if}
 		</div>
 	</div>
@@ -627,7 +648,6 @@
 					>
 						{#if podcast.artworkUrl}
 							<img src={podcast.artworkUrl} alt={podcast.title}
-								loading="lazy"
 								class="w-13 h-13 rounded-xl object-cover shrink-0 w-[52px] h-[52px]" />
 						{:else}
 							<div class="w-[52px] h-[52px] rounded-xl bg-gradient-to-br {artGradient} flex items-center justify-center text-2xl shrink-0">
@@ -683,7 +703,6 @@
 						>
 							{#if item.artworkUrl600}
 								<img src={item.artworkUrl600} alt={item.trackName}
-									loading="lazy"
 									class="w-[52px] h-[52px] rounded-xl object-cover shrink-0" />
 							{:else}
 								<div class="w-[52px] h-[52px] rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-2xl shrink-0">
@@ -728,4 +747,37 @@
 	</div>
 {/if}
 
+	<!-- ── Now Playing Bar ── -->
+	{#if currentEpisode}
+		<div class="border-t bg-background shrink-0 pb-safe">
+			<!-- Track info row -->
+			<div class="flex items-center gap-3 px-4 pt-3 pb-1">
+				<div class="shrink-0">
+					{#if currentEpisode.podcast.artworkUrl}
+						<img src={currentEpisode.podcast.artworkUrl} alt="" class="w-10 h-10 rounded-xl object-cover" />
+					{:else}
+						<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-700 flex items-center justify-center">
+							<Mic2 class="w-5 h-5 text-white" />
+						</div>
+					{/if}
+				</div>
+				<div class="flex-1 min-w-0">
+					<p class="text-sm font-semibold truncate">{currentEpisode.episode.title}</p>
+					<p class="text-xs text-muted-foreground truncate">{currentEpisode.podcast.title}</p>
+				</div>
+			</div>
+			<div class="px-4 pb-3">
+				<PlayerControls
+					isPlaying={isPlaying}
+					currentTime={currentTime}
+					duration={duration}
+					showTrackNav={true}
+					onPlayToggle={togglePlay}
+					onSeek={handleSeekSeconds}
+					onPrev={prevEpisode}
+					onNext={nextEpisode}
+				/>
+			</div>
+		</div>
+	{/if}
 </div>

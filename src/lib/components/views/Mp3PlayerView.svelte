@@ -84,29 +84,42 @@
 			};
 			req.onsuccess = () => res(req.result);
 			req.onerror  = () => rej(req.error);
+			// Reject instead of hanging when another connection blocks the version change.
+			req.onblocked = () => rej(new Error('IDB open blocked'));
 		});
 	}
+	// ── IDB helpers — eliminate repeated Promise wrapping ──────────────────────
+	function idbGet<T>(db: IDBDatabase, store: string, key: string): Promise<T | null> {
+		return new Promise((res, rej) => {
+			const req = db.transaction(store).objectStore(store).get(key);
+			req.onsuccess = () => res((req.result ?? null) as T | null);
+			req.onerror = () => rej(req.error);
+		});
+	}
+	function idbPut(db: IDBDatabase, store: string, value: unknown, key: string): Promise<void> {
+		return new Promise((res, rej) => {
+			const tx = db.transaction(store, 'readwrite');
+			tx.objectStore(store).put(value, key);
+			tx.oncomplete = () => res();
+			tx.onerror = () => rej(tx.error);
+		});
+	}
+	function idbDelete(db: IDBDatabase, store: string, key: string): Promise<void> {
+		return new Promise((res, rej) => {
+			const tx = db.transaction(store, 'readwrite');
+			tx.objectStore(store).delete(key);
+			tx.oncomplete = () => res();
+			tx.onerror = () => rej(tx.error);
+		});
+	}
+
 	async function saveHandleToIDB(handle: FileSystemDirectoryHandle) {
-		try {
-			const db = await openIDB();
-			const tx = db.transaction('handles', 'readwrite');
-			tx.objectStore('handles').put(handle, 'last-dir');
-			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
-			db.close();
-		} catch { /* storage unavailable */ }
+		try { const db = await openIDB(); await idbPut(db, 'handles', handle, 'last-dir'); db.close(); }
+		catch { /* storage unavailable */ }
 	}
 	async function loadHandleFromIDB(): Promise<FileSystemDirectoryHandle | null> {
-		try {
-			const db = await openIDB();
-			const tx = db.transaction('handles', 'readonly');
-			const result = await new Promise<FileSystemDirectoryHandle | null>((res, rej) => {
-				const req = tx.objectStore('handles').get('last-dir');
-				req.onsuccess = () => res((req.result as FileSystemDirectoryHandle) ?? null);
-				req.onerror  = () => rej(req.error);
-			});
-			db.close();
-			return result;
-		} catch { return null; }
+		try { const db = await openIDB(); const h = await idbGet<FileSystemDirectoryHandle>(db, 'handles', 'last-dir'); db.close(); return h; }
+		catch { return null; }
 	}
 	async function saveCachedLibrary(folderName: string, files: StoredAudioFile[]) {
 		const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
@@ -135,31 +148,12 @@
 		}, []);
 
 		if (cachedFiles.length === 0) return;
-
-		try {
-			const db = await openIDB();
-			const tx = db.transaction('libraries', 'readwrite');
-			tx.objectStore('libraries').put({ folderName, files: cachedFiles, savedAt: Date.now() } satisfies CachedLibrary, 'last-library');
-			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
-			db.close();
-		} catch {
-			// Ignore cache write failures.
-		}
+		try { const db = await openIDB(); await idbPut(db, 'libraries', { folderName, files: cachedFiles, savedAt: Date.now() } satisfies CachedLibrary, 'last-library'); db.close(); }
+		catch { /* ignore cache write failures */ }
 	}
 	async function loadCachedLibrary(): Promise<CachedLibrary | null> {
-		try {
-			const db = await openIDB();
-			const tx = db.transaction('libraries', 'readonly');
-			const result = await new Promise<CachedLibrary | null>((res, rej) => {
-				const req = tx.objectStore('libraries').get('last-library');
-				req.onsuccess = () => res((req.result as CachedLibrary) ?? null);
-				req.onerror = () => rej(req.error);
-			});
-			db.close();
-			return result;
-		} catch {
-			return null;
-		}
+		try { const db = await openIDB(); const r = await idbGet<CachedLibrary>(db, 'libraries', 'last-library'); db.close(); return r; }
+		catch { return null; }
 	}
 
 	// ── Separate IDB for Google Drive file list cache (avoids version conflicts with music-app) ─
@@ -176,36 +170,21 @@
 		});
 	}
 	async function saveDriveCache(cacheKey: string, files: GoogleDriveFile[]) {
-		try {
-			const db = await openDriveCacheIDB();
-			const tx = db.transaction('drive-files', 'readwrite');
-			tx.objectStore('drive-files').put({ files, savedAt: Date.now() }, cacheKey);
-			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
-			db.close();
-		} catch { /* ignore cache write failures */ }
+		try { const db = await openDriveCacheIDB(); await idbPut(db, 'drive-files', { files, savedAt: Date.now() }, cacheKey); db.close(); }
+		catch { /* ignore cache write failures */ }
 	}
 	async function loadDriveCache(cacheKey: string): Promise<GoogleDriveFile[] | null> {
 		try {
 			const db = await openDriveCacheIDB();
-			const tx = db.transaction('drive-files', 'readonly');
-			const entry = await new Promise<{ files: GoogleDriveFile[]; savedAt: number } | null>((res, rej) => {
-				const req = tx.objectStore('drive-files').get(cacheKey);
-				req.onsuccess = () => res((req.result as { files: GoogleDriveFile[]; savedAt: number }) ?? null);
-				req.onerror = () => rej(req.error);
-			});
+			const entry = await idbGet<{ files: GoogleDriveFile[]; savedAt: number }>(db, 'drive-files', cacheKey);
 			db.close();
 			if (!entry || Date.now() - entry.savedAt > DRIVE_CACHE_TTL) return null;
 			return entry.files;
 		} catch { return null; }
 	}
 	async function bustDriveCache(cacheKey: string) {
-		try {
-			const db = await openDriveCacheIDB();
-			const tx = db.transaction('drive-files', 'readwrite');
-			tx.objectStore('drive-files').delete(cacheKey);
-			await new Promise<void>((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
-			db.close();
-		} catch { /* ignore */ }
+		try { const db = await openDriveCacheIDB(); await idbDelete(db, 'drive-files', cacheKey); db.close(); }
+		catch { /* ignore */ }
 	}
 
 	function restoreStoredFilesFromCache(cachedLibrary: CachedLibrary): StoredAudioFile[] {
@@ -366,21 +345,31 @@
 
 	// ── register MediaSession skip handlers for Android Auto / lock-screen controls ──
 	$effect(() => {
+		// Guard: methods may not be accessible if the $state proxy wraps them
+		if (typeof mediaEngine.setSkipHandlers !== 'function') return;
 		mediaEngine.setSkipHandlers(
 			() => { void advanceTrack(isPlaying); },
 			() => { void prevTrack(); }
 		);
-		return () => mediaEngine.setSkipHandlers(null, null);
+		return () => {
+			if (typeof mediaEngine.setSkipHandlers === 'function')
+				mediaEngine.setSkipHandlers(null, null);
+		};
 	});
 
 	// ── register MediaSession play/pause/seek handlers for lock-screen notification ──
 	$effect(() => {
+		// Guard: methods may not be accessible if the $state proxy wraps them
+		if (typeof mediaEngine.setPlaybackHandlers !== 'function') return;
 		mediaEngine.setPlaybackHandlers(
 			() => { void togglePlay(); },
 			() => { void togglePlay(); },
 			(pos) => { if (audioEl) { audioEl.currentTime = pos; currentTime = pos; } }
 		);
-		return () => mediaEngine.setPlaybackHandlers(null, null, null);
+		return () => {
+			if (typeof mediaEngine.setPlaybackHandlers === 'function')
+				mediaEngine.setPlaybackHandlers(null, null, null);
+		};
 	});
 
 	function syncTrackToMediaEngine(index: number) {
@@ -1624,6 +1613,21 @@
 	// Browse interactions
 	// ─────────────────────────────────────────────────────────────
 
+	// ── Shared audio start sequence — used by all user-initiated play functions ──
+	async function startAudioAt(index: number): Promise<boolean> {
+		if (!audioEl || !tracks[index]) return false;
+		const url = await ensureTrackUrl(index, true);
+		if (!url) { alert('Unable to load this track.'); return false; }
+		audioEl.src = url; audioEl.load();
+		syncTrackToMediaEngine(index);
+		applyTrackPosition(index);
+		void preloadNextTrack(index);
+		claimAudio('music');
+		initAudioContext();
+		audioEl.play().catch(() => {});
+		return true;
+	}
+
 	// Play a single file → load all siblings as context
 	async function playBrowseFile(entry: BrowseEntry & { kind: 'file' }) {
 		const siblings = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
@@ -1632,21 +1636,7 @@
 		const idx = sorted.findIndex(f => f === entry.file);
 		musicSettings.lastTrackIndex = Math.max(0, idx);
 		currentTime = 0; duration = 0;
-		if (audioEl && tracks.length > 0) {
-			const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
-			if (!url) {
-				alert('Unable to load this track.');
-				return;
-			}
-			audioEl.src = url;
-			audioEl.load();
-			syncTrackToMediaEngine(musicSettings.lastTrackIndex);
-			applyTrackPosition(musicSettings.lastTrackIndex);
-			void preloadNextTrack(musicSettings.lastTrackIndex);
-			claimAudio('music');
-			initAudioContext();
-			audioEl.play().catch(() => {});
-		}
+		await startAudioAt(musicSettings.lastTrackIndex);
 	}
 
 	// Play only the files visible in the current folder view (no recursion)
@@ -1655,17 +1645,7 @@
 		if (files.length === 0) { alert('No MP3 files found.'); return; }
 		const label = browsePath.length > 0 ? browsePath[browsePath.length - 1] : (musicSettings.lastFolderName || 'Library');
 		loadTracks(files, label);
-		if (audioEl && tracks.length > 0) {
-			const url = await ensureTrackUrl(0, true);
-			if (!url) { alert('Unable to load tracks from this folder.'); return; }
-			audioEl.src = url;
-			audioEl.load();
-			syncTrackToMediaEngine(0);
-			void preloadNextTrack(0);
-			claimAudio('music');
-			initAudioContext();
-			audioEl.play().catch(() => {});
-		}
+		await startAudioAt(0);
 	}
 
 	// Play all files under a given browse path (recursively)
@@ -1675,20 +1655,7 @@
 		isLoading = false;
 		if (files.length === 0) { alert('No MP3 files found.'); return; }
 		loadTracks(files, path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName);
-		if (audioEl && tracks.length > 0) {
-			const url = await ensureTrackUrl(0, true);
-			if (!url) {
-				alert('Unable to load tracks from this folder.');
-				return;
-			}
-			audioEl.src = url;
-			audioEl.load();
-			syncTrackToMediaEngine(0);
-			void preloadNextTrack(0);
-			claimAudio('music');
-			initAudioContext();
-			audioEl.play().catch(() => {});
-		}
+		await startAudioAt(0);
 	}
 
 	function navigateInto(name: string) { browsePath = [...browsePath, name]; }
@@ -1727,19 +1694,7 @@
 		musicSettings.lastTrackIndex = index;
 		musicSettings.lastTrackTimestamp = 0;
 		currentTime = 0; duration = 0;
-		if (audioEl && tracks[index]) {
-			const url = await ensureTrackUrl(index, true);
-			if (!url) {
-				alert('Unable to load this track.');
-				return;
-			}
-			audioEl.src = url; audioEl.load();
-			syncTrackToMediaEngine(index);
-			applyTrackPosition(index);
-			void preloadNextTrack(index);
-			claimAudio('music');
-			audioEl.play().catch(() => {});
-		}
+		await startAudioAt(index);
 	}
 
 	async function advanceTrack(wasPlaying: boolean, interactiveAuth = false) {
@@ -2371,7 +2326,7 @@
 				<button
 					class="px-3 py-1.5 rounded-full text-sm font-medium border transition-colors {musicSettings.playbackSpeed === speed ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-accent'}"
 					onclick={() => (musicSettings.playbackSpeed = speed)}
-				>{speed}\xd7</button>
+				>{speed}×</button>
 			{/each}
 		</div>
 	</div>
@@ -2409,22 +2364,34 @@
 	{/if}
 
 	<!-- Bottom toolbar -->
-	<div class="border-t bg-background px-3 py-2.5 shrink-0 flex gap-2">
-		<Button variant={showQueue ? 'default' : 'outline'}
-			class="flex-1 gap-2 text-sm h-11"
+	<div class="border-t bg-background px-3 pt-3 pb-4 shrink-0 flex gap-3">
+		<button
+			class="flex-1 flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all active:scale-95
+				{showQueue
+					? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30'
+					: 'bg-secondary/60 text-muted-foreground hover:bg-secondary'}"
 			onclick={() => { showQueue = !showQueue; showPanel = 'none'; }}>
-			<FolderOpen class="w-5 h-5" /> Browse
-		</Button>
-		<Button variant={showPanel === 'speed' ? 'default' : 'outline'}
-			class="flex-1 gap-2 text-sm h-11"
+			<FolderOpen class="w-7 h-7" />
+			<span class="text-[11px] font-semibold tracking-wide">Browse</span>
+		</button>
+		<button
+			class="flex-1 flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all active:scale-95
+				{showPanel === 'speed'
+					? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30'
+					: 'bg-secondary/60 text-muted-foreground hover:bg-secondary'}"
 			onclick={() => togglePanel('speed')}>
-			<Gauge class="w-5 h-5" /> {musicSettings.playbackSpeed}\xd7
-		</Button>
-		<Button variant={showPanel === 'eq' ? 'default' : 'outline'}
-			class="flex-1 gap-2 text-sm h-11"
+			<Gauge class="w-7 h-7" />
+			<span class="text-[11px] font-semibold tracking-wide">{musicSettings.playbackSpeed}×</span>
+		</button>
+		<button
+			class="flex-1 flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all active:scale-95
+				{showPanel === 'eq'
+					? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30'
+					: 'bg-secondary/60 text-muted-foreground hover:bg-secondary'}"
 			onclick={() => togglePanel('eq')}>
-			<SlidersHorizontal class="w-5 h-5" /> EQ
-		</Button>
+			<SlidersHorizontal class="w-7 h-7" />
+			<span class="text-[11px] font-semibold tracking-wide">EQ</span>
+		</button>
 	</div>
 
 	{/if}

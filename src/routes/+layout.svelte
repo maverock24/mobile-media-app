@@ -2,7 +2,14 @@
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import AuroraBackground from '$lib/components/AuroraBackground.svelte';
+	import { onMount } from 'svelte';
 	let { children } = $props();
+
+	// Signal to Playwright tests that SvelteKit has fully hydrated.
+	// Tests can wait for body[data-hydrated] before interacting with the app.
+	onMount(() => {
+		document.body.dataset.hydrated = '1';
+	});
 </script>
 
 <svelte:head>

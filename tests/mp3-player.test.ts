@@ -39,6 +39,19 @@ test.describe('MP3 Player view', () => {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
+	/**
+	 * After loading files and clicking a track in the browse view, click the
+	 * mini-player track-info bar at the bottom of the browse view to switch to
+	 * the full player view. The toolbar (Browse / Speed / EQ) is only visible
+	 * in the player view, not in the browse/queue view.
+	 */
+	async function switchToPlayerView(page: import('@playwright/test').Page) {
+		// The mini-player track-info button contains a w-10 h-10 rounded-xl album art div.
+		// Clicking it sets showQueue = false, revealing the full player + toolbar.
+		await page.locator('button:has(div.w-10.h-10.rounded-xl)').first().click({ timeout: 3000 });
+		await page.waitForTimeout(200);
+	}
+
 	test.beforeEach(async ({ page }) => {
 		await page.goto('/');
 		await page.evaluate(async () => {
@@ -58,7 +71,8 @@ test.describe('MP3 Player view', () => {
 	// ── Empty state ────────────────────────────────────────────────────────
 	test('shows empty state with Open Folder button before any files are loaded', async ({ page }) => {
 		await expect(page.getByText('Your Music')).toBeVisible();
-		await expect(page.getByText(/Select a folder/i)).toBeVisible();
+		// In web browser (non-native) the empty state shows "Open a local folder…"
+		await expect(page.getByText(/Open a local folder/i)).toBeVisible();
 		await expect(page.getByRole('button', { name: /Open Folder/i })).toBeVisible();
 	});
 
@@ -97,8 +111,8 @@ test.describe('MP3 Player view', () => {
 		]);
 		await fileChooser.setFiles(tmpDir);
 
-		await expect(page.getByText('Track One')).toBeVisible({ timeout: 5000 });
-		await expect(page.getByText('Track Two')).toBeVisible();
+		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 5000 });
+		await expect(page.getByText('Track Two').first()).toBeVisible();
 	});
 
 	test('restores the selected library after a page reload', async ({ page }) => {
@@ -111,11 +125,11 @@ test.describe('MP3 Player view', () => {
 		]);
 		await fileChooser.setFiles(tmpDir);
 
-		await expect(page.getByText('Track One')).toBeVisible({ timeout: 5000 });
+		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 5000 });
 		await page.reload();
 		await goToTab(page, 'Music');
-		await expect(page.getByText('Track One')).toBeVisible({ timeout: 5000 });
-		await expect(page.getByText('Track Two')).toBeVisible();
+		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 5000 });
+		await expect(page.getByText('Track Two').first()).toBeVisible();
 	});
 
 	// ── Controls ───────────────────────────────────────────────────────────
@@ -130,9 +144,9 @@ test.describe('MP3 Player view', () => {
 		]);
 		await fc.setFiles(tmpDir);
 
-		// Click on the file in browse view to start playing → transitions to player
+		// Click on the file in browse view to start playing; click mini-player to switch to player view
 		await page.getByText('Track One').first().click({ timeout: 5000 });
-		await page.waitForTimeout(300);
+		await switchToPlayerView(page);
 
 		// Player view should have toolbar
 		await expect(page.getByRole('button', { name: /Browse/i })).toBeVisible({ timeout: 5000 });
@@ -156,8 +170,8 @@ test.describe('MP3 Player view', () => {
 		await expect(page.locator('button:has(svg)').filter({ hasText: '' }).nth(0)).toBeAttached();
 		// Progress bar input
 		await expect(page.locator('input[type="range"]').first()).toBeVisible({ timeout: 5000 });
-		// Track title visible
-		await expect(page.getByText('Track One')).toBeVisible();
+		// Track title visible (may appear in browse list or mini-player)
+		await expect(page.getByText('Track One').first()).toBeVisible();
 	});
 
 	test('speed panel opens and shows speed options', async ({ page }) => {
@@ -170,16 +184,11 @@ test.describe('MP3 Player view', () => {
 		]);
 		await fc.setFiles(tmpDir);
 		await page.getByText('Track One').first().click({ timeout: 5000 });
-		await page.waitForTimeout(300);
+		await switchToPlayerView(page);
 
-		const speedBtn = page.getByRole('button', { name: /×|Playback Speed|speed|1×/i }).first();
-		// Find the speed button from toolbar
-		const toolbarSpeedBtn = page.getByRole('button', { name: /1×/i }).last();
-		if (await toolbarSpeedBtn.isVisible()) {
-			await toolbarSpeedBtn.click();
-		} else {
-			await speedBtn.click();
-		}
+		// Speed button in player toolbar
+		const speedBtn = page.getByRole('button', { name: /1×/i }).first();
+		await speedBtn.click({ timeout: 5000 });
 
 		// Speed chips
 		await expect(page.getByText('0.5×')).toBeVisible({ timeout: 3000 });
@@ -197,9 +206,9 @@ test.describe('MP3 Player view', () => {
 		]);
 		await fc.setFiles(tmpDir);
 		await page.getByText('Track One').first().click({ timeout: 5000 });
-		await page.waitForTimeout(300);
+		await switchToPlayerView(page);
 
-		await page.getByRole('button', { name: /EQ/i }).click();
+		await page.getByRole('button', { name: /EQ/i }).click({ timeout: 5000 });
 		await expect(page.getByText('Equalizer')).toBeVisible({ timeout: 3000 });
 		// EQ presets
 		await expect(page.getByRole('button', { name: /flat/i })).toBeVisible();
@@ -218,9 +227,9 @@ test.describe('MP3 Player view', () => {
 		]);
 		await fc.setFiles(tmpDir);
 		await page.getByText('Track One').first().click({ timeout: 5000 });
-		await page.waitForTimeout(300);
+		await switchToPlayerView(page);
 
-		// Two range inputs: progress + volume
+		// Two range inputs in player view: progress + volume
 		const ranges = page.locator('input[type="range"]');
 		await expect(ranges).toHaveCount(2, { timeout: 5000 });
 	});
@@ -237,9 +246,9 @@ test.describe('MP3 Player view', () => {
 		await page.getByText('Track One').first().click({ timeout: 5000 });
 		await page.waitForTimeout(300);
 
-		await expect(page.getByText('Track One')).toBeVisible();
+		await expect(page.getByText('Track One').first()).toBeVisible();
 		await page.getByRole('button', { name: /Next/i }).first().click();
-		await expect(page.getByText('Track Two')).toBeVisible({ timeout: 5000 });
+		await expect(page.getByText('Track Two').first()).toBeVisible({ timeout: 5000 });
 	});
 
 	test('browse button navigates back to file list', async ({ page }) => {
@@ -252,9 +261,10 @@ test.describe('MP3 Player view', () => {
 		]);
 		await fc.setFiles(tmpDir);
 		await page.getByText('Track One').first().click({ timeout: 5000 });
-		await page.waitForTimeout(300);
+		await switchToPlayerView(page);
 
-		await page.getByRole('button', { name: /Browse/i }).click();
+		// Click Browse to switch back to the browse/queue list
+		await page.getByRole('button', { name: /Browse/i }).click({ timeout: 5000 });
 		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 3000 });
 	});
 
@@ -268,7 +278,7 @@ test.describe('MP3 Player view', () => {
 		]);
 		await fc.setFiles(tmpDir);
 		await page.getByText('Track One').first().click({ timeout: 5000 });
-		await page.waitForTimeout(300);
+		await switchToPlayerView(page);
 
 		// Shuffle — first SVG-only icon button on the left of controls row
 		// We locate them by their aria position — use keyboard role

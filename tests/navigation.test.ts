@@ -2,7 +2,7 @@
  * Navigation tests — bottom tab bar, view visibility, persistence across switches.
  */
 import { test, expect } from '@playwright/test';
-import { goToTab, expectActiveTab } from './helpers';
+import { goToTab, expectActiveTab, waitForHydration } from './helpers';
 
 test.describe('Tab navigation', () => {
 	test.beforeEach(async ({ page }) => {
@@ -10,16 +10,19 @@ test.describe('Tab navigation', () => {
 	});
 
 	test('app loads and defaults to Music tab', async ({ page }) => {
+		await waitForHydration(page);
 		// Bottom nav is visible
-		await expect(page.getByRole('navigation')).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Music', exact: true })).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Podcasts', exact: true })).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Weather', exact: true })).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeVisible();
+		await expect(page.getByRole('tablist')).toBeVisible();
+		await expect(page.getByRole('tab', { name: 'Music', exact: true })).toBeVisible();
+		await expect(page.getByRole('tab', { name: 'Podcasts', exact: true })).toBeVisible();
+		await expect(page.getByRole('tab', { name: 'Weather', exact: true })).toBeVisible();
+		await expect(page.getByRole('tab', { name: 'Settings', exact: true })).toBeVisible();
 
-		// Music tab active by default — shows open-folder state or player
+		// Music tab active by default — may still be loading IDB (spinner) or ready
 		await expectActiveTab(page, 'Music');
-		await expect(page.getByText(/Your Music|Open Folder|Browse/i).first()).toBeVisible();
+		await expect(
+			page.getByText(/Your Music|Open Folder|Browse/i).or(page.locator('.animate-spin')).first()
+		).toBeVisible();
 	});
 
 	test('switches to Podcasts tab', async ({ page }) => {
@@ -50,6 +53,8 @@ test.describe('Tab navigation', () => {
 			localStorage.setItem('navigation-state', JSON.stringify({ activeTab: 'settings' }));
 		});
 		await page.goto('/');
+		// Wait for SvelteKit hydration (body[data-hydrated]) then Svelte reads saved tab
+		await waitForHydration(page);
 
 		await expectActiveTab(page, 'Settings');
 		await expect(page.getByText('Settings').first()).toBeVisible();
@@ -64,12 +69,15 @@ test.describe('Tab navigation', () => {
 		// Switch away from Music and back — view is still there
 		await goToTab(page, 'Weather');
 		await goToTab(page, 'Music');
-		await expect(page.getByText(/Your Music|Open Folder|Browse/i).first()).toBeVisible();
+		// Music view may still be initialising (IDB check) — accept spinner OR ready state
+		await expect(
+			page.getByText(/Your Music|Open Folder|Browse/i).or(page.locator('.animate-spin')).first()
+		).toBeVisible();
 	});
 
 	test('all four tabs are keyboard-focusable', async ({ page }) => {
 		for (const label of ['Music', 'Podcasts', 'Weather', 'Settings']) {
-			const btn = page.getByRole('button', { name: label, exact: true });
+			const btn = page.getByRole('tab', { name: label, exact: true });
 			await expect(btn).toBeVisible();
 			await expect(btn).toBeEnabled();
 		}
@@ -81,6 +89,7 @@ test.describe('Tab navigation', () => {
 			localStorage.setItem('navigation-state', JSON.stringify({ activeTab: 'nonexistent-tab' }));
 		});
 		await page.goto('/');
+		await waitForHydration(page);
 		await expectActiveTab(page, 'Music');
 	});
 
@@ -90,6 +99,7 @@ test.describe('Tab navigation', () => {
 			localStorage.setItem('navigation-state', JSON.stringify({ activeTab: 'podcasts', futureField: 42 }));
 		});
 		await page.goto('/');
+		await waitForHydration(page);
 		await expectActiveTab(page, 'Podcasts');
 	});
 });

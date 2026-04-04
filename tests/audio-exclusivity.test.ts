@@ -73,7 +73,7 @@ test.describe('Cross-view audio exclusivity', () => {
 		await page.route('**/itunes.apple.com/**', (route) =>
 			route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_ITUNES) })
 		);
-		await page.route('**/rss2json.com/**', (route) =>
+		await page.route('**/api.rss2json.com/**', (route) =>
 			route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_RSS_RESPONSE) })
 		);
 		await page.route('**/example.com/**', (route) => route.abort());
@@ -113,7 +113,7 @@ test.describe('Cross-view audio exclusivity', () => {
 		await goToTab(page, 'Music');
 
 		// Player state is intact — track title visible
-		await expect(page.getByText('song')).toBeVisible({ timeout: 3000 });
+		await expect(page.getByText('song').first()).toBeVisible({ timeout: 3000 });
 		// Progress bar is still there
 		await expect(page.locator('input[type="range"]').first()).toBeVisible();
 	});
@@ -126,7 +126,7 @@ test.describe('Cross-view audio exclusivity', () => {
 		await page.waitForTimeout(300);
 
 		// 2. Verify audio element is paused after loading (stub MP3 won't auto-play)
-		const audioEl = page.locator('audio');
+		const audioEl = page.locator('audio').first();
 		await expect(audioEl).toBeAttached();
 
 		// 3. Switch to Podcasts and start an episode
@@ -134,7 +134,7 @@ test.describe('Cross-view audio exclusivity', () => {
 		await page.getByPlaceholder('Search podcasts…').fill('cross');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
 		await expect(page.getByText('Cross Test Episode')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9').first().click();
+		await page.locator('button.rounded-full.w-9:visible').first().click();
 
 		// 4. Switch back to Music — audio should be paused (claimAudio('podcast') was called)
 		await goToTab(page, 'Music');
@@ -150,7 +150,7 @@ test.describe('Cross-view audio exclusivity', () => {
 		await page.getByPlaceholder('Search podcasts…').fill('cross');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
 		await expect(page.getByText('Cross Test Episode')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9').first().click();
+		await page.locator('button.rounded-full.w-9:visible').first().click();
 
 		// Now-playing bar appears
 		await expect(page.getByText('Cross Test Episode').first()).toBeVisible();

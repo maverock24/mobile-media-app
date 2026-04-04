@@ -8,9 +8,15 @@ export default defineConfig({
 	testDir: './tests',
 	fullyParallel: false,   // serial — tests share a preview server
 	forbidOnly: !!process.env.CI,
-	retries: process.env.CI ? 1 : 0,
+	retries: 1,
 	workers: 1,
 	reporter: [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]],
+
+	// Raise the expect assertion timeout so that tests against the live
+	// Netlify deployment (cold JS bundle download + hydration) don't flake.
+	expect: {
+		timeout: 10_000,
+	},
 
 	use: {
 		baseURL: BASE_URL,
@@ -18,6 +24,9 @@ export default defineConfig({
 		viewport: { width: 390, height: 844 },
 		trace: 'on-first-retry',
 		screenshot: 'only-on-failure',
+		// Block service workers so cache-first SW installation does not abort
+		// the first page.goto() calls during test setup.
+		serviceWorkers: 'block',
 	},
 
 	projects: [

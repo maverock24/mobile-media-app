@@ -62,15 +62,27 @@ async function setupMocks(page: Page) {
 	await page.route('**/itunes.apple.com/lookup**', (route) =>
 		route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_LOOKUP_RESPONSE) })
 	);
-	await page.route('**/rss2json.com/**', (route) =>
+	await page.route('**/api.rss2json.com/**', (route) =>
 		route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_RSS_RESPONSE) })
 	);
 	// Block real artwork fetches
 	await page.route('**/example.com/**', (route) => route.abort());
+	// Stub Google Identity Services — prevents OAuth popup/redirect with any client ID
+	await page.route('**/accounts.google.com/gsi/client**', (route) =>
+		route.fulfill({ status: 200, contentType: 'application/javascript', body: '// gsi stub' })
+	);
+	// Block any remaining Google auth/OAuth requests
+	await page.route('**/accounts.google.com/**', (route) => route.abort());
+	await page.route('**/oauth2.googleapis.com/**', (route) => route.abort());
 }
 
 test.describe('Podcast view', () => {
 	test.beforeEach(async ({ page }) => {
+		// Clear persisted state BEFORE page load so the app starts with empty storage
+		await page.addInitScript(() => {
+			localStorage.clear();
+			sessionStorage.clear();
+		});
 		await setupMocks(page);
 		await page.goto('/');
 		await goToTab(page, 'Podcasts');
@@ -80,7 +92,7 @@ test.describe('Podcast view', () => {
 	test('shows Podcasts heading and tab buttons', async ({ page }) => {
 		await expect(page.getByText('Podcasts').first()).toBeVisible();
 		await expect(page.getByRole('button', { name: /Subscribed/i })).toBeVisible();
-		await expect(page.getByRole('button', { name: /Discover/i })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Discover', exact: true })).toBeVisible();
 	});
 
 	test('subscribed tab is active by default', async ({ page }) => {
@@ -99,7 +111,7 @@ test.describe('Podcast view', () => {
 
 	// ── Discover / search flow ─────────────────────────────────────────────
 	test('Discover tab shows search prompt when search is empty', async ({ page }) => {
-		await page.getByRole('button', { name: /Discover/i }).click();
+		await page.getByRole('button', { name: 'Discover', exact: true }).click();
 		// Mocked results load automatically (discover prefetch calls iTunes)
 		await expect(page.getByText(/Test Podcast|Search for podcasts/i).first()).toBeVisible({ timeout: 5000 });
 	});
@@ -130,7 +142,8 @@ test.describe('Podcast view', () => {
 		await input.fill('test');
 		await expect(page.getByText('Test Podcast')).toBeVisible({ timeout: 3000 });
 
-		await page.getByRole('button', { name: '' }).filter({ has: page.locator('svg') }).last().click();
+		// Click the X clear button (the button inside .relative wrapper next to the search input)
+		await page.locator('div.relative > button').click();
 		await expect(input).toHaveValue('');
 	});
 
@@ -184,7 +197,7 @@ test.describe('Podcast view', () => {
 
 		// Click the play button next to the first episode
 		// Episode play buttons are rounded-full icon buttons
-		const episodeBtns = page.locator('button.rounded-full.w-9');
+		const episodeBtns = page.locator('button.rounded-full.w-9:visible');
 		await episodeBtns.first().click();
 
 		// Now-playing bar shows episode title
@@ -197,14 +210,13 @@ test.describe('Podcast view', () => {
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
 
 		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9').first().click();
+		await page.locator('button.rounded-full.w-9:visible').first().click();
 
-		// Now-playing bar is the bottom fixed bar
-		const bar = page.locator('.border-t.bg-card').last();
-		await expect(bar).toBeVisible();
-		// 3 transport buttons in the bar
-		const barBtns = bar.locator('button');
-		await expect(barBtns).toHaveCount(3);
+		// Now-playing bar has 3 transport buttons detectable by aria-label.
+		// Audio fails to load in test (mocked URL), so isPlaying resets to false — button shows Play.
+		await expect(page.getByLabel('Previous track')).toBeVisible({ timeout: 3000 });
+		await expect(page.getByLabel(/Play|Pause/i)).toBeVisible();
+		await expect(page.getByLabel('Next track')).toBeVisible();
 	});
 
 	test('toggling play/pause works in now-playing bar', async ({ page }) => {
@@ -212,13 +224,15 @@ test.describe('Podcast view', () => {
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
 
 		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9').first().click();
+		await page.locator('button.rounded-full.w-9:visible').first().click();
 
-		const bar = page.locator('.border-t.bg-card').last();
-		const playPauseBtn = bar.locator('button').nth(1); // middle button
-		await playPauseBtn.click(); // pause
+		// After episode click, isPlaying is briefly true then resets to false (audio load error).
+		// Either button (Play or Pause) should be visible in the now-playing bar.
+		const playPauseBtn = page.getByLabel(/Play|Pause/i);
+		await expect(playPauseBtn).toBeVisible({ timeout: 3000 });
+		await playPauseBtn.click({ force: true });
 		await page.waitForTimeout(100);
-		await playPauseBtn.click(); // play again
+		await page.getByLabel(/Play|Pause/i).click({ force: true });
 		await page.waitForTimeout(100);
 		// No assertion needed — just verify no exception
 	});
@@ -235,7 +249,7 @@ test.describe('Podcast view', () => {
 	});
 
 	test('subscribing from Discover tab marks button as Subscribed', async ({ page }) => {
-		await page.getByRole('button', { name: /Discover/i }).click();
+		await page.getByRole('button', { name: 'Discover', exact: true }).click();
 		// Mocked results appear
 		await expect(page.getByText('Test Podcast')).toBeVisible({ timeout: 5000 });
 
@@ -243,7 +257,7 @@ test.describe('Podcast view', () => {
 		// After auto-open, go back
 		await page.getByRole('button').first().click();
 		// Switch to discover again — button now says Subscribed
-		await page.getByRole('button', { name: /Discover/i }).click();
+		await page.getByRole('button', { name: 'Discover', exact: true }).click();
 		await expect(page.getByText('Test Podcast')).toBeVisible({ timeout: 3000 });
 		await expect(page.getByRole('button', { name: /Subscribed/i }).last()).toBeVisible();
 	});
@@ -251,7 +265,7 @@ test.describe('Podcast view', () => {
 	// ── RSS error handling ─────────────────────────────────────────────────
 	test('shows error state when RSS feed fails', async ({ page }) => {
 		// Override RSS mock to return error
-		await page.route('**/rss2json.com/**', (route) =>
+		await page.route('**/api.rss2json.com/**', (route) =>
 			route.fulfill({
 				status: 200,
 				contentType: 'application/json',
