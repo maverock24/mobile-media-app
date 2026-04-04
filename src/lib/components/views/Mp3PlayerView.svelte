@@ -349,7 +349,7 @@
 		// Guard: methods may not be accessible if the $state proxy wraps them
 		if (typeof mediaEngine.setSkipHandlers !== 'function') return;
 		mediaEngine.setSkipHandlers(
-			() => { void advanceTrack(isPlaying); },
+			() => { void advanceTrack(isPlaying || isBuffering); },
 			() => { void prevTrack(); }
 		);
 		return () => {
@@ -1742,12 +1742,17 @@
 			syncTrackToMediaEngine(nextIndex);
 			applyTrackPosition(nextIndex);
 			void preloadNextTrack(nextIndex);
-			if (wasPlaying) audioEl.play().catch(() => { isPlaying = false; });
+			claimAudio('music');
+			if (wasPlaying) {
+				isBuffering = true;
+				audioEl.play().catch(() => { isPlaying = false; isBuffering = false; });
+			}
 		}
 	}
 
 	async function prevTrack() {
 		if (tracks.length === 0) return;
+		const wasPlaying = isPlaying;
 		if (musicSettings.rewindOnPrev && currentTime > 3 && audioEl) { audioEl.currentTime = 0; return; }
 		releaseTrackUrl(musicSettings.lastTrackIndex);
 		const prevIndex = (musicSettings.lastTrackIndex - 1 + tracks.length) % tracks.length;
@@ -1763,7 +1768,11 @@
 			syncTrackToMediaEngine(prevIndex);
 			applyTrackPosition(prevIndex);
 			void preloadNextTrack(prevIndex);
-			if (isPlaying) audioEl.play().catch(() => {});
+			claimAudio('music');
+			if (wasPlaying) {
+				isBuffering = true;
+				audioEl.play().catch(() => { isPlaying = false; isBuffering = false; });
+			}
 		}
 	}
 
@@ -2227,7 +2236,7 @@
 							<Play class="w-6 h-6 ml-0.5" />
 						{/if}
 					</button>
-					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={() => advanceTrack(isPlaying, true)} aria-label="Next">
+					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={() => advanceTrack(isPlaying || isBuffering, true)} aria-label="Next">
 						<SkipForward class="w-6 h-6" />
 					</button>
 				</div>
@@ -2330,7 +2339,7 @@
 					<Play class="w-7 h-7 ml-0.5" />
 				{/if}
 			</Button>
-			<Button variant="ghost" size="icon" onclick={() => advanceTrack(isPlaying, true)}>
+			<Button variant="ghost" size="icon" onclick={() => advanceTrack(isPlaying || isBuffering, true)}>
 				<SkipForward class="w-8 h-8" />
 			</Button>
 			<Button variant="ghost" size="icon"
