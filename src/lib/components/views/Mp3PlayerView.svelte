@@ -1459,7 +1459,7 @@
 		musicSettings.lastTrackTimestamp = 0;
 		preloadedTrackIndex = null;
 		preloadRequestId += 1;
-		currentTime = 0; duration = 0; isPlaying = false;
+		currentTime = 0; duration = 0; isPlaying = false; isBuffering = false;
 		trackListLockedByUser = true;
 	}
 
@@ -1653,18 +1653,31 @@
 		const files = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
 		if (files.length === 0) { alert('No MP3 files found.'); return; }
 		const label = browsePath.length > 0 ? browsePath[browsePath.length - 1] : (musicSettings.lastFolderName || 'Library');
-		loadTracks(files, label);
-		await startAudioAt(0);
+		isLoading = true;
+		try {
+			loadTracks(files, label);
+			await startAudioAt(0);
+		} catch (e) {
+			console.error('Failed to play folder:', e);
+		} finally {
+			isLoading = false;
+		}
 	}
 
 	// Play all files under a given browse path (recursively)
 	async function playFolderPath(path: string[]) {
 		isLoading = true;
-		const files = await collectAllFromPath(path);
-		isLoading = false;
-		if (files.length === 0) { alert('No MP3 files found.'); return; }
-		loadTracks(files, path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName);
-		await startAudioAt(0);
+		try {
+			const files = await collectAllFromPath(path);
+			if (files.length === 0) { alert('No MP3 files found.'); return; }
+			loadTracks(files, path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName);
+			await startAudioAt(0);
+		} catch (e) {
+			console.error('Failed to play folder:', e);
+			alert('Could not load the folder. Please try again.');
+		} finally {
+			isLoading = false;
+		}
 	}
 
 	function navigateInto(name: string) { browsePath = [...browsePath, name]; }
@@ -2139,11 +2152,16 @@
 						</button>
 						<!-- Play all in this subfolder -->
 						<button
-							class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
+							class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors disabled:opacity-40 disabled:pointer-events-none"
 							onclick={() => playFolderPath([...browsePath, entry.name])}
+							disabled={isLoading}
 							aria-label="Play {entry.name}"
 						>
-							<Play class="w-4 h-4 ml-0.5" />
+							{#if isLoading}
+								<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+							{:else}
+								<Play class="w-4 h-4 ml-0.5" />
+							{/if}
 						</button>
 						<!-- Navigate into -->
 						<button class="text-muted-foreground shrink-0" onclick={() => navigateInto(entry.name)} aria-label="Browse {entry.name}">
