@@ -25,6 +25,13 @@ export async function goToTab(page: Page, label: 'Music' | 'Podcasts' | 'Essays'
 	await waitForHydration(page);
 	const tab = page.getByRole('tab', { name: label, exact: true });
 	await tab.click();
+	// On slow connections (e.g. Netlify CDN cold start) the click may not register
+	// immediately. If aria-selected hasn't updated after 3s, try clicking again.
+	const selected = await expect(tab)
+		.toHaveAttribute('aria-selected', 'true', { timeout: 3_000 })
+		.then(() => true)
+		.catch(() => false);
+	if (!selected) await tab.click();
 	await expect(tab).toHaveAttribute('aria-selected', 'true');
 }
 
