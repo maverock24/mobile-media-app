@@ -24,7 +24,7 @@ export type BrowseEntry =
 class LibraryStore {
 	#isLoading = $state(false);
 	#lastScanAt = $state<number | null>(null);
-	#folderEntries = $state<Map<string, BrowseEntry[]>>(new Map());
+	#folderEntries = $state<Record<string, BrowseEntry[]>>({});
 	#pendingFetches = new Map<string, Promise<BrowseEntry[]>>();
 	#isTruncated = $state(false);
 	#fileCount = $state(0);
@@ -66,17 +66,17 @@ class LibraryStore {
 		db.close();
 	}
 
-	get folderTree() { return this.#folderEntries; }
+	get folderTree() { return new Map(Object.entries(this.#folderEntries)); }
 	get isTreeSyncing() { return false; }
 
 	getBrowseEntries(path: string[]): BrowseEntry[] {
-		return this.#folderEntries.get(path.join('/')) ?? [];
+		return this.#folderEntries[path.join('/')] ?? [];
 	}
 
 	async fetchEntries(path: string[]): Promise<BrowseEntry[]> {
 		const pathStr = path.join('/');
-		const cached = this.#folderEntries.get(pathStr);
-		if (cached) return cached;
+		const cached = this.#folderEntries[pathStr];
+		if (cached && cached.length > 0) return cached;
 
 		if (this.#pendingFetches.has(pathStr)) {
 			return this.#pendingFetches.get(pathStr)!;
@@ -118,7 +118,7 @@ class LibraryStore {
 				});
 			}
 
-			this.#folderEntries.set(pathStr, entries);
+			this.#folderEntries[pathStr] = entries;
 			return entries;
 		} catch (e) {
 			console.error('Failed to fetch entries', e);
@@ -129,7 +129,7 @@ class LibraryStore {
 	}
 
 	async initialize() {
-		this.#folderEntries.clear();
+		this.#folderEntries = {};
 		// Automatically fetch root if possible
 		if (musicSettings.librarySource === 'device' && musicSettings.nativeTreeUri) {
 			await this.fetchEntries([]);
@@ -139,7 +139,7 @@ class LibraryStore {
 	async rescan(options?: { rootDirHandle?: FileSystemDirectoryHandle }) {
 		this.#isLoading = true;
 		try {
-			this.#folderEntries.clear();
+			this.#folderEntries = {};
 			if (musicSettings.librarySource === 'device') {
 				if (musicSettings.nativeTreeUri) {
 					await this.fetchEntries([]);
@@ -169,7 +169,7 @@ class LibraryStore {
 				entries.push({ kind: 'folder', name, count: 0 });
 			}
 		}
-		this.#folderEntries.set("", entries);
+		this.#folderEntries[""] = entries;
 	}
 
 	async #rescanDrive() {
@@ -196,12 +196,12 @@ class LibraryStore {
 				});
 			}
 		}
-		this.#folderEntries.set("", entries);
+		this.#folderEntries[""] = entries;
 	}
 
 	setFiles(files: StoredAudioFile[], folderName: string) {
 		const entries: BrowseEntry[] = files.map(f => ({ kind: 'file', name: f.name, file: f }));
-		this.#folderEntries.set("", entries);
+		this.#folderEntries[""] = entries;
 		this.#lastScanAt = Date.now();
 	}
 }

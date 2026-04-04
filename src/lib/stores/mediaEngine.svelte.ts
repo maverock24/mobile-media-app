@@ -118,15 +118,11 @@ export const mediaEngine = $state<NowPlayingState & {
 		newSlot.src = url;
 		newSlot.load();
 		
-		if (useCrossfade) {
-			// Crossfade transition
-			fadeAudio(oldSlot, 0, xf, true); // fade out and pause
-			fadeAudio(newSlot, this.volume / 100, xf); // fade in to target vol
-		} else {
-			// Instant switch
-			oldSlot.pause();
-			oldSlot.volume = 0;
-			newSlot.volume = this.volume / 100;
+		// Ensure AudioContext is ready (required for EQ/Filter chain to work)
+		if (_audioCtx?.state === 'suspended') {
+			void _audioCtx.resume();
+		} else if (!_audioCtx) {
+			initGlobalAudioContext();
 		}
 
 		newSlot.play().then(() => {
