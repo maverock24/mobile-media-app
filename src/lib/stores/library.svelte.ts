@@ -104,7 +104,7 @@ class LibraryStore {
 		tree.set("", { folders: [], files: [] });
 
 		// Process in chunks to keep UI alive
-		const CHUNK_SIZE = 500;
+		const CHUNK_SIZE = 1000;
 		for (let i = 0; i < files.length; i += CHUNK_SIZE) {
 			const chunk = files.slice(i, i + CHUNK_SIZE);
 			
