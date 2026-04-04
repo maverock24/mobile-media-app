@@ -3,6 +3,7 @@
 
 	interface Props {
 		isPlaying:    boolean;
+		isBuffering?: boolean;
 		currentTime:  number;   // seconds
 		duration:     number;   // seconds
 		/** If provided, skip-back button jumps back this many seconds from currentTime */
@@ -18,6 +19,7 @@
 	}
 	let {
 		isPlaying,
+		isBuffering = false,
 		currentTime,
 		duration,
 		skipBackSec    = 0,
@@ -92,7 +94,9 @@
 			onclick={onPlayToggle}
 			aria-label={isPlaying ? 'Pause' : 'Play'}
 		>
-			{#if isPlaying}
+			{#if isBuffering}
+				<div class="w-7 h-7 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"></div>
+			{:else if isPlaying}
 				<Pause class="w-7 h-7" />
 			{:else}
 				<Play class="w-7 h-7 ml-0.5" />

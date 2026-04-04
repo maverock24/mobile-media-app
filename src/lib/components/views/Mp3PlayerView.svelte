@@ -261,6 +261,7 @@
 	let currentTime = $state(0);
 	let duration    = $state(0);
 	let isPlaying   = $state(false);
+	let isBuffering = $state(false);
 	let isLiked     = $state(false);
 	let isLoading   = $state(false);
 	let showQueue   = $state(false);   // true → browse / folder view
@@ -417,7 +418,7 @@
 					: t
 			);
 		};
-		const onPlay  = () => { isPlaying = true;  mediaEngine.setPlaying(true);  };
+		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.setPlaying(true);  };
 		const onPause = () => {
 			isPlaying = false;
 			mediaEngine.setPlaying(false);
@@ -428,27 +429,34 @@
 		};
 		const onEnded = () => {
 			// Track finished — clear any saved resume position
+			isBuffering = false;
 			clearTrackPosition(musicSettings.lastTrackIndex);
 			if (musicSettings.isRepeat) { audioEl.currentTime = 0; audioEl.play().catch(() => {}); }
 			else void advanceTrack(true, false);
 		};
-		const onError = () => { void advanceTrack(true, false); };
+		const onWaiting = () => { isBuffering = true; };
+		const onPlaying = () => { isBuffering = false; };
+		const onError = () => { isBuffering = false; void advanceTrack(true, false); };
 		audioEl.volume = musicSettings.volume / 100;
 		audioEl.muted  = musicSettings.isMuted;
 		audioEl.playbackRate = musicSettings.playbackSpeed;
 		audioEl.addEventListener('timeupdate',     onTimeUpdate);
 		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
-		audioEl.addEventListener('play',  onPlay);
-		audioEl.addEventListener('pause', onPause);
-		audioEl.addEventListener('ended', onEnded);
-		audioEl.addEventListener('error', onError);
+		audioEl.addEventListener('play',    onPlay);
+		audioEl.addEventListener('pause',   onPause);
+		audioEl.addEventListener('ended',   onEnded);
+		audioEl.addEventListener('error',   onError);
+		audioEl.addEventListener('waiting', onWaiting);
+		audioEl.addEventListener('playing', onPlaying);
 		return () => {
 			audioEl?.removeEventListener('timeupdate',     onTimeUpdate);
 			audioEl?.removeEventListener('loadedmetadata', onLoadedMetadata);
-			audioEl?.removeEventListener('play',  onPlay);
-			audioEl?.removeEventListener('pause', onPause);
-			audioEl?.removeEventListener('ended', onEnded);
-			audioEl?.removeEventListener('error', onError);
+			audioEl?.removeEventListener('play',    onPlay);
+			audioEl?.removeEventListener('pause',   onPause);
+			audioEl?.removeEventListener('ended',   onEnded);
+			audioEl?.removeEventListener('error',   onError);
+			audioEl?.removeEventListener('waiting', onWaiting);
+			audioEl?.removeEventListener('playing', onPlaying);
 		};
 	});
 
@@ -1624,7 +1632,8 @@
 		void preloadNextTrack(index);
 		claimAudio('music');
 		initAudioContext();
-		audioEl.play().catch(() => {});
+		isBuffering = true;
+		audioEl.play().catch(() => { isBuffering = false; });
 		return true;
 	}
 
@@ -2192,7 +2201,13 @@
 						<SkipBack class="w-6 h-6" />
 					</button>
 					<button class="w-12 h-12 flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-md" onclick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
-						{#if isPlaying}<Pause class="w-6 h-6" />{:else}<Play class="w-6 h-6 ml-0.5" />{/if}
+						{#if isBuffering}
+							<div class="w-6 h-6 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"></div>
+						{:else if isPlaying}
+							<Pause class="w-6 h-6" />
+						{:else}
+							<Play class="w-6 h-6 ml-0.5" />
+						{/if}
 					</button>
 					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={() => advanceTrack(isPlaying, true)} aria-label="Next">
 						<SkipForward class="w-6 h-6" />
@@ -2289,7 +2304,13 @@
 			</Button>
 			<Button size="icon" onclick={togglePlay}
 				class="w-14 h-14 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg">
-				{#if isPlaying}<Pause class="w-7 h-7" />{:else}<Play class="w-7 h-7 ml-0.5" />{/if}
+				{#if isBuffering}
+					<div class="w-7 h-7 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"></div>
+				{:else if isPlaying}
+					<Pause class="w-7 h-7" />
+				{:else}
+					<Play class="w-7 h-7 ml-0.5" />
+				{/if}
 			</Button>
 			<Button variant="ghost" size="icon" onclick={() => advanceTrack(isPlaying, true)}>
 				<SkipForward class="w-8 h-8" />

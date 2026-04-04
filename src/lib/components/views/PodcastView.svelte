@@ -63,6 +63,7 @@
 	// ── Playback state ───────────────────────────────────────────
 	let currentEpisode = $state<{ podcast: Podcast; episode: Episode } | null>(null);
 	let isPlaying      = $state(false);
+	let isBuffering    = $state(false);
 	let currentTime    = $state(0);
 	let duration       = $state(0);
 	let audioEl: HTMLAudioElement;
@@ -109,10 +110,13 @@
 			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
 			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
 		};
-		const onPlay  = () => { isPlaying = true;  mediaEngine.setPlaying(true);  };
+		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.setPlaying(true);  };
 		const onPause = () => { isPlaying = false; mediaEngine.setPlaying(false); };
+		const onWaiting  = () => { isBuffering = true; };
+		const onPlaying  = () => { isBuffering = false; };
 		const onEnded = () => {
 			isPlaying = false;
+			isBuffering = false;
 			mediaEngine.setPlaying(false);
 			if (currentEpisode) {
 				currentEpisode.episode.played = true;
@@ -122,15 +126,19 @@
 		};
 		audioEl.addEventListener('timeupdate',     onTimeUpdate);
 		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
-		audioEl.addEventListener('play',  onPlay);
-		audioEl.addEventListener('pause', onPause);
-		audioEl.addEventListener('ended', onEnded);
+		audioEl.addEventListener('play',    onPlay);
+		audioEl.addEventListener('pause',   onPause);
+		audioEl.addEventListener('ended',   onEnded);
+		audioEl.addEventListener('waiting', onWaiting);
+		audioEl.addEventListener('playing', onPlaying);
 		return () => {
 			audioEl?.removeEventListener('timeupdate',     onTimeUpdate);
 			audioEl?.removeEventListener('loadedmetadata', onLoadedMetadata);
-			audioEl?.removeEventListener('play',  onPlay);
-			audioEl?.removeEventListener('pause', onPause);
-			audioEl?.removeEventListener('ended', onEnded);
+			audioEl?.removeEventListener('play',    onPlay);
+			audioEl?.removeEventListener('pause',   onPause);
+			audioEl?.removeEventListener('ended',   onEnded);
+			audioEl?.removeEventListener('waiting', onWaiting);
+			audioEl?.removeEventListener('playing', onPlaying);
 		};
 	});
 
@@ -377,7 +385,8 @@
 		if (resumeAt > 10) {
 			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = resumeAt; }, { once: true });
 		}
-		audioEl.play().catch(() => {});
+		isBuffering = true;
+		audioEl.play().catch(() => { isBuffering = false; });
 		mediaEngine.setNowPlaying({
 			id:         episode.id,
 			source:     'podcast',
@@ -574,7 +583,7 @@
 								{/if}
 							</div>
 							<Button
-								size="icon" variant={currentEpisode?.episode.id === episode.id && isPlaying ? 'default' : 'outline'}
+								size="icon" variant={currentEpisode?.episode.id === episode.id && (isPlaying || isBuffering) ? 'default' : 'outline'}
 								class="shrink-0 w-9 h-9 rounded-full"
 								onclick={() => {
 									if (currentEpisode?.episode.id === episode.id) {
@@ -584,7 +593,9 @@
 									}
 								}}
 							>
-								{#if currentEpisode?.episode.id === episode.id && isPlaying}
+								{#if currentEpisode?.episode.id === episode.id && isBuffering}
+									<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+								{:else if currentEpisode?.episode.id === episode.id && isPlaying}
 									<Pause class="w-4 h-4" />
 								{:else}
 									<Play class="w-4 h-4 ml-0.5" />
@@ -769,6 +780,7 @@
 			<div class="px-4 pb-3">
 				<PlayerControls
 					isPlaying={isPlaying}
+					isBuffering={isBuffering}
 					currentTime={currentTime}
 					duration={duration}
 					showTrackNav={true}
