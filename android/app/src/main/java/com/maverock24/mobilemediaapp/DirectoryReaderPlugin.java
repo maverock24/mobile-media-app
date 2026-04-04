@@ -1,8 +1,17 @@
 package com.maverock24.mobilemediaapp;
 
 import android.content.ContentResolver;
+import android.content.Intent;
 import android.database.Cursor;
+import android.net.Uri;
 import android.provider.DocumentsContract;
+import androidx.core.content.FileProvider;
+import com.getcapacitor.JSArray;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
