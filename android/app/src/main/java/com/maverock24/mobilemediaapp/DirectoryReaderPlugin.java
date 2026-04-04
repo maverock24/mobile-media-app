@@ -14,6 +14,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import android.util.Log;
 
 @CapacitorPlugin(name = "DirectoryReader")
 public class DirectoryReaderPlugin extends Plugin {
@@ -64,12 +65,21 @@ public class DirectoryReaderPlugin extends Plugin {
 			Uri treeUri = Uri.parse(treeUriString);
 			String rootDocId = DocumentsContract.getTreeDocumentId(treeUri);
 			String path = call.getString("path", "");
-			String targetDocId = getDocumentIdForPath(treeUri, rootDocId, path);
+			String targetDocId;
+			JSArray entries = new JSArray();
+
+			try {
+				targetDocId = getDocumentIdForPath(treeUri, rootDocId, path);
+			} catch (Exception e) {
+				Log.w("DirectoryReader", "Failed to resolve path: " + path, e);
+				JSObject result = new JSObject();
+				result.put("entries", entries);
+				call.resolve(result);
+				return;
+			}
 
 			ContentResolver resolver = getContext().getContentResolver();
 			Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, targetDocId);
-			
-			JSArray entries = new JSArray();
 
 			try (Cursor cursor = resolver.query(childrenUri, new String[] {
 				DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -78,42 +88,55 @@ public class DirectoryReaderPlugin extends Plugin {
 				DocumentsContract.Document.COLUMN_LAST_MODIFIED
 			}, null, null, null)) {
 
-				if (cursor != null) {
-					while (cursor.moveToNext()) {
-						String docId = cursor.getString(0);
-						String name = cursor.getString(1);
-						String mime = cursor.getString(2);
-						long modified = cursor.getLong(3);
+				if (cursor == null) {
+					Log.w("DirectoryReader", "Cursor was null for childrenUri: " + childrenUri);
+					JSObject result = new JSObject();
+					result.put("entries", entries);
+					call.resolve(result);
+					return;
+				}
 
-						if (name == null || name.isEmpty()) continue;
+				while (cursor.moveToNext()) {
+					String docId = cursor.getString(0);
+					String name = cursor.getString(1);
+					String mime = cursor.getString(2);
+					long modified = cursor.getLong(3);
 
-						String relPath = path.isEmpty() ? name : path + "/" + name;
-						JSObject obj = new JSObject();
-						
-						if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
-							obj.put("kind", "folder");
-							obj.put("name", name);
-							obj.put("relativePath", relPath);
-						} else if (name.toLowerCase().endsWith(".mp3")) {
-							obj.put("kind", "file");
-							obj.put("name", name);
-							obj.put("path", DocumentsContract.buildDocumentUriUsingTree(treeUri, docId).toString());
-							obj.put("relativePath", relPath);
-							obj.put("mimeType", mime);
-							obj.put("modifiedAt", modified);
-						} else {
-							continue;
-						}
-						entries.put(obj);
+					if (name == null || name.isEmpty()) continue;
+
+					String relPath = path.isEmpty() ? name : path + "/" + name;
+					JSObject obj = new JSObject();
+					
+					if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+						obj.put("kind", "folder");
+						obj.put("name", name);
+						obj.put("relativePath", relPath);
+					} else if (name.toLowerCase().endsWith(".mp3")) {
+						obj.put("kind", "file");
+						obj.put("name", name);
+						obj.put("path", DocumentsContract.buildDocumentUriUsingTree(treeUri, docId).toString());
+						obj.put("relativePath", relPath);
+						obj.put("mimeType", mime);
+						obj.put("modifiedAt", modified);
+					} else {
+						continue;
 					}
+					entries.put(obj);
 				}
 			}
 
 			JSObject result = new JSObject();
 			result.put("entries", entries);
 			call.resolve(result);
+		} catch (SecurityException exception) {
+			Log.e("DirectoryReader", "Security exception reading directory", exception);
+			call.reject("Permission denied: " + exception.getMessage(), exception);
+		} catch (IllegalArgumentException exception) {
+			Log.e("DirectoryReader", "Invalid tree URI or document ID", exception);
+			call.reject("Invalid path: " + exception.getMessage(), exception);
 		} catch (Exception exception) {
-			call.reject(exception.getMessage());
+			Log.e("DirectoryReader", "Unexpected error reading entries", exception);
+			call.reject(exception.getMessage(), exception);
 		}
 	}
 

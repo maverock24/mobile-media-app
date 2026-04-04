@@ -25,6 +25,7 @@ class LibraryStore {
 	#isLoading = $state(false);
 	#lastScanAt = $state<number | null>(null);
 	#folderEntries = $state<Map<string, BrowseEntry[]>>(new Map());
+	#pendingFetches = new Map<string, Promise<BrowseEntry[]>>();
 	#isTruncated = $state(false);
 	#fileCount = $state(0);
 
@@ -77,6 +78,20 @@ class LibraryStore {
 		const cached = this.#folderEntries.get(pathStr);
 		if (cached) return cached;
 
+		if (this.#pendingFetches.has(pathStr)) {
+			return this.#pendingFetches.get(pathStr)!;
+		}
+
+		const promise = this.#doFetchEntries(pathStr);
+		this.#pendingFetches.set(pathStr, promise);
+		try {
+			return await promise;
+		} finally {
+			this.#pendingFetches.delete(pathStr);
+		}
+	}
+
+	async #doFetchEntries(pathStr: string): Promise<BrowseEntry[]> {
 		const source = musicSettings.librarySource;
 		this.#isLoading = true;
 		try {
