@@ -162,6 +162,10 @@
 	let browseLoading    = $derived(library.isLoading);
 	let browseEntries    = $derived(library.getBrowseEntries(browsePath));
 
+	$effect(() => {
+		void library.fetchEntries(browsePath);
+	});
+
 	let driveAccessToken = $state('');
 	let driveTokenExpiresAt = $state(0);
 	let driveUser        = $state<GoogleDriveUser | null>(null);
@@ -224,7 +228,7 @@
 	// ── derived ──
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
 
-	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || library.allFiles.length > 0);
+	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || browseEntries.length > 0);
 	const progressPercent = $derived(
 		seekingValue !== null ? seekingValue : (duration > 0 ? (currentTime / duration) * 100 : 0)
 	);
@@ -255,8 +259,8 @@
 
 	onMount(() => {
 		void library.initialize().then(() => {
-			if (library.allFiles.length > 0) {
-				hydrateTracksFromLibrary(library.allFiles);
+			if (browseEntries.length > 0) {
+				hydrateTracksFromLibrary(browseEntries.filter(e => e.kind === 'file').map(e => (e as { file: StoredAudioFile }).file));
 				isRestoring = false;
 			} else {
 				isRestoring = false; // nothing found
@@ -400,16 +404,7 @@
 		};
 	}
 
-	function createStoredNativeAudioFile(entry: NativeDirectoryFile): StoredAudioFile {
-		return {
-			source: 'native',
-			name: entry.name,
-			relativePath: entry.relativePath,
-			path: entry.path,
-			mimeType: entry.mimeType,
-			modifiedAt: entry.modifiedAt,
-		};
-	}
+
 
 	function createStoredDriveAudioFile(entry: GoogleDriveFile): StoredAudioFile {
 		return {
@@ -424,9 +419,7 @@
 		};
 	}
 
-	function pathToString(path: string[]): string | undefined {
-		return path.length > 0 ? path.join('/') : undefined;
-	}
+
 
 	function getRelativePath(file: StoredAudioFile): string {
 		return file.relativePath && file.relativePath.length > 0 ? file.relativePath : file.name;
@@ -975,49 +968,7 @@
 	// ─────────────────────────────────────────────────────────────
 
 
-	// ── Collect all MP3s from a directory handle recursively ──
-	async function collectFilesFromDirHandle(dir: FileSystemDirectoryHandle): Promise<File[]> {
-		const result: File[] = [];
-		for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-			if (handle.kind === 'file' && name.toLowerCase().endsWith('.mp3')) {
-				result.push(await (handle as FileSystemFileHandle).getFile());
-			} else if (handle.kind === 'directory') {
-				result.push(...await collectFilesFromDirHandle(handle as FileSystemDirectoryHandle));
-			}
-		}
-		return result;
-	}
 
-	async function collectStoredFilesFromDirHandle(
-		dir: FileSystemDirectoryHandle,
-		pathSegments: string[] = []
-	): Promise<StoredAudioFile[]> {
-		const result: StoredAudioFile[] = [];
-		for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-			if (handle.kind === 'file' && name.toLowerCase().endsWith('.mp3')) {
-				const file = await (handle as FileSystemFileHandle).getFile();
-				result.push(createStoredWebAudioFile(file, [...pathSegments, name].join('/')));
-			} else if (handle.kind === 'directory') {
-				result.push(...await collectStoredFilesFromDirHandle(handle as FileSystemDirectoryHandle, [...pathSegments, name]));
-			}
-		}
-		return result;
-	}
-	// ── Navigate to a dir handle following a path ──
-	async function resolveDirAtPath(path: string[]): Promise<FileSystemDirectoryHandle | null> {
-		if (!rootDirHandle) return null;
-		let dir: FileSystemDirectoryHandle = rootDirHandle;
-		for (const segment of path) {
-			let found = false;
-			for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-				if (handle.kind === 'directory' && name === segment) {
-					dir = handle as FileSystemDirectoryHandle; found = true; break;
-				}
-			}
-			if (!found) return null;
-		}
-		return dir;
-	}
 
 	async function ensureTrackUrlForFile(f: StoredAudioFile, interactiveAuth = false): Promise<string | null> {
 		try {
@@ -1030,27 +981,10 @@
 	}
 
 	async function collectAllFromPath(path: string[]): Promise<StoredAudioFile[]> {
-		if (musicSettings.librarySource === 'drive') {
-			const prefix = path.length > 0 ? path.join('/') + '/' : '';
-			return sortFiles(library.allFiles.filter(f => {
-				const p = getRelativePath(f);
-				return prefix ? p.startsWith(prefix) : true;
-			}));
-		} else if (rootDirHandle) {
-
-			const dir = await resolveDirAtPath(path);
-			return dir ? (await collectFilesFromDirHandle(dir)).map((file) => createStoredAudioFile(file)) : [];
-		} else if (nativeTreeUri) {
-			const result = await DirectoryReader.listAudioFiles({ treeUri: nativeTreeUri, path: pathToString(path) });
-			return result.files.map((file) => createStoredNativeAudioFile(file));
-		} else if (library.allFiles.length > 0) {
-			const prefix = path.length > 0 ? path.join('/') + '/' : '';
-			return library.allFiles.filter(f => {
-				const p = getRelativePath(f);
-				return p.startsWith(prefix);
-			});
-		}
-		return [];
+		const entries = await library.fetchEntries(path);
+		return entries
+			.filter(e => e.kind === 'file')
+			.map(e => (e as { kind: 'file'; file: StoredAudioFile }).file);
 	}
 
 
@@ -1639,8 +1573,8 @@
 						<p class="text-sm font-medium truncate">{driveUser?.displayName || 'Google Drive'}</p>
 						<p class="text-xs text-muted-foreground truncate">
 							{driveUser?.emailAddress || 'Connected account'}
-							{#if library.allFiles.length > 0}
-								· {library.allFiles.length} MP3 file{library.allFiles.length === 1 ? '' : 's'}
+							{#if library.fileCount > 0}
+								· {library.fileCount} items
 							{/if}
 
 						</p>
