@@ -1,13 +1,13 @@
 {
-  "version": "0.0.8",
-  "versionCode": 51,
-  "versionName": "0.0.8 (build 51)",
+  "version": "0.0.9",
+  "versionCode": 52,
+  "versionName": "0.0.9 (build 52)",
   "buildType": "release",
-  "fileName": "media-hub-0.0.8-build-51.apk",
+  "fileName": "media-hub-0.0.9-build-52.apk",
   "url": "https://mobile-media-app-maverock24.netlify.app/releases/android/latest.apk",
-  "sizeBytes": 84756518,
-  "sha256": "38061aefc09cca062eabaae5b088e2744842b5f38b692a6ea2c35e9914b59874",
-  "publishedAt": "2026-04-04T09:24:28Z",
-  "commitSha": "6b82ca0e21069fe2af5badc287e35698616e0153",
-  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/6b82ca0e21069fe2af5badc287e35698616e0153"
+  "sizeBytes": 87977006,
+  "sha256": "2669242acf39b9323ab2264b89b55a686e8281c0dc14c94fd56d4a80601c0bb9",
+  "publishedAt": "2026-04-04T10:11:51Z",
+  "commitSha": "7aa18dd8ace7d61dc310ecd26f903b69a6426713",
+  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/7aa18dd8ace7d61dc310ecd26f903b69a6426713"
 }
