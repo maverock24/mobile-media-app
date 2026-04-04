@@ -46,12 +46,14 @@ function makeMockForecast() {
 	const hourly_time: string[] = [];
 	const hourly_temp: number[] = [];
 	const hourly_code: number[] = [];
+	const hourly_visibility: number[] = [];
 	for (let h = 0; h < 96; h++) {
 		const dt = new Date('2026-03-15T00:00:00');
 		dt.setHours(h);
 		hourly_time.push(dt.toISOString().slice(0, 13));
 		hourly_temp.push(15 + Math.sin(h / 6));
 		hourly_code.push(0);
+		hourly_visibility.push(25000);
 	}
 	return {
 		current: {
@@ -63,7 +65,7 @@ function makeMockForecast() {
 			weather_code: 0,
 			visibility: 25000,
 		},
-		hourly: { time: hourly_time, temperature_2m: hourly_temp, weather_code: hourly_code },
+		hourly: { time: hourly_time, temperature_2m: hourly_temp, weather_code: hourly_code, visibility: hourly_visibility },
 		daily: {
 			time: daily_time,
 			temperature_2m_max: daily_max,
@@ -111,8 +113,8 @@ test.describe('Weather view', () => {
 	});
 
 	test('shows WMO weather label', async ({ page }) => {
-		// Code 0 → "Clear Sky"
-		await expect(page.getByText(/Clear Sky/i)).toBeVisible({ timeout: 5000 });
+		// Code 0 → "Clear Sky" — appears in multiple places (card, hourly, daily) so use first()
+		await expect(page.getByText(/Clear Sky/i).first()).toBeVisible({ timeout: 5000 });
 	});
 
 	test('shows humidity, wind, visibility stats', async ({ page }) => {
@@ -121,16 +123,16 @@ test.describe('Weather view', () => {
 	});
 
 	test('city tabs show saved cities', async ({ page }) => {
-		// Berlin, London, New York are the defaults
-		await expect(page.getByText('Berlin')).toBeVisible({ timeout: 3000 });
+		// Berlin appears in multiple places (city tab, weather card, saved cities panel)
+		await expect(page.getByText('Berlin').first()).toBeVisible({ timeout: 3000 });
 	});
 
 	// ── Unit toggle ────────────────────────────────────────────────────────
 	test('°F toggle converts temperature', async ({ page }) => {
 		await expect(page.getByText(/17°|16°/).first()).toBeVisible({ timeout: 5000 });
 		await page.getByRole('button', { name: '°F' }).click();
-		// 16.5°C → ~62°F
-		await expect(page.getByText(/62°|61°/)).toBeVisible({ timeout: 3000 });
+		// 16.5°C → ~62°F — temperature appears in multiple places so use first()
+		await expect(page.getByText(/62°|61°/).first()).toBeVisible({ timeout: 3000 });
 	});
 
 	test('°C toggle switches back from °F', async ({ page }) => {
@@ -141,16 +143,10 @@ test.describe('Weather view', () => {
 
 	// ── City search ────────────────────────────────────────────────────────
 	test('add city button opens search bar', async ({ page }) => {
-		await page.getByRole('button').filter({ has: page.locator('svg') }).first().click();
-		// find the MapPin / Plus button for adding city
-		// Look for the search input
+		// Click the Add city button (aria-label="Add city") to open search
+		await page.getByRole('button', { name: 'Add city' }).click();
 		const searchInput = page.getByPlaceholder(/Search city/i);
-		if (await searchInput.isVisible()) {
-			await expect(searchInput).toBeVisible();
-		} else {
-			// The plus button near cities list
-			await expect(page.locator('input[type="text"]').last()).toBeVisible();
-		}
+		await expect(searchInput).toBeVisible({ timeout: 3000 });
 	});
 
 	test('city search shows geocoding results', async ({ page }) => {
@@ -180,17 +176,15 @@ test.describe('Weather view', () => {
 	});
 
 	test('adding a city from search results adds it to saved cities', async ({ page }) => {
-		// Trigger search
+		// Open search via the Add city button
+		await page.getByRole('button', { name: 'Add city' }).click();
 		const input = page.getByPlaceholder(/Search city/i);
-		// Try to make it visible
-		await page.getByRole('button').filter({ has: page.locator('svg') }).nth(1).click().catch(() => {});
-		if (await input.isVisible({ timeout: 500 }).catch(() => false)) {
-			await input.fill('Munich');
-			await expect(page.getByText('Munich')).toBeVisible({ timeout: 3000 });
-			await page.getByText('Munich').first().click();
-			// After adding, Munich should appear in city list
-			await expect(page.getByText('Munich')).toBeVisible({ timeout: 3000 });
-		}
+		await expect(input).toBeVisible({ timeout: 3000 });
+		await input.fill('Munich');
+		await expect(page.getByText('Munich').first()).toBeVisible({ timeout: 3000 });
+		await page.getByText('Munich').first().click();
+		// After adding, Munich should appear somewhere (city tab or weather card)
+		await expect(page.getByText('Munich').first()).toBeVisible({ timeout: 3000 });
 	});
 
 	// ── Forecast ───────────────────────────────────────────────────────────
@@ -213,11 +207,11 @@ test.describe('Weather view', () => {
 
 	// ── City switching ─────────────────────────────────────────────────────
 	test('clicking a saved city loads its weather', async ({ page }) => {
-		await expect(page.getByText('Berlin')).toBeVisible({ timeout: 5000 });
-		// Click London
-		const londonBtn = page.getByText('London');
+		await expect(page.getByText('Berlin').first()).toBeVisible({ timeout: 5000 });
+		// Click London tab button
+		const londonBtn = page.getByRole('button', { name: 'London' });
 		if (await londonBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-			await londonBtn.click();
+			await londonBtn.first().click();
 			// Should still show temperature (mock always returns 16.5)
 			await expect(page.getByText(/17°|16°/).first()).toBeVisible({ timeout: 5000 });
 		}
@@ -231,8 +225,8 @@ test.describe('Weather view', () => {
 			route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(makeMockForecast()) });
 		});
 
-		// Find the refresh button (last icon button in header)
-		const refreshBtn = page.locator('.border-b button').last();
+		// Find the refresh button — first svg-button in the border-b header (before the Add city + button)
+		const refreshBtn = page.locator('.border-b').getByRole('button').filter({ has: page.locator('svg') }).first();
 		await page.waitForTimeout(500); // let initial fetch settle
 		await refreshBtn.click();
 		await page.waitForTimeout(500);

@@ -172,6 +172,10 @@ test.describe('Settings view', () => {
 	});
 
 	test('App Updates shows an empty state when no manifest is published', async ({ page }) => {
+		// Mock the endpoint to return 404 so the empty state is always shown
+		// (a real latest.json may be deployed on Netlify)
+		await page.route('**/releases/android/latest.json*', (route) => route.fulfill({ status: 404 }));
+		await page.goto('/');
 		await page.getByRole('button', { name: /^App Updates/ }).click();
 		await expect(page.getByText('No Android package has been published to this deployment yet.')).toBeVisible();
 	});
@@ -201,9 +205,10 @@ test.describe('Settings view', () => {
 		await page.getByRole('button', { name: /^App Updates/ }).click();
 
 		await expect(page.getByText('Android build 0.0.1 (build 42)')).toBeVisible();
+		// href may be relative or absolute depending on PUBLIC_RELEASE_BASE_URL env var
 		await expect(page.getByRole('link', { name: 'Download Latest Android APK' })).toHaveAttribute(
 			'href',
-			'/releases/android/media-hub-0.0.1-build-42-deadbee.apk'
+			/releases\/android\/media-hub-0\.0\.1-build-42-deadbee\.apk/
 		);
 	});
 });
