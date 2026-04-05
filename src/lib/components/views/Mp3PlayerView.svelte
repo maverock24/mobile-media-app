@@ -1628,7 +1628,10 @@
 		if (!audioEl || !tracks[index]) return false;
 		const url = await ensureTrackUrl(index, true);
 		if (!url) { alert('Unable to load this track.'); return false; }
-		audioEl.src = url; audioEl.load();
+		// Do NOT call audioEl.load() — calling load() then play() immediately causes an AbortError
+		// ("play() request was interrupted by a new load request") in Chromium/Android WebView.
+		// Setting src and calling play() directly is sufficient; the browser loads internally.
+		audioEl.src = url;
 		syncTrackToMediaEngine(index);
 		applyTrackPosition(index);
 		void preloadNextTrack(index);
@@ -1718,7 +1721,6 @@
 					return;
 				}
 				audioEl.src = url;
-				audioEl.load();
 				syncTrackToMediaEngine(musicSettings.lastTrackIndex);
 				applyTrackPosition(musicSettings.lastTrackIndex);
 			}
@@ -1765,7 +1767,7 @@
 				}
 				// Release old URL only after new URL is ready so streaming doesn't error
 				releaseTrackUrl(idx);
-				audioEl.src = url; audioEl.load();
+				audioEl.src = url;
 				syncTrackToMediaEngine(nextIndex);
 				applyTrackPosition(nextIndex);
 				void preloadNextTrack(nextIndex);
@@ -1799,7 +1801,7 @@
 				}
 				// Release old URL only after new URL is ready
 				releaseTrackUrl(oldIndex);
-				audioEl.src = url; audioEl.load();
+				audioEl.src = url;
 				syncTrackToMediaEngine(prevIndex);
 				applyTrackPosition(prevIndex);
 				void preloadNextTrack(prevIndex);
