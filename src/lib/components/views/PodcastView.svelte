@@ -385,7 +385,10 @@
 		currentTime = 0;
 		audioEl.src = episode.audioUrl;
 		audioEl.playbackRate = podcastSettings.playbackSpeed;
-		audioEl.load();
+		// Do NOT call audioEl.load() — calling load() then play() immediately causes
+		// an AbortError ("play() request was interrupted by a new load request") in
+		// Chromium/Android WebView when the src is a remote URL.  Setting src and
+		// calling play() directly is sufficient; the browser handles loading internally.
 		const resumeAt = (episode.positionSec ?? 0) > 10
 			? episode.positionSec
 			: Math.round((episode.progress / 100) * (episode.duration || 0));
