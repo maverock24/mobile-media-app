@@ -497,6 +497,9 @@
 		if (audioCtx) { if (audioCtx.state === 'suspended') audioCtx.resume(); return; }
 		try {
 			const ctx = new AudioContext();
+			// Attempt to resume immediately — on Android WebView the context may start
+			// in 'suspended' state even within a user gesture when created after an await.
+			void ctx.resume();
 			const src = ctx.createMediaElementSource(audioEl);
 			const bands = EQ_FREQS.map((freq, i) => {
 				const f = ctx.createBiquadFilter();
@@ -1645,6 +1648,10 @@
 	// Play a single file → load all siblings as context
 	async function playBrowseFile(entry: BrowseEntry & { kind: 'file' }) {
 		if (isChangingTrack) return;
+		// Unlock / resume the AudioContext while still within the user gesture.
+		// playFolderPath does the same — without this, initAudioContext called later
+		// (after awaits) may create a suspended context that silently mutes audio.
+		initAudioContext();
 		isChangingTrack = true;
 		try {
 			const siblings = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
