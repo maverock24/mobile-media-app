@@ -264,7 +264,8 @@
 	let isBuffering    = $state(false);
 	let isChangingTrack = false; // prevents concurrent skip/select calls
 	let isLiked        = $state(false);
-	let isLoading   = $state(false);
+	let isLoading        = $state(false);
+	let loadingFolderPath = $state<string | null>(null); // per-folder spinner key
 	let showQueue   = $state(false);   // true → browse / folder view
 	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
 	let isRestoring = $state(true);  // true until IDB check finishes (prevents empty-state flash)
@@ -1640,21 +1641,29 @@
 
 	// Play a single file → load all siblings as context
 	async function playBrowseFile(entry: BrowseEntry & { kind: 'file' }) {
-		const siblings = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
-		loadTracks(siblings, browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName);
-		const sorted = sortFiles(siblings);
-		const idx = sorted.findIndex(f => f === entry.file);
-		musicSettings.lastTrackIndex = Math.max(0, idx);
-		currentTime = 0; duration = 0;
-		await startAudioAt(musicSettings.lastTrackIndex);
+		if (isChangingTrack) return;
+		isChangingTrack = true;
+		try {
+			const siblings = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
+			loadTracks(siblings, browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName);
+			const sorted = sortFiles(siblings);
+			const idx = sorted.findIndex(f => f === entry.file);
+			musicSettings.lastTrackIndex = Math.max(0, idx);
+			currentTime = 0; duration = 0;
+			await startAudioAt(musicSettings.lastTrackIndex);
+		} finally {
+			isChangingTrack = false;
+		}
 	}
 
 	// Play only the files visible in the current folder view (no recursion)
 	async function playCurrentFolder() {
+		if (isChangingTrack) return;
 		const files = (browseEntries.filter(e => e.kind === 'file') as (BrowseEntry & { kind: 'file' })[]).map(e => e.file);
 		if (files.length === 0) { alert('No MP3 files found.'); return; }
 		const label = browsePath.length > 0 ? browsePath[browsePath.length - 1] : (musicSettings.lastFolderName || 'Library');
 		isLoading = true;
+		isChangingTrack = true;
 		try {
 			loadTracks(files, label);
 			await startAudioAt(0);
@@ -1662,22 +1671,28 @@
 			console.error('Failed to play folder:', e);
 		} finally {
 			isLoading = false;
+			isChangingTrack = false;
 		}
 	}
 
 	// Play all files under a given browse path (recursively)
 	async function playFolderPath(path: string[]) {
-		isLoading = true;
+		if (isChangingTrack) return;
+		isChangingTrack = true;
+		const folderKey = path.join('/');
+		loadingFolderPath = folderKey;
+		initAudioContext(); // unlock AudioContext while still in user gesture
 		try {
 			const files = await collectAllFromPath(path);
-			if (files.length === 0) { alert('No MP3 files found.'); return; }
+			if (files.length === 0) { alert('No audio files found in this folder.'); return; }
 			loadTracks(files, path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName);
 			await startAudioAt(0);
 		} catch (e) {
 			console.error('Failed to play folder:', e);
 			alert('Could not load the folder. Please try again.');
 		} finally {
-			isLoading = false;
+			isChangingTrack = false;
+			loadingFolderPath = null;
 		}
 	}
 
@@ -2174,6 +2189,7 @@
 			{:else}
 				{#each filteredEntries as entry}
 					{#if entry.kind === 'folder'}
+					{@const folderKey = [...browsePath, entry.name].join('/')}
 					<!-- Folder row -->
 					<div class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
 						<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
@@ -2187,10 +2203,10 @@
 						<button
 							class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors disabled:opacity-40 disabled:pointer-events-none"
 							onclick={() => playFolderPath([...browsePath, entry.name])}
-							disabled={isLoading}
+							disabled={loadingFolderPath === folderKey}
 							aria-label="Play {entry.name}"
 						>
-							{#if isLoading}
+							{#if loadingFolderPath === folderKey}
 								<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
 							{:else}
 								<Play class="w-4 h-4 ml-0.5" />
