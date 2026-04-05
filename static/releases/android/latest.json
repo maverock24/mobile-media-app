@@ -1,13 +1,13 @@
 {
   "version": "0.0.10",
-  "versionCode": 63,
-  "versionName": "0.0.10 (build 63)",
+  "versionCode": 64,
+  "versionName": "0.0.10 (build 64)",
   "buildType": "release",
-  "fileName": "media-hub-0.0.10-build-63.apk",
+  "fileName": "media-hub-0.0.10-build-64.apk",
   "url": "https://mobile-media-app-maverock24.netlify.app/releases/android/latest.apk",
-  "sizeBytes": 116990745,
-  "sha256": "17046f9a6dcfce0d5f2201a55007b543c12c34a0b97c70ed5894e303676865e4",
-  "publishedAt": "2026-04-05T07:45:45Z",
-  "commitSha": "4303d73a5f448841ee49011dc2ec0c8ba4dc0e2d",
-  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/4303d73a5f448841ee49011dc2ec0c8ba4dc0e2d"
+  "sizeBytes": 120217521,
+  "sha256": "efd3a4d895a664c61f8c7fb0f993038cb97a7d7a23d3fb02272b7b953e521225",
+  "publishedAt": "2026-04-05T08:17:40Z",
+  "commitSha": "cf3bc89b64ceb9d051c4f4a684db0f6a4209140e",
+  "commitUrl": "https://github.com/maverock24/mobile-media-app/commit/cf3bc89b64ceb9d051c4f4a684db0f6a4209140e"
 }
