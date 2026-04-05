@@ -179,6 +179,7 @@
 		const cached = rssCache.get(feedUrl);
 		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data;
 		const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`);
+		if (!res.ok) throw new Error(`RSS fetch failed: HTTP ${res.status}`);
 		const data = await res.json();
 		if (data.status === 'ok') rssCache.set(feedUrl, { data, ts: Date.now() });
 		return data;
@@ -203,6 +204,7 @@
 		if (typeof dur === 'number') return dur;
 		if (!dur) return 0;
 		const parts = String(dur).split(':').map(Number);
+		if (parts.some(isNaN)) return 0;
 		if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
 		if (parts.length === 2) return parts[0] * 60 + parts[1];
 		return parts[0] || 0;
@@ -226,6 +228,7 @@
 			const res = await fetch(
 				`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=podcast&entity=podcast&limit=20`
 			);
+			if (!res.ok) throw new Error(`iTunes search failed: HTTP ${res.status}`);
 			const data = await res.json();
 			searchResults = (data.results ?? []) as ItunesResult[];
 		} catch { searchResults = []; }
@@ -242,7 +245,7 @@
 
 	// Preload discover tab popular podcasts
 	$effect(() => {
-		if (podcastSettings.defaultTab === 'discover' && searchResults.length === 0 && !searchQuery) {
+		if (podcastSettings.defaultTab === 'discover' && searchResults.length === 0 && !searchQuery && !searchLoading) {
 			searchITunes('technology science');
 		}
 	});
@@ -277,6 +280,10 @@
 
 	function unsubscribe(podcast: Podcast) {
 		podcastData.podcasts = podcastData.podcasts.map(p => p.id === podcast.id ? { ...p, subscribed: false } : p);
+		// Re-sync selectedPodcast so the subscribe toggle reflects the new state immediately
+		if (selectedPodcast?.id === podcast.id) {
+			selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
+		}
 	}
 
 	function deletePodcast(id: number) {
@@ -302,6 +309,7 @@
 				const lu = await fetch(
 					`https://itunes.apple.com/lookup?id=${podcast.itunesId}`
 				);
+				if (!lu.ok) throw new Error(`iTunes lookup failed: HTTP ${lu.status}`);
 				const luData = await lu.json();
 				const r = luData.results?.[0];
 				if (!r?.feedUrl) {
@@ -393,7 +401,7 @@
 			? episode.positionSec
 			: Math.round((episode.progress / 100) * (episode.duration || 0));
 		if (resumeAt > 10) {
-			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = resumeAt; }, { once: true });
+			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = resumeAt; currentTime = resumeAt; }, { once: true });
 		}
 		isBuffering = true;
 		audioEl.play().catch((err) => {
@@ -480,6 +488,9 @@
 	// ── Restore last-played episode on mount ──────────────────────
 	$effect(() => {
 		if (!podcastData.lastEpisodeId || podcastData.lastPodcastId < 0) return;
+		// Only restore if nothing is currently playing — avoids clobbering live playback
+		// when background RSS refresh mutates podcastData.podcasts and re-triggers this effect
+		if (currentEpisode !== null) return;
 		const pod = podcastData.podcasts.find(p => p.id === podcastData.lastPodcastId);
 		if (!pod) return;
 		const ep = pod.episodes.find(e => e.id === podcastData.lastEpisodeId);

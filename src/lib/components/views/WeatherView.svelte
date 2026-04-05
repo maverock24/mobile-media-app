@@ -103,6 +103,7 @@
 			const res = await fetch(
 				`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=en&format=json`
 			);
+			if (!res.ok) throw new Error(`Geocoding search failed: HTTP ${res.status}`);
 			const data = await res.json();
 			geoResults = (data.results ?? []) as GeoResult[];
 		} catch { geoResults = []; }

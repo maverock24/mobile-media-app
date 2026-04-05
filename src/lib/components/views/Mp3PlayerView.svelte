@@ -663,7 +663,7 @@
 		if (!track) return;
 		const pos = mp3TrackPositions.positions[getTrackKey(track.source)] ?? 0;
 		if (pos > 5) {
-			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = pos; }, { once: true });
+			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = pos; currentTime = pos; }, { once: true });
 		}
 	}
 
