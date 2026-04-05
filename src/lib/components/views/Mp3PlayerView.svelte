@@ -2360,6 +2360,8 @@
 		<div class="flex items-center justify-between w-full">
 			<Button variant="ghost" size="icon"
 				onclick={() => (musicSettings.isShuffle = !musicSettings.isShuffle)}
+				aria-label="Toggle shuffle"
+				title="Toggle shuffle"
 				class={musicSettings.isShuffle ? 'text-primary' : 'text-muted-foreground'}>
 				<Shuffle class="w-6 h-6" />
 			</Button>
