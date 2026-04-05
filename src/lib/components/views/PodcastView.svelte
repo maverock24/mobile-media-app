@@ -124,11 +124,17 @@
 				currentEpisode.episode.positionSec = 0;
 			}
 		};
+		const onError = () => {
+			const err = audioEl.error;
+			console.error('[Podcast] audio error:', err?.code, err?.message, 'url:', audioEl.src);
+			isBuffering = false;
+		};
 		audioEl.addEventListener('timeupdate',     onTimeUpdate);
 		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
 		audioEl.addEventListener('play',    onPlay);
 		audioEl.addEventListener('pause',   onPause);
 		audioEl.addEventListener('ended',   onEnded);
+		audioEl.addEventListener('error',   onError);
 		audioEl.addEventListener('waiting', onWaiting);
 		audioEl.addEventListener('playing', onPlaying);
 		return () => {
@@ -137,6 +143,7 @@
 			audioEl?.removeEventListener('play',    onPlay);
 			audioEl?.removeEventListener('pause',   onPause);
 			audioEl?.removeEventListener('ended',   onEnded);
+			audioEl?.removeEventListener('error',   onError);
 			audioEl?.removeEventListener('waiting', onWaiting);
 			audioEl?.removeEventListener('playing', onPlaying);
 		};
@@ -323,7 +330,7 @@
 					publishedAt: String(item.pubDate ?? ''),
 					played:      false,
 					progress:    0,
-					audioUrl:    enc?.link ?? String(item.link ?? ''),
+					audioUrl:    enc?.link ?? (String(item.link ?? '').match(/\.(mp3|m4a|ogg|aac|wav|flac)(\?|$)/i) ? String(item.link) : ''),
 				};
 			});
 			const feedImage = typeof (data.feed as Record<string, unknown> | undefined)?.image === 'string'
@@ -386,7 +393,10 @@
 			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = resumeAt; }, { once: true });
 		}
 		isBuffering = true;
-		audioEl.play().catch(() => { isBuffering = false; });
+		audioEl.play().catch((err) => {
+			isBuffering = false;
+			console.error('[Podcast] play() failed:', err, 'url:', episode.audioUrl);
+		});
 		mediaEngine.setNowPlaying({
 			id:         episode.id,
 			source:     'podcast',
@@ -404,7 +414,7 @@
 			audioEl.pause();
 		} else {
 			claimAudio('podcast');
-			audioEl.play().catch(() => {});
+			audioEl.play().catch((err) => { console.error('[Podcast] togglePlay() failed:', err); });
 		}
 	}
 
