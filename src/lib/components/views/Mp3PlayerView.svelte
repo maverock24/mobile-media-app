@@ -260,9 +260,10 @@
 	let tracks      = $state<Track[]>([]);
 	let currentTime = $state(0);
 	let duration    = $state(0);
-	let isPlaying   = $state(false);
-	let isBuffering = $state(false);
-	let isLiked     = $state(false);
+	let isPlaying      = $state(false);
+	let isBuffering    = $state(false);
+	let isChangingTrack = false; // prevents concurrent skip/select calls
+	let isLiked        = $state(false);
 	let isLoading   = $state(false);
 	let showQueue   = $state(false);   // true → browse / folder view
 	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
@@ -1712,67 +1713,90 @@
 	}
 
 	async function selectTrack(index: number) {
-		releaseTrackUrl(musicSettings.lastTrackIndex);
-		musicSettings.lastTrackIndex = index;
-		musicSettings.lastTrackTimestamp = 0;
-		currentTime = 0; duration = 0;
-		await startAudioAt(index);
+		if (isChangingTrack) return;
+		isChangingTrack = true;
+		const oldIndex = musicSettings.lastTrackIndex;
+		try {
+			musicSettings.lastTrackIndex = index;
+			musicSettings.lastTrackTimestamp = 0;
+			currentTime = 0; duration = 0;
+			await startAudioAt(index);
+			// Release old URL only after new src is loaded to avoid streaming error
+			if (oldIndex !== index) releaseTrackUrl(oldIndex);
+		} finally {
+			isChangingTrack = false;
+		}
 	}
 
 	async function advanceTrack(wasPlaying: boolean, interactiveAuth = false) {
-		if (tracks.length === 0) return;
-		const idx = musicSettings.lastTrackIndex;
-		const nextIndex = getNextTrackIndex(idx);
-		if (nextIndex === null) {
-			isPlaying = false; currentTime = 0;
-			if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
-			return;
-		}
-		releaseTrackUrl(idx);
-		musicSettings.lastTrackIndex = nextIndex;
-		musicSettings.lastTrackTimestamp = 0;
-		currentTime = 0; duration = 0;
-		if (audioEl && tracks[nextIndex]) {
-			const url = await ensureTrackUrl(nextIndex, interactiveAuth);
-			if (!url) {
-				isPlaying = false;
+		if (isChangingTrack || tracks.length === 0) return;
+		isChangingTrack = true;
+		try {
+			const idx = musicSettings.lastTrackIndex;
+			const nextIndex = getNextTrackIndex(idx);
+			if (nextIndex === null) {
+				isPlaying = false; currentTime = 0;
+				if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
 				return;
 			}
-			audioEl.src = url; audioEl.load();
-			syncTrackToMediaEngine(nextIndex);
-			applyTrackPosition(nextIndex);
-			void preloadNextTrack(nextIndex);
-			claimAudio('music');
-			if (wasPlaying) {
-				isBuffering = true;
-				audioEl.play().catch(() => { isPlaying = false; isBuffering = false; });
+			musicSettings.lastTrackIndex = nextIndex;
+			musicSettings.lastTrackTimestamp = 0;
+			currentTime = 0; duration = 0;
+			if (audioEl && tracks[nextIndex]) {
+				const url = await ensureTrackUrl(nextIndex, interactiveAuth);
+				if (!url) {
+					isPlaying = false; isBuffering = false;
+					return;
+				}
+				// Release old URL only after new URL is ready so streaming doesn't error
+				releaseTrackUrl(idx);
+				audioEl.src = url; audioEl.load();
+				syncTrackToMediaEngine(nextIndex);
+				applyTrackPosition(nextIndex);
+				void preloadNextTrack(nextIndex);
+				claimAudio('music');
+				initAudioContext();
+				if (wasPlaying) {
+					isBuffering = true;
+					audioEl.play().catch(() => { isPlaying = false; isBuffering = false; });
+				}
 			}
+		} finally {
+			isChangingTrack = false;
 		}
 	}
 
 	async function prevTrack() {
-		if (tracks.length === 0) return;
-		const wasPlaying = isPlaying;
-		if (musicSettings.rewindOnPrev && currentTime > 3 && audioEl) { audioEl.currentTime = 0; return; }
-		releaseTrackUrl(musicSettings.lastTrackIndex);
-		const prevIndex = (musicSettings.lastTrackIndex - 1 + tracks.length) % tracks.length;
-		musicSettings.lastTrackIndex = prevIndex;
-		musicSettings.lastTrackTimestamp = 0;
-		currentTime = 0; duration = 0;
-		if (audioEl && tracks[prevIndex]) {
-			const url = await ensureTrackUrl(prevIndex, true);
-			if (!url) {
-				return;
+		if (isChangingTrack || tracks.length === 0) return;
+		isChangingTrack = true;
+		try {
+			const wasPlaying = isPlaying || isBuffering;
+			if (musicSettings.rewindOnPrev && currentTime > 3 && audioEl) { audioEl.currentTime = 0; return; }
+			const oldIndex = musicSettings.lastTrackIndex;
+			const prevIndex = (oldIndex - 1 + tracks.length) % tracks.length;
+			musicSettings.lastTrackIndex = prevIndex;
+			musicSettings.lastTrackTimestamp = 0;
+			currentTime = 0; duration = 0;
+			if (audioEl && tracks[prevIndex]) {
+				const url = await ensureTrackUrl(prevIndex, true);
+				if (!url) {
+					return;
+				}
+				// Release old URL only after new URL is ready
+				releaseTrackUrl(oldIndex);
+				audioEl.src = url; audioEl.load();
+				syncTrackToMediaEngine(prevIndex);
+				applyTrackPosition(prevIndex);
+				void preloadNextTrack(prevIndex);
+				claimAudio('music');
+				initAudioContext();
+				if (wasPlaying) {
+					isBuffering = true;
+					audioEl.play().catch(() => { isPlaying = false; isBuffering = false; });
+				}
 			}
-			audioEl.src = url; audioEl.load();
-			syncTrackToMediaEngine(prevIndex);
-			applyTrackPosition(prevIndex);
-			void preloadNextTrack(prevIndex);
-			claimAudio('music');
-			if (wasPlaying) {
-				isBuffering = true;
-				audioEl.play().catch(() => { isPlaying = false; isBuffering = false; });
-			}
+		} finally {
+			isChangingTrack = false;
 		}
 	}
 
@@ -2178,23 +2202,20 @@
 						</button>
 					</div>
 					{:else}
-					<!-- File row -->
-					<div class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
+					<!-- File row — click anywhere to play -->
+					<button
+						class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors text-left"
+						onclick={() => playBrowseFile(entry)}
+						aria-label="Play {entry.name}"
+					>
 						<div class="w-9 h-9 rounded-lg bg-muted/40 flex items-center justify-center shrink-0">
 							<Music2 class="w-4 h-4 text-muted-foreground" />
 						</div>
-						<button class="flex-1 min-w-0 text-left" onclick={() => playBrowseFile(entry)}>
+						<div class="flex-1 min-w-0">
 							<p class="font-medium text-sm truncate">{parseFilename(entry.name).title}</p>
 							<p class="text-xs text-muted-foreground truncate">{parseFilename(entry.name).artist}</p>
-						</button>
-						<button
-							class="w-9 h-9 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors"
-							onclick={() => playBrowseFile(entry)}
-							aria-label="Play {entry.name}"
-						>
-							<Play class="w-4 h-4 ml-0.5" />
-						</button>
-					</div>
+						</div>
+					</button>
 					{/if}
 				{/each}
 			{/if}
