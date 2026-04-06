@@ -39,11 +39,6 @@ export interface GoogleDriveFolder {
 	webViewLink?: string;
 }
 
-export interface GoogleDriveStreamSession {
-	url: string;
-	dispose: () => void;
-}
-
 let scriptPromise: Promise<void> | null = null;
 
 function ensureBrowser() {
@@ -58,19 +53,32 @@ function buildGoogleApiUrl(path: string, searchParams?: URLSearchParams): string
 }
 
 async function googleApiFetch<T>(path: string, accessToken: string, searchParams?: URLSearchParams): Promise<T> {
-	const response = await fetch(buildGoogleApiUrl(path, searchParams), {
-		headers: {
-			Authorization: `Bearer ${accessToken}`,
-			Accept: 'application/json'
-		}
-	});
+	const MAX_RETRIES = 3;
+	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+		const response = await fetch(buildGoogleApiUrl(path, searchParams), {
+			headers: {
+				Authorization: `Bearer ${accessToken}`,
+				Accept: 'application/json'
+			}
+		});
 
-	if (!response.ok) {
-		const message = await response.text().catch(() => '');
-		throw new Error(message || `Google API request failed with ${response.status}`);
+		if (response.status === 429 || response.status === 403) {
+			if (attempt < MAX_RETRIES) {
+				const delay = Math.min(2 ** attempt * 1000, 30_000);
+				await new Promise(r => setTimeout(r, delay));
+				continue;
+			}
+		}
+
+		if (!response.ok) {
+			const message = await response.text().catch(() => '');
+			throw new Error(message || `Google API request failed with ${response.status}`);
+		}
+
+		return (await response.json()) as T;
 	}
 
-	return (await response.json()) as T;
+	throw new Error('Google API request failed after retries');
 }
 
 export function isGoogleDriveConfigured(): boolean {
@@ -276,7 +284,7 @@ export type DriveScanBatch = {
 };
 
 // Number of Drive folders fetched concurrently during BFS traversal.
-const DRIVE_SCAN_CONCURRENCY = 5;
+const DRIVE_SCAN_CONCURRENCY = 3;
 
 /**
  * Streams MP3 files from a Google Drive folder tree using concurrent BFS.
@@ -357,145 +365,6 @@ export async function listGoogleDriveMp3Files(
 		all.push(...batch.files);
 	}
 	return all;
-}
-
-function getSupportedStreamMimeType(mimeType?: string): string | null {
-	if (typeof window === 'undefined' || typeof MediaSource === 'undefined') {
-		return null;
-	}
-
-	const candidates = [mimeType, 'audio/mpeg', 'audio/mp3'].filter((value, index, values): value is string => {
-		return Boolean(value) && values.indexOf(value) === index;
-	});
-
-	for (const candidate of candidates) {
-		if (MediaSource.isTypeSupported(candidate)) {
-			return candidate;
-		}
-	}
-
-	return null;
-}
-
-function waitForSourceBufferIdle(sourceBuffer: SourceBuffer): Promise<void> {
-	if (!sourceBuffer.updating) {
-		return Promise.resolve();
-	}
-
-	return new Promise<void>((resolve) => {
-		const handleUpdateEnd = () => {
-			sourceBuffer.removeEventListener('updateend', handleUpdateEnd);
-			resolve();
-		};
-
-		sourceBuffer.addEventListener('updateend', handleUpdateEnd, { once: true });
-	});
-}
-
-export function canStreamGoogleDriveFile(mimeType?: string): boolean {
-	return getSupportedStreamMimeType(mimeType) !== null;
-}
-
-export async function createGoogleDriveStreamSession(options: {
-	accessToken: string;
-	fileId: string;
-	mimeType?: string;
-}): Promise<GoogleDriveStreamSession> {
-	const supportedMimeType = getSupportedStreamMimeType(options.mimeType);
-
-	if (!supportedMimeType) {
-		throw new Error('Streaming is not supported for this audio format in the current browser.');
-	}
-
-	const mediaSource = new MediaSource();
-	const url = URL.createObjectURL(mediaSource);
-	const abortController = new AbortController();
-	let disposed = false;
-
-	const dispose = () => {
-		if (disposed) {
-			return;
-		}
-
-		disposed = true;
-		abortController.abort();
-
-		try {
-			if (mediaSource.readyState === 'open') {
-				mediaSource.endOfStream();
-			}
-		} catch {
-			// Ignore teardown failures during track changes.
-		}
-	};
-
-	mediaSource.addEventListener('sourceopen', () => {
-		void (async () => {
-			try {
-				const sourceBuffer = mediaSource.addSourceBuffer(supportedMimeType);
-				sourceBuffer.mode = 'sequence';
-
-				const response = await fetch(`https://www.googleapis.com/drive/v3/files/${options.fileId}?alt=media`, {
-					headers: {
-						Authorization: `Bearer ${options.accessToken}`
-					},
-					signal: abortController.signal
-				});
-
-				if (!response.ok) {
-					const message = await response.text().catch(() => '');
-					throw new Error(message || `Unable to stream Google Drive file (${response.status}).`);
-				}
-
-				if (!response.body) {
-					const buffer = await response.arrayBuffer();
-					await waitForSourceBufferIdle(sourceBuffer);
-					sourceBuffer.appendBuffer(buffer);
-					await waitForSourceBufferIdle(sourceBuffer);
-					if (!disposed && mediaSource.readyState === 'open') {
-						mediaSource.endOfStream();
-					}
-					return;
-				}
-
-				const reader = response.body.getReader();
-
-				while (!disposed) {
-					const { done, value } = await reader.read();
-					if (done) {
-						break;
-					}
-
-					if (!value || value.byteLength === 0) {
-						continue;
-					}
-
-					await waitForSourceBufferIdle(sourceBuffer);
-					sourceBuffer.appendBuffer(value);
-				}
-
-				await waitForSourceBufferIdle(sourceBuffer);
-				if (!disposed && mediaSource.readyState === 'open') {
-					mediaSource.endOfStream();
-				}
-			} catch (error) {
-				if (abortController.signal.aborted) {
-					return;
-				}
-
-				console.error('Google Drive streaming failed.', error);
-				try {
-					if (mediaSource.readyState === 'open') {
-						mediaSource.endOfStream('network');
-					}
-				} catch {
-					// Ignore stream shutdown failures after an upstream error.
-				}
-			}
-		})();
-	}, { once: true });
-
-	return { url, dispose };
 }
 
 export async function downloadGoogleDriveFile(options: {

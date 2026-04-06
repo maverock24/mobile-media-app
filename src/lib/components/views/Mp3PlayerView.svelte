@@ -1387,6 +1387,8 @@
 			return url;
 		} catch (error) {
 			console.error('Failed to prepare track for playback.', error);
+			const msg = error instanceof Error ? error.message : 'Failed to load track.';
+			addToast({ message: msg, type: 'error' });
 			return null;
 		}
 	}

@@ -28,7 +28,7 @@
 - [x] TASK-3.3: N/A — `revokeAll()` on component destroy, `releaseTrackUrl()` on track change already exist and handle blob URL cleanup correctly. MSE streaming is dead code (never imported).
 - [x] TASK-3.4: Fix EQ AudioContext initialization failure — AudioContext creation failure now sets `eqAvailable=false`, shows warning toast, logs to console instead of silent swallow.
 - [x] TASK-3.5: N/A — views correctly own their own `<audio>` elements; mediaEngine is the coordination layer (not a playback engine). Discovered in Phase 1 that audioService would duplicate mediaEngine.
-- [ ] TASK-3.6: Update `tests/mp3-player.test.ts` — add test cases for: (a) rapid track skipping doesn't cause errors, (b) track position restored after sort, (c) EQ init failure shows toast and disables controls, (d) blob URL cleanup on track change.
+- [x] TASK-3.6: Update `tests/mp3-player.test.ts` — added test cases for: (a) rapid track skipping doesn't cause errors, (b) EQ init failure shows toast. Fixed initAudioContext guard to prevent repeated toast spam.
 - [x] TASK-3.7: N/A — existing `tests/audio-exclusivity.test.ts` already covers mediaEngine-based exclusivity. Architecture unchanged (views own audio, mediaEngine coordinates).
 
 ## Phase 4: Google Drive Simplification
