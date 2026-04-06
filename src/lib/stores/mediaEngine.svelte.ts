@@ -13,6 +13,7 @@ import { Capacitor } from '@capacitor/core';
 import type { MediaItem, MediaSource } from '$lib/models/media';
 import { MediaControls } from '$lib/native/media-controls';
 import { addToHistory } from './history.svelte';
+import { addToast } from './toastStore.svelte';
 
 export interface NowPlayingState {
 	item:        MediaItem | null;
@@ -244,6 +245,19 @@ export const mediaEngine = $state<NowPlayingState & {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Audio Error Description
+// ─────────────────────────────────────────────────────────────────────────────
+function describeAudioError(err: MediaError): string {
+	switch (err.code) {
+		case MediaError.MEDIA_ERR_ABORTED:          return 'Playback was interrupted.';
+		case MediaError.MEDIA_ERR_NETWORK:           return 'A network error caused playback to fail. Check your connection.';
+		case MediaError.MEDIA_ERR_DECODE:            return 'The audio file could not be decoded.';
+		case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED: return 'This audio format is not supported.';
+		default: return err.message || 'Unknown playback error.';
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Audio Slot Management
 // ─────────────────────────────────────────────────────────────────────────────
 let _audioSlots: [HTMLAudioElement, HTMLAudioElement] | null = null;
@@ -268,9 +282,15 @@ function getAudioSlots(): [HTMLAudioElement, HTMLAudioElement] {
 			audio.addEventListener('loadedmetadata', () => {
 				if (i === _activeSlot && audio.duration > 0) mediaEngine.duration = audio.duration;
 			});
-			audio.addEventListener('error', (e) => {
-				console.error(`Audio slot ${i} error:`, e);
-				if (i === _activeSlot) mediaEngine.setPlaying(false);
+			audio.addEventListener('error', () => {
+				const err = audio.error;
+				if (!audio.src || audio.src === 'about:blank') return;
+				console.error(`Audio slot ${i} error:`, err?.code, err?.message);
+				if (i === _activeSlot) {
+					mediaEngine.setPlaying(false);
+					const msg = err ? describeAudioError(err) : 'Unknown playback error.';
+					addToast({ message: msg, type: 'error' });
+				}
 			});
 		});
 
