@@ -32,8 +32,8 @@ const config = {
 					'https://mobile-media-app-maverock24.netlify.app',
 					'https://raw.githubusercontent.com'
 				],
-				'img-src': ['self', 'data:', 'blob:'],
-				'media-src': ['self', 'blob:'],
+				'img-src': ['self', 'data:', 'blob:', 'https:'],
+				'media-src': ['self', 'blob:', 'https:'],
 				'style-src': ['self', 'unsafe-inline'],
 				'font-src': ['self', 'data:'],
 				'frame-src': ['none'],
