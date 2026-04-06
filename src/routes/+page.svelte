@@ -7,6 +7,8 @@
 	import LoginView from '$lib/components/views/LoginView.svelte';
 	import MiniPlayer from '$lib/components/ui/MiniPlayer.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
+	import { audioService } from '$lib/stores/audioService.svelte';
+	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { Music, Mic2, Cloud, Settings2, User } from 'lucide-svelte';
 
@@ -33,6 +35,13 @@
 
 	onMount(() => {
 		activeTab = readSavedTab();
+
+		// Wire audio errors to user-facing toasts
+		const unsubError = audioService.onError((err) => {
+			addToast({ message: err.message, type: 'error' });
+		});
+
+		return () => { unsubError(); };
 	});
 
 	$effect(() => {
