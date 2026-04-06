@@ -491,7 +491,7 @@
 	// Web Audio API
 	// ─────────────────────────────────────────────────────────────
 	function initAudioContext() {
-		if (!audioEl) return;
+		if (!audioEl || !eqAvailable) return;
 		if (audioCtx) { if (audioCtx.state === 'suspended') audioCtx.resume(); return; }
 		try {
 			const ctx = new AudioContext();

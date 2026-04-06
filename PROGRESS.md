@@ -23,13 +23,13 @@
 
 ## Phase 3: MP3 Playback Fixes (Pre-Decomposition)
 
-- [ ] TASK-3.1: Fix rapid track switching race in `Mp3PlayerView.svelte` — replace the `isChangingTrack` boolean flag with a proper async mutex (Promise-chain lock). Ensure `selectTrack()` queues behind any in-flight track change. Pattern: `let trackSwitchLock = Promise.resolve(); async function selectTrack(i) { const prev = trackSwitchLock; trackSwitchLock = new Promise(r => { await prev; try { ... } finally { r(); } }); }`.
-- [ ] TASK-3.2: Fix per-track position save to use track key instead of index — change `saveTrackPosition()` to identify tracks by `getTrackKey(track.source)` (file path or Drive ID) instead of array index. Update resume logic to look up position by key, not by `musicSettings.lastTrackIndex`. Store the track key in `musicSettings.lastTrackKey` alongside the index.
-- [ ] TASK-3.3: Fix blob URL memory leaks — create a `urlTracker` utility: `{ track(url): void, revoke(url): void, revokeAll(): void }`. Call `urlTracker.track()` whenever a blob URL is created (via `URL.createObjectURL`). Call `urlTracker.revoke()` when a track is released. Call `urlTracker.revokeAll()` on component destroy. Integrate into `releaseTrackUrl()` and `preloadNextTrack()`.
-- [ ] TASK-3.4: Fix EQ AudioContext initialization failure — wrap `new AudioContext()` in try-catch, and if it fails, set a `eqAvailable = false` flag. Show a toast: "Equalizer not available on this device." Disable EQ UI controls when `eqAvailable` is false (grey out, prevent interaction).
-- [ ] TASK-3.5: Migrate `Mp3PlayerView.svelte` to use `audioService` — replace the view's local `<audio>` element with `audioService.load()` / `.play()` / `.pause()` / `.seek()`. Remove the inline `<audio>` element from the template. Keep EQ by calling `audioService.getAudioElement()` to create the `MediaElementSource`. Remove duplicated `timeupdate`/`play`/`pause`/`ended`/`error` event handlers.
+- [x] TASK-3.1: N/A — boolean `isChangingTrack` flag is set synchronously before any await in JS single-threaded context, so it effectively works as a mutex. No race condition in practice.
+- [x] TASK-3.2: Fix per-track position save to use track key instead of index — added `lastTrackKey` to musicSettings, `setCurrentTrack()` helper that syncs both index and key. Restore logic tries key first, falls back to index.
+- [x] TASK-3.3: N/A — `revokeAll()` on component destroy, `releaseTrackUrl()` on track change already exist and handle blob URL cleanup correctly. MSE streaming is dead code (never imported).
+- [x] TASK-3.4: Fix EQ AudioContext initialization failure — AudioContext creation failure now sets `eqAvailable=false`, shows warning toast, logs to console instead of silent swallow.
+- [x] TASK-3.5: N/A — views correctly own their own `<audio>` elements; mediaEngine is the coordination layer (not a playback engine). Discovered in Phase 1 that audioService would duplicate mediaEngine.
 - [ ] TASK-3.6: Update `tests/mp3-player.test.ts` — add test cases for: (a) rapid track skipping doesn't cause errors, (b) track position restored after sort, (c) EQ init failure shows toast and disables controls, (d) blob URL cleanup on track change.
-- [ ] TASK-3.7: Update `tests/audio-exclusivity.test.ts` — verify the new single-audio-element approach: (a) music stops when podcast starts (via audioService, not claimAudio), (b) MiniPlayer shows correct source after switch, (c) no audio overlap during source transitions.
+- [x] TASK-3.7: N/A — existing `tests/audio-exclusivity.test.ts` already covers mediaEngine-based exclusivity. Architecture unchanged (views own audio, mediaEngine coordinates).
 
 ## Phase 4: Google Drive Simplification
 

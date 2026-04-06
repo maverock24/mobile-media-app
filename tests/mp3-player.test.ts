@@ -287,4 +287,59 @@ test.describe('MP3 Player view', () => {
 		// No assertion on class — just verify it doesn't throw
 		await page.waitForTimeout(100);
 	});
+
+	// ── Rapid track skipping ───────────────────────────────────────────────
+	test('rapid next-button clicks do not cause errors', async ({ page }) => {
+		const errors: string[] = [];
+		page.on('pageerror', (err) => errors.push(err.message));
+
+		const [fc] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fc.setFiles(tmpDir);
+		await page.getByText('Track One').first().click({ timeout: 5000 });
+		await page.waitForTimeout(300);
+
+		// Click next rapidly 5 times — should not throw any uncaught errors
+		const nextBtn = page.getByRole('button', { name: /Next/i }).first();
+		for (let i = 0; i < 5; i++) {
+			await nextBtn.click();
+			await page.waitForTimeout(50);
+		}
+		await page.waitForTimeout(500);
+		expect(errors).toHaveLength(0);
+	});
+
+	// ── EQ init failure toast ──────────────────────────────────────────────
+	test('EQ failure shows warning toast when AudioContext is unavailable', async ({ page }) => {
+		// Override AudioContext to throw on construction
+		await page.addInitScript(() => {
+			(window as any).AudioContext = class {
+				constructor() { throw new Error('AudioContext not supported'); }
+			};
+			(window as any).webkitAudioContext = (window as any).AudioContext;
+		});
+		await page.reload();
+		await goToTab(page, 'Music');
+
+		const [fc] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fc.setFiles(tmpDir);
+
+		// Play a track — this triggers initAudioContext() which should fail
+		await page.getByText('Track One').first().click({ timeout: 5000 });
+		await page.waitForTimeout(500);
+
+		// A warning toast should appear about EQ unavailability
+		await expect(page.getByText(/[Ee]qualizer not available/i).first()).toBeVisible({ timeout: 5000 });
+	});
 });
