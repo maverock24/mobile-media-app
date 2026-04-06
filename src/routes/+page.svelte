@@ -6,6 +6,7 @@
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
 	import LoginView from '$lib/components/views/LoginView.svelte';
 	import MiniPlayer from '$lib/components/ui/MiniPlayer.svelte';
+	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { Music, Mic2, Cloud, Settings2, User } from 'lucide-svelte';
 
@@ -85,6 +86,9 @@
 
 	<!-- Mini-player: shown when audio is playing but user is on a different tab -->
 	<MiniPlayer {activeTab} onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
+
+	<!-- Toast notifications -->
+	<ToastContainer />
 
 	<!-- Bottom Tab Bar -->
 	<div class="border-t bg-background/95 backdrop-blur-sm safe-area-inset-bottom" role="tablist">
