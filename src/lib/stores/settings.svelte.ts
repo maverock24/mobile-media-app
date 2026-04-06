@@ -25,6 +25,7 @@ export const musicSettings = persisted('music-settings', {
 	driveFolderId: '',
 	driveFolderName: '',
 	lastTrackIndex: 0,
+	lastTrackKey: '',  // stable file identity for resume after sort
 	lastTrackTimestamp: 0,  // seconds — saved on pause/steal for UX continuity
 	crossfadeDuration: 0,   // seconds (0 = disabled)
 	equalizerPreset: 'flat' as 'flat' | 'bass' | 'treble' | 'vocal' | 'classical' | 'custom',

@@ -26,6 +26,7 @@
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
+	import { addToast } from '$lib/stores/toastStore.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, Heart, FolderOpen, Music2,
@@ -239,8 +240,17 @@
 			currentTime = 0;
 			duration = 0;
 		} else {
-			// Restore: keep saved position
-			musicSettings.lastTrackIndex = Math.min(musicSettings.lastTrackIndex, tracks.length - 1);
+			// Restore: find track by key (survives re-sort), fallback to saved index
+			if (musicSettings.lastTrackKey) {
+				const keyMatch = tracks.findIndex(t => getTrackKey(t.source) === musicSettings.lastTrackKey);
+				if (keyMatch >= 0) {
+					musicSettings.lastTrackIndex = keyMatch;
+				} else {
+					musicSettings.lastTrackIndex = Math.min(musicSettings.lastTrackIndex, tracks.length - 1);
+				}
+			} else {
+				musicSettings.lastTrackIndex = Math.min(musicSettings.lastTrackIndex, tracks.length - 1);
+			}
 			currentTime = musicSettings.lastTrackTimestamp;
 		}
 	}
@@ -317,6 +327,7 @@
 
 	// ── Web Audio API (lazy-init) ──
 	let audioCtx: AudioContext | null = null;
+	let eqAvailable = $state(true);  // false if AudioContext creation fails
 	let filters: BiquadFilterNode[] = [];
 
 	// ── refs ──
@@ -501,7 +512,11 @@
 			node.connect(ctx.destination);
 			filters = bands;
 			audioCtx = ctx;
-		} catch { /* AudioContext not available */ }
+		} catch (e) {
+			eqAvailable = false;
+			addToast({ message: 'Equalizer not available on this device.', type: 'warning' });
+			console.warn('AudioContext creation failed:', e);
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -624,6 +639,12 @@
 		if (source.source === 'drive')  return `d:${source.fileId}`;
 		if (source.source === 'native') return `n:${source.relativePath}`;
 		return `w:${source.relativePath}`;
+	}
+
+	/** Sync both lastTrackIndex and lastTrackKey together */
+	function setCurrentTrack(index: number) {
+		musicSettings.lastTrackIndex = index;
+		musicSettings.lastTrackKey = tracks[index] ? getTrackKey(tracks[index].source) : '';
 	}
 
 	function saveTrackPosition(index: number, positionSec: number) {
@@ -1645,7 +1666,7 @@
 			loadTracks(siblings, browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName);
 			const sorted = sortFiles(siblings);
 			const idx = sorted.findIndex(f => f === entry.file);
-			musicSettings.lastTrackIndex = Math.max(0, idx);
+			setCurrentTrack(Math.max(0, idx));
 			currentTime = 0; duration = 0;
 			await startAudioAt(musicSettings.lastTrackIndex);
 		} finally {
@@ -1728,7 +1749,7 @@
 		isChangingTrack = true;
 		const oldIndex = musicSettings.lastTrackIndex;
 		try {
-			musicSettings.lastTrackIndex = index;
+			setCurrentTrack(index);
 			musicSettings.lastTrackTimestamp = 0;
 			currentTime = 0; duration = 0;
 			await startAudioAt(index);
@@ -1750,7 +1771,7 @@
 				if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
 				return;
 			}
-			musicSettings.lastTrackIndex = nextIndex;
+			setCurrentTrack(nextIndex);
 			musicSettings.lastTrackTimestamp = 0;
 			currentTime = 0; duration = 0;
 			if (audioEl && tracks[nextIndex]) {
@@ -1785,7 +1806,7 @@
 			if (musicSettings.rewindOnPrev && currentTime > 3 && audioEl) { audioEl.currentTime = 0; return; }
 			const oldIndex = musicSettings.lastTrackIndex;
 			const prevIndex = (oldIndex - 1 + tracks.length) % tracks.length;
-			musicSettings.lastTrackIndex = prevIndex;
+			setCurrentTrack(prevIndex);
 			musicSettings.lastTrackTimestamp = 0;
 			currentTime = 0; duration = 0;
 			if (audioEl && tracks[prevIndex]) {
