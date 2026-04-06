@@ -15,6 +15,23 @@ import { MediaControls } from '$lib/native/media-controls';
 import { addToHistory } from './history.svelte';
 import { addToast } from './toastStore.svelte';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Audio exclusivity — only one source (music / podcast) plays at a time.
+// Views register a stop-callback; calling claimAudio pauses the others.
+// ─────────────────────────────────────────────────────────────────────────────
+type AudioSourceId = MediaSource | 'essay';
+const _stopFns: Partial<Record<AudioSourceId, () => void>> = {};
+
+export function registerAudioSource(id: AudioSourceId, stopFn: () => void): void {
+	_stopFns[id] = stopFn;
+}
+
+export function claimAudio(id: AudioSourceId): void {
+	for (const other of Object.keys(_stopFns) as AudioSourceId[]) {
+		if (other !== id) _stopFns[other]?.();
+	}
+}
+
 export interface NowPlayingState {
 	item:        MediaItem | null;
 	isPlaying:   boolean;

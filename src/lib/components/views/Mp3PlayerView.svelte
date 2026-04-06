@@ -24,8 +24,8 @@
 	import { mp3TrackPositions } from '$lib/stores/settings.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
-	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
-	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	
+	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, Heart, FolderOpen, Music2,

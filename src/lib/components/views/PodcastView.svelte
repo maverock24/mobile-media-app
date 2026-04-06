@@ -5,8 +5,8 @@
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import PlayerControls from '$lib/components/PlayerControls.svelte';
 	import { podcastSettings, podcastData } from '$lib/stores/settings.svelte';
-	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
-	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	
+	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import {
 		Plus, Trash2, Play, Pause,
