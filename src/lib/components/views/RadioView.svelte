@@ -24,6 +24,31 @@
 		});
 	});
 
+	// ── Lock screen / Android Auto play/pause handlers ───────────
+	// Radio is a live stream — no seek or skip, just play/pause/stop.
+	$effect(() => {
+		if (typeof mediaEngine.setPlaybackHandlers !== 'function') return;
+		mediaEngine.setPlaybackHandlers(
+			() => { togglePlay(); },  // play
+			() => { togglePlay(); },  // pause / stop
+			null                      // no seek for live streams
+		);
+		return () => {
+			if (typeof mediaEngine.setPlaybackHandlers === 'function')
+				mediaEngine.setPlaybackHandlers(null, null, null);
+		};
+	});
+
+	$effect(() => {
+		if (typeof mediaEngine.setSkipHandlers !== 'function') return;
+		// No next/prev for radio live streams
+		mediaEngine.setSkipHandlers(null, null);
+		return () => {
+			if (typeof mediaEngine.setSkipHandlers === 'function')
+				mediaEngine.setSkipHandlers(null, null);
+		};
+	});
+
 	// ── Audio element event wiring ───────────────────────────────
 	$effect(() => {
 		if (!audioEl) return;

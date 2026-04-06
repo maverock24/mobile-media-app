@@ -79,7 +79,31 @@
 		});
 	});
 
-	// MediaSession play/pause/seek handlers are managed by mediaEngine directly.
+	// ── Lock screen / Android Auto play/pause/seek/skip handlers ──
+	$effect(() => {
+		if (typeof mediaEngine.setPlaybackHandlers !== 'function') return;
+		mediaEngine.setPlaybackHandlers(
+			() => { togglePlay(); },   // play
+			() => { togglePlay(); },   // pause
+			(pos) => { handleSeekSeconds(pos); } // seek
+		);
+		return () => {
+			if (typeof mediaEngine.setPlaybackHandlers === 'function')
+				mediaEngine.setPlaybackHandlers(null, null, null);
+		};
+	});
+
+	$effect(() => {
+		if (typeof mediaEngine.setSkipHandlers !== 'function') return;
+		mediaEngine.setSkipHandlers(
+			() => { nextEpisode(); },
+			() => { prevEpisode(); }
+		);
+		return () => {
+			if (typeof mediaEngine.setSkipHandlers === 'function')
+				mediaEngine.setSkipHandlers(null, null);
+		};
+	});
 
 	// ── Audio element event wiring ───────────────────────────────
 	$effect(() => {
