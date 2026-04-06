@@ -19,6 +19,7 @@ import androidx.media.MediaBrowserServiceCompat;
 import androidx.media.app.NotificationCompat.MediaStyle;
 import androidx.media.session.MediaButtonReceiver;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class MediaPlaybackService extends MediaBrowserServiceCompat {
@@ -85,7 +86,8 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 
 	@Override
 	public void onLoadChildren(@NonNull String parentId, @NonNull Result<List<MediaBrowserCompat.MediaItem>> result) {
-		result.sendResult(null);
+		// Return empty list (Android Auto requires non-null result to confirm connection)
+		result.sendResult(new ArrayList<>());
 	}
 
 	private void createNotificationChannel() {
