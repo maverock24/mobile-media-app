@@ -103,7 +103,15 @@
 	}
 
 	// ── Search (radio-browser.info public API) ───────────────────
-	const RADIO_API = 'https://de1.api.radio-browser.info/json';
+	// The API has multiple servers; pick one randomly to distribute load.
+	const RADIO_SERVERS = [
+		'https://de1.api.radio-browser.info',
+		'https://at1.api.radio-browser.info',
+		'https://nl1.api.radio-browser.info',
+	];
+	function radioApiBase() {
+		return RADIO_SERVERS[Math.floor(Math.random() * RADIO_SERVERS.length)] + '/json';
+	}
 
 	async function search() {
 		const q = searchQuery.trim();
@@ -119,7 +127,7 @@
 				reverse:  'true',
 				hidebroken: 'true',
 			});
-			const res = await fetch(`${RADIO_API}/stations/search?${params}`, {
+			const res = await fetch(`${radioApiBase()}/stations/search?${params}`, {
 				headers: { 'User-Agent': 'MediaHubApp/1.0' }
 			});
 			if (!res.ok) throw new Error(`Search failed: ${res.status}`);
