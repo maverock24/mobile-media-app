@@ -349,31 +349,18 @@
 	// ── register MediaSession skip handlers for Android Auto / lock-screen controls ──
 	$effect(() => {
 		// Guard: methods may not be accessible if the $state proxy wraps them
-		if (typeof mediaEngine.setSkipHandlers !== 'function') return;
-		mediaEngine.setSkipHandlers(
+		if (typeof mediaEngine.setCallbacks !== 'function') return;
+		mediaEngine.setCallbacks(
 			() => { void advanceTrack(isPlaying || isBuffering); },
 			() => { void prevTrack(); }
 		);
 		return () => {
-			if (typeof mediaEngine.setSkipHandlers === 'function')
-				mediaEngine.setSkipHandlers(null, null);
+			if (typeof mediaEngine.setCallbacks === 'function')
+				mediaEngine.setCallbacks(null, null);
 		};
 	});
 
-	// ── register MediaSession play/pause/seek handlers for lock-screen notification ──
-	$effect(() => {
-		// Guard: methods may not be accessible if the $state proxy wraps them
-		if (typeof mediaEngine.setPlaybackHandlers !== 'function') return;
-		mediaEngine.setPlaybackHandlers(
-			() => { void togglePlay(); },
-			() => { void togglePlay(); },
-			(pos) => { if (audioEl) { audioEl.currentTime = pos; currentTime = pos; } }
-		);
-		return () => {
-			if (typeof mediaEngine.setPlaybackHandlers === 'function')
-				mediaEngine.setPlaybackHandlers(null, null, null);
-		};
-	});
+	// MediaSession play/pause/seek handlers are managed by mediaEngine directly.
 
 	function syncTrackToMediaEngine(index: number) {
 		const track = tracks[index];

@@ -5,9 +5,9 @@
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import PlayerControls from '$lib/components/PlayerControls.svelte';
 	import { podcastSettings, podcastData } from '$lib/stores/settings.svelte';
-	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
-	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
+	import { addToast } from '$lib/stores/toastStore.svelte';
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
@@ -79,20 +79,7 @@
 		});
 	});
 
-	// ── Register MediaSession play/pause/seek handlers for lock-screen ──
-	$effect(() => {
-		// Guard: methods may not be accessible if the $state proxy wraps them
-		if (typeof mediaEngine.setPlaybackHandlers !== 'function') return;
-		mediaEngine.setPlaybackHandlers(
-			() => togglePlay(),
-			() => togglePlay(),
-			(pos) => { if (audioEl) { audioEl.currentTime = pos; currentTime = pos; } }
-		);
-		return () => {
-			if (typeof mediaEngine.setPlaybackHandlers === 'function')
-				mediaEngine.setPlaybackHandlers(null, null, null);
-		};
-	});
+	// MediaSession play/pause/seek handlers are managed by mediaEngine directly.
 
 	// ── Audio element event wiring ───────────────────────────────
 	$effect(() => {

@@ -70,6 +70,8 @@ export const mediaEngine = $state<NowPlayingState & {
 	updateTime(currentTime: number, duration: number): void;
 	setPlaying(playing: boolean): void;
 	clear(): void;
+	/** Metadata-only update — sets now-playing info without starting audio playback. */
+	setNowPlaying(item: MediaItem, source: MediaSource): void;
 
 	// --- Callbacks for views to override behavior ---
 	_onNext: (() => void) | null;
@@ -258,6 +260,14 @@ export const mediaEngine = $state<NowPlayingState & {
 	setCallbacks(next, prev) {
 		this._onNext = next;
 		this._onPrev = prev;
+	},
+
+	/** Metadata-only: update now-playing state without triggering audio slot playback. */
+	setNowPlaying(item: MediaItem, source: MediaSource) {
+		this.item = item;
+		this.source = source;
+		this.currentTime = 0;
+		this.duration = item.duration ?? 0;
 	}
 });
 

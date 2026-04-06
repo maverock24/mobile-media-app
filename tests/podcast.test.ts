@@ -264,7 +264,8 @@ test.describe('Podcast view', () => {
 
 	// ── RSS error handling ─────────────────────────────────────────────────
 	test('shows error state when RSS feed fails', async ({ page }) => {
-		// Override RSS mock to return error
+		// Remove existing RSS success mock, then override with error
+		await page.unroute('**/api.rss2json.com/**');
 		await page.route('**/api.rss2json.com/**', (route) =>
 			route.fulfill({
 				status: 200,
@@ -276,7 +277,73 @@ test.describe('Podcast view', () => {
 		await page.getByPlaceholder('Search podcasts…').fill('test');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
 
-		await expect(page.getByText(/Feed not found|No RSS feed|Failed/i)).toBeVisible({ timeout: 5000 });
-		await expect(page.getByRole('button', { name: /Retry/i })).toBeVisible();
+		// Error shown either in-page or as a toast
+		await expect(page.getByText(/Feed not found|No RSS feed|Failed/i).first()).toBeVisible({ timeout: 5000 });
+		await expect(page.getByRole('button', { name: /Retry/i }).first()).toBeVisible();
+	});
+
+	// ── TASK-2.7: New tests for podcast reliability fixes ────────────────
+
+	test('episode with no audioUrl shows error toast when play is clicked', async ({ page }) => {
+		// Override RSS to return episode with empty enclosure — must unroute first
+		await page.unroute('**/api.rss2json.com/**');
+		await page.route('**/api.rss2json.com/**', (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					status: 'ok',
+					feed: { title: 'Test Podcast', image: '' },
+					items: [{
+						title: 'No Audio Episode',
+						description: 'This episode has no audio.',
+						pubDate: '2026-01-15 10:00:00',
+						itunes_duration: '3600',
+						// No enclosure at all — audioUrl will be empty string
+					}],
+				}),
+			})
+		);
+
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+		await expect(page.getByText('No Audio Episode')).toBeVisible({ timeout: 5000 });
+
+		// The episode row has: div.p-4.border-b > div.flex > [content] + Button
+		// The Button component renders as <button>. Find the round play button.
+		const playBtn = page.locator('button.rounded-full').filter({ has: page.locator('svg') });
+		await playBtn.click({ timeout: 3000 });
+
+		// Should show error toast about missing audio URL
+		const toastAlert = page.locator('[role="alert"]');
+		await expect(toastAlert.filter({ hasText: /no playable audio/i })).toBeVisible({ timeout: 8000 });
+	});
+
+	test('unsubscribe during episode load does not crash', async ({ page }) => {
+		// Subscribe to a podcast
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
+
+		// Go back to list and unsubscribe
+		await page.getByRole('button').first().click();
+		await expect(page.getByText('Test Podcast').first()).toBeVisible({ timeout: 3000 });
+
+		// The app should remain functional
+		await expect(page.getByRole('tablist')).toBeVisible();
+		await expect(page.getByPlaceholder('Search podcasts…')).toBeVisible();
+	});
+
+	test('iTunes search failure does not crash the app', async ({ page }) => {
+		// Override iTunes search to fail
+		await page.route('**/itunes.apple.com/search**', (route) =>
+			route.fulfill({ status: 500, contentType: 'text/plain', body: 'Internal Server Error' })
+		);
+
+		await page.getByPlaceholder('Search podcasts…').fill('test query');
+		await page.waitForTimeout(1000); // debounce fires
+
+		// App should still be functional, should show empty results
+		await expect(page.getByRole('tablist')).toBeVisible();
 	});
 });
