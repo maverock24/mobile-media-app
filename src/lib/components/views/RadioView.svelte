@@ -36,7 +36,8 @@
 			isPlaying   = false;
 			const err = audioEl.error;
 			console.error('[Radio] audio error:', err?.code, err?.message);
-			addToast({ message: 'Stream failed. Try another station.', type: 'error', autoDismissMs: 5000 });
+			// MediaError code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED (includes mixed content / codec unsupported)
+			addToast({ message: 'Stream unavailable. Try another station.', type: 'error', autoDismissMs: 4000 });
 		};
 
 		audioEl.addEventListener('play',    onPlay);
@@ -67,7 +68,7 @@
 			isBuffering = false;
 			if (err?.name !== 'AbortError') {
 				console.error('[Radio] play() failed:', err);
-				addToast({ message: `Playback failed: ${err?.message ?? 'Unknown error'}`, type: 'error' });
+				addToast({ message: 'Stream unavailable. Try another station.', type: 'error', autoDismissMs: 4000 });
 			}
 		});
 		mediaEngine.setNowPlaying({
@@ -121,10 +122,10 @@
 		searchResults = [];
 		try {
 			const params = new URLSearchParams({
-				name:     q,
-				limit:    '40',
-				order:    'votes',
-				reverse:  'true',
+				name:       q,
+				limit:      '100',  // fetch more to compensate for HTTP-only stations being filtered out
+				order:      'votes',
+				reverse:    'true',
 				hidebroken: 'true',
 			});
 			const res = await fetch(`${radioApiBase()}/stations/search?${params}`, {
@@ -132,8 +133,15 @@
 			});
 			if (!res.ok) throw new Error(`Search failed: ${res.status}`);
 			const data = await res.json() as RadioStation[];
-			searchResults = data;
-			if (!data.length) searchError = 'No stations found. Try different keywords.';
+			// Filter to HTTPS-only streams — HTTP streams are blocked as mixed content
+			// when the app is served over HTTPS
+			const httpsOnly = data.filter(s => s.url_resolved?.startsWith('https://'));
+			searchResults = httpsOnly;
+			if (!data.length) {
+				searchError = 'No stations found. Try different keywords.';
+			} else if (!httpsOnly.length) {
+				searchError = 'No secure (HTTPS) streams found for this query. Try a different search term.';
+			}
 		} catch (e) {
 			searchError = e instanceof Error ? e.message : 'Search failed';
 		} finally {
