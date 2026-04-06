@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import Mp3PlayerView from '$lib/components/views/Mp3PlayerView.svelte';
 	import PodcastView from '$lib/components/views/PodcastView.svelte';
+	import RadioView from '$lib/components/views/RadioView.svelte';
 	import WeatherView from '$lib/components/views/WeatherView.svelte';
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
 	import LoginView from '$lib/components/views/LoginView.svelte';
@@ -9,16 +10,16 @@
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
-	import { Music, Mic2, Cloud, Settings2, User } from 'lucide-svelte';
+	import { Music, Mic2, Radio, Cloud, Settings2, User } from 'lucide-svelte';
 
-	type Tab = 'music' | 'podcasts' | 'login' | 'weather' | 'settings';
+	type Tab = 'music' | 'podcasts' | 'radio' | 'login' | 'weather' | 'settings';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
 	const DEFAULT_TAB: Tab = 'music';
 
 	let activeTab = $state<Tab>(DEFAULT_TAB);
 
 	function isTab(value: unknown): value is Tab {
-		return value === 'music' || value === 'podcasts'
+		return value === 'music' || value === 'podcasts' || value === 'radio'
 			|| value === 'login' || value === 'weather' || value === 'settings';
 	}
 
@@ -48,6 +49,7 @@
 		return [
 			{ id: 'music',    label: 'Music',    icon: Music },
 			{ id: 'podcasts', label: 'Podcasts', icon: Mic2 },
+			{ id: 'radio',    label: 'Radio',    icon: Radio },
 			{ id: 'login',    label: isDriveConnected ? 'Drive' : 'Login', icon: User },
 			{ id: 'weather',  label: 'Weather',  icon: Cloud },
 			{ id: 'settings', label: 'Settings', icon: Settings2 }
@@ -69,6 +71,9 @@
 		</div>
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'podcasts'}>
 			<PodcastView />
+		</div>
+		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'radio'}>
+			<RadioView />
 		</div>
 		{#if activeTab === 'login'}
 			<div class="absolute inset-0 overflow-y-auto">

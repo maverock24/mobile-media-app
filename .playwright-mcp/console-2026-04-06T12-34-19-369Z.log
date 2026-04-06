@@ -1,0 +1,28 @@
+[ 1928812ms] [ERROR] Cross-Origin-Opener-Policy policy would block the window.closed call. @ https://accounts.google.com/gsi/client:131
+[ 1928813ms] [ERROR] Cross-Origin-Opener-Policy policy would block the window.closed call. @ https://accounts.google.com/gsi/client:131
+[ 1930503ms] [ERROR] Access to fetch at 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/:0
+[ 1930504ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart:0
+[ 2614849ms] [ERROR] Cross-Origin-Opener-Policy policy would block the window.closed call. @ https://accounts.google.com/gsi/client:131
+[ 2614849ms] [ERROR] Cross-Origin-Opener-Policy policy would block the window.closed call. @ https://accounts.google.com/gsi/client:131
+[ 2616481ms] [ERROR] Access to fetch at 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/:0
+[ 2616481ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart:0
+[ 2862460ms] [ERROR] Cross-Origin-Opener-Policy policy would block the window.closed call. @ https://accounts.google.com/gsi/client:131
+[ 2862461ms] [ERROR] Cross-Origin-Opener-Policy policy would block the window.closed call. @ https://accounts.google.com/gsi/client:131
+[ 2864242ms] [ERROR] Access to fetch at 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/:0
+[ 2864242ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart:0
+[ 3066762ms] [ERROR] [vite] SyntaxError: The requested module '/src/lib/stores/settings.svelte.ts' does not provide an export named 'radioData' @ http://localhost:5173/@vite/client:808
+[ 3066826ms] [ERROR] [vite] Failed to reload /src/routes/+page.svelte. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:5173/@vite/client:808
+[ 3066840ms] TypeError: Cannot read properties of undefined (reading 'default')
+    at http://localhost:5173/src/routes/+page.svelte?t=1775480703205:251:30
+    at http://localhost:5173/@vite/client:72:58
+    at http://localhost:5173/@vite/client:218:52
+    at http://localhost:5173/@vite/client:196:55
+    at Array.forEach (<anonymous>)
+    at HMRClient.queueUpdate (http://localhost:5173/@vite/client:196:33)
+    at async Promise.all (index 0)
+    at async handleMessage (http://localhost:5173/@vite/client:838:4)
+[ 3096564ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/:0
+[ 3123158ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/:0
+[ 3124460ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/:0
+[ 3127937ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/:0
+[ 3127992ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/favicon.ico:0

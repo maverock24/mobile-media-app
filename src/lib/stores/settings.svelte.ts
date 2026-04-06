@@ -125,3 +125,22 @@ export const weatherSettings = persisted('weather-settings-v2', {
 	refreshIntervalMin: 30,
 	notificationsEnabled: false
 });
+
+// ─────────────────────────────────────────────────────────────
+// Radio stations (favorites)
+// ─────────────────────────────────────────────────────────────
+export interface RadioStation {
+stationuuid:  string;
+name:         string;
+url_resolved: string;
+favicon:      string;
+country:      string;
+tags:         string;
+codec:        string;
+bitrate:      number;
+votes:        number;
+}
+
+export const radioData = persisted('radio-data', {
+favorites: [] as RadioStation[],
+});
