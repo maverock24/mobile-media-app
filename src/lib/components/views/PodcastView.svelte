@@ -5,8 +5,8 @@
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import PlayerControls from '$lib/components/PlayerControls.svelte';
 	import { podcastSettings, podcastData } from '$lib/stores/settings.svelte';
-	
-	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
+	import { claimAudio, registerAudioSource } from '$lib/stores/activeAudio.svelte';
+	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import {
 		Plus, Trash2, Play, Pause,
@@ -59,6 +59,10 @@
 	let episodesLoading    = $state(false);
 	let episodesRefreshing = $state(false); // background refresh while episodes already shown
 	let episodesError      = $state<string | null>(null);
+
+	// AbortController for in-flight loadEpisodes (TASK-2.1: prevents race conditions)
+	let episodeLoadController: AbortController | null = null;
+	let episodeLoadPodcastId: number | null = null;
 
 	// ── Playback state ───────────────────────────────────────────
 	let currentEpisode = $state<{ podcast: Podcast; episode: Episode } | null>(null);
@@ -166,7 +170,7 @@
 	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
 	const rssCache = new Map<string, { data: unknown; ts: number }>();
-	async function fetchRss(feedUrl: string): Promise<unknown> {
+	async function fetchRss(feedUrl: string, signal?: AbortSignal): Promise<unknown> {
 		// Validate that the feed URL is a legitimate HTTP(S) address
 		try {
 			const parsed = new URL(feedUrl);
@@ -178,7 +182,7 @@
 		}
 		const cached = rssCache.get(feedUrl);
 		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data;
-		const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`);
+		const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`, { signal });
 		if (!res.ok) throw new Error(`RSS fetch failed: HTTP ${res.status}`);
 		const data = await res.json();
 		if (data.status === 'ok') rssCache.set(feedUrl, { data, ts: Date.now() });
@@ -279,6 +283,12 @@
 	}
 
 	function unsubscribe(podcast: Podcast) {
+		// TASK-2.5: Abort any in-flight episode load for this podcast
+		if (episodeLoadPodcastId === podcast.id) {
+			episodeLoadController?.abort();
+			episodeLoadController = null;
+			episodeLoadPodcastId = null;
+		}
 		podcastData.podcasts = podcastData.podcasts.map(p => p.id === podcast.id ? { ...p, subscribed: false } : p);
 		// Re-sync selectedPodcast so the subscribe toggle reflects the new state immediately
 		if (selectedPodcast?.id === podcast.id) {
@@ -294,6 +304,12 @@
 	// ── Load episodes from RSS2JSON ──────────────────────────────
 	async function loadEpisodes(podcast: Podcast, force = false) {
 		if (!force && podcast.episodesLoaded) return;
+		// Abort any previous in-flight load (TASK-2.1: race condition fix)
+		episodeLoadController?.abort();
+		const controller = new AbortController();
+		episodeLoadController = controller;
+		episodeLoadPodcastId = podcast.id;
+		const signal = controller.signal;
 		// Bust the RSS cache on manual force-refresh so we always get fresh data
 		if (force && podcast.feedUrl) rssCache.delete(podcast.feedUrl);
 		// Background refresh: show subtle spinner without blocking the episode list
@@ -307,7 +323,8 @@
 			if (!podcast.feedUrl) {
 				// Resolve feedUrl via iTunes lookup (no &entity param — gets the podcast object)
 				const lu = await fetch(
-					`https://itunes.apple.com/lookup?id=${podcast.itunesId}`
+					`https://itunes.apple.com/lookup?id=${podcast.itunesId}`,
+					{ signal }
 				);
 				if (!lu.ok) throw new Error(`iTunes lookup failed: HTTP ${lu.status}`);
 				const luData = await lu.json();
@@ -322,7 +339,7 @@
 					selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
 				}
 			}
-			const data = await fetchRss(podcast.feedUrl) as Record<string, unknown>;
+			const data = await fetchRss(podcast.feedUrl, signal) as Record<string, unknown>;
 			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
 			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
 				const enc = item.enclosure as { link?: string; length?: number } | null;
@@ -363,13 +380,25 @@
 				selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
 			}
 		} catch (e: unknown) {
+			// Ignore aborted requests (TASK-2.1: user navigated away or new load started)
+			if (signal.aborted) return;
+			const msg = e instanceof Error ? e.message : 'Failed to load episodes.';
 			// Suppress errors on background refresh — episodes already shown
 			if (!force || !podcast.episodesLoaded) {
-				episodesError = e instanceof Error ? e.message : 'Failed to load episodes.';
+				episodesError = msg;
 			}
+			// TASK-2.4: Show toast with retry action
+			addToast({
+				message: msg,
+				type: 'error',
+				action: { label: 'Retry', handler: () => loadEpisodes(podcast, true) },
+				autoDismissMs: 8000
+			});
 		} finally {
-			episodesLoading = false;
-			episodesRefreshing = false;
+			if (!signal.aborted) {
+				episodesLoading = false;
+				episodesRefreshing = false;
+			}
 		}
 	}
 
@@ -386,20 +415,18 @@
 
 	// ── Playback ─────────────────────────────────────────────────
 	function playEpisode(podcast: Podcast, episode: Episode) {
-		if (!episode.audioUrl) return;
+		if (!episode.audioUrl) {
+			addToast({ message: 'This episode has no playable audio URL.', type: 'error' });
+			return;
+		}
 		claimAudio('podcast');
 		currentEpisode = { podcast, episode };
 		duration = episode.duration;
 		currentTime = 0;
 		audioEl.src = episode.audioUrl;
 		audioEl.playbackRate = podcastSettings.playbackSpeed;
-		// Do NOT call audioEl.load() — calling load() then play() immediately causes
-		// an AbortError ("play() request was interrupted by a new load request") in
-		// Chromium/Android WebView when the src is a remote URL.  Setting src and
-		// calling play() directly is sufficient; the browser handles loading internally.
-		const resumeAt = (episode.positionSec ?? 0) > 10
-			? episode.positionSec
-			: Math.round((episode.progress / 100) * (episode.duration || 0));
+		// TASK-2.3: Use positionSec directly when > 0, don't compute from percentage
+		const resumeAt = (episode.positionSec ?? 0) > 10 ? episode.positionSec : 0;
 		if (resumeAt > 10) {
 			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = resumeAt; currentTime = resumeAt; }, { once: true });
 		}
@@ -407,6 +434,9 @@
 		audioEl.play().catch((err) => {
 			isBuffering = false;
 			console.error('[Podcast] play() failed:', err, 'url:', episode.audioUrl);
+			if (err?.name !== 'AbortError') {
+				addToast({ message: `Playback failed: ${err?.message ?? 'Unknown error'}`, type: 'error' });
+			}
 		});
 		mediaEngine.setNowPlaying({
 			id:         episode.id,
