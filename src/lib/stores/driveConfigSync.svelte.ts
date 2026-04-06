@@ -76,7 +76,9 @@ class DriveConfigSync {
 					error_callback: (e: { type?: string }) => reject(new Error(e.type || 'auth interrupted')),
 				});
 				if (!client) { reject(new Error('Google Identity unavailable')); return; }
-				client.requestAccessToken({ prompt: interactive ? 'consent' : '' });
+				// interactive=true: show UI only when needed (not 'consent' which forces screen every time)
+				// interactive=false: 'none' ensures truly silent — no popup, fails if unable
+				client.requestAccessToken({ prompt: interactive ? '' : 'none' });
 			});
 
 			this._storeToken(token, expiresIn);
@@ -108,7 +110,8 @@ class DriveConfigSync {
 					error_callback: (e: { type?: string }) => reject(new Error(e.type || 'silent refresh interrupted')),
 				});
 				if (!client) { reject(new Error('Google Identity unavailable')); return; }
-				client.requestAccessToken({ prompt: '' });
+				// 'none' = truly silent: returns error instead of showing a popup
+				client.requestAccessToken({ prompt: 'none' });
 			});
 
 			this._storeToken(token, expiresIn);

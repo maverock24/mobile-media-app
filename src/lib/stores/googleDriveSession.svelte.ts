@@ -148,7 +148,8 @@ export const googleDriveSession = $state.raw({
 		try {
 			const response = await requestGoogleDriveAccessToken({
 				clientId: this.clientId,
-				prompt: this.accessToken ? '' : 'consent'
+				// Use '' (default): only shows UI when needed, not 'consent' which forces screen every time
+				prompt: ''
 			});
 
 			this.accessToken = response.access_token;
