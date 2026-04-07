@@ -55,11 +55,34 @@
 			{ id: 'settings', label: 'Settings', icon: Settings2 }
 		];
 	});
+
+	// ── Swipe left/right to navigate between tabs ────────────────
+	let swipeStartX = 0;
+	let swipeStartY = 0;
+
+	function onTouchStart(e: TouchEvent) {
+		swipeStartX = e.touches[0].clientX;
+		swipeStartY = e.touches[0].clientY;
+	}
+
+	function onTouchEnd(e: TouchEvent) {
+		const dx = e.changedTouches[0].clientX - swipeStartX;
+		const dy = e.changedTouches[0].clientY - swipeStartY;
+		// Require predominantly horizontal swipe (|dx| > |dy|) and min 60px travel
+		if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+		const ids = tabs.map(t => t.id);
+		const idx = ids.indexOf(activeTab);
+		if (dx > 0 && idx > 0)              activeTab = ids[idx - 1]; // swipe right → previous
+		if (dx < 0 && idx < ids.length - 1) activeTab = ids[idx + 1]; // swipe left  → next
+	}
 </script>
 
 <div class="flex flex-col h-dvh max-w-md mx-auto overflow-hidden relative" style="z-index:1;">
 	<!-- Content -->
-	<main class="flex-1 overflow-hidden relative">
+	<main class="flex-1 overflow-hidden relative"
+		ontouchstart={onTouchStart}
+		ontouchend={onTouchEnd}
+	>
 		<!--
 			Music and Podcast are ALWAYS mounted (CSS hidden, not {#if}).
 			This keeps the <audio> element and all component state alive across
