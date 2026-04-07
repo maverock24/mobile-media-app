@@ -277,6 +277,23 @@
 	let isLoading        = $state(false);
 	let loadingFolderPath = $state<string | null>(null); // per-folder spinner key
 	let showQueue   = $state(false);   // true → browse / folder view
+
+	// ── Swipe right in full player → go back to browse list ──────
+	let _playerSwipeStartX = 0;
+	let _playerSwipeStartY = 0;
+	function onPlayerTouchStart(e: TouchEvent) {
+		_playerSwipeStartX = e.touches[0].clientX;
+		_playerSwipeStartY = e.touches[0].clientY;
+	}
+	function onPlayerTouchEnd(e: TouchEvent) {
+		const dx = e.changedTouches[0].clientX - _playerSwipeStartX;
+		const dy = e.changedTouches[0].clientY - _playerSwipeStartY;
+		// Only respond to predominantly right swipe (not vertical scroll)
+		if (dx > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+			showQueue = true;
+		}
+	}
+
 	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
 	let isRestoring = $state(true);  // true until IDB check finishes (prevents empty-state flash)
 	let preloadedTrackIndex = $state<number | null>(null);
@@ -2318,7 +2335,12 @@
 	{:else if currentTrack}
 
 	<!-- Scrollable player content -->
-	<div class="flex flex-col items-center px-6 pt-5 pb-4 gap-4 flex-1 overflow-y-auto">
+	<div class="flex flex-col items-center px-6 pt-5 pb-4 gap-4 flex-1 overflow-y-auto"
+		role="region"
+		aria-label="Music player"
+		ontouchstart={onPlayerTouchStart}
+		ontouchend={onPlayerTouchEnd}
+	>
 
 		<!-- Folder badge -->
 		<div class="w-full flex items-center justify-between">
