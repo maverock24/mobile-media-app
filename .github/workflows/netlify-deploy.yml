@@ -166,6 +166,7 @@ jobs:
           if-no-files-found: error
 
       - name: Commit updated APK assets
+        id: commit_assets
         env:
           PACKAGE_VERSION: ${{ steps.android_meta.outputs.package_version }}
         run: |
@@ -175,9 +176,25 @@ jobs:
           git add -A static/releases/android
 
           if git diff --cached --quiet; then
+            echo "committed=false" >> "$GITHUB_OUTPUT"
             echo "No APK asset changes to commit."
             exit 0
           fi
 
           git commit -m "chore: update Android APK assets for ${PACKAGE_VERSION}"
           git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger Netlify production build
+        if: steps.commit_assets.outputs.committed == 'true'
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          BUILD_RESPONSE=$(curl -sf -X POST \
+            "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/builds?branch=${GITHUB_REF_NAME}&clear_cache=true" \
+            -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" \
+            -H "Content-Length: 0")
+
+          echo "Triggered Netlify build:"
+          echo "$BUILD_RESPONSE" | jq .
