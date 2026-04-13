@@ -165,7 +165,41 @@ jobs:
           path: ${{ steps.android_build.outputs.artifact_path }}
           if-no-files-found: error
 
-      - name: Commit updated APK assets
+      - name: Deploy updated site to Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          NETLIFY_SITE_URL: ${{ steps.netlify_meta.outputs.site_url }}
+          PACKAGE_VERSION: ${{ steps.android_meta.outputs.package_version }}
+          PUBLIC_GOOGLE_CLIENT_ID: ${{ secrets.PUBLIC_GOOGLE_CLIENT_ID }}
+          PUBLIC_BUILD_VERSION_CODE: ${{ github.run_number }}
+          PUBLIC_RELEASE_BASE_URL: ${{ steps.netlify_meta.outputs.site_url }}
+        run: |
+          if [[ -z "$NETLIFY_SITE_URL" ]]; then
+            echo "Netlify site URL is unavailable for deployment verification." >&2
+            exit 1
+          fi
+
+          DEPLOY_JSON=$(pnpm exec netlify deploy \
+            --auth "$NETLIFY_AUTH_TOKEN" \
+            --site "$NETLIFY_SITE_ID" \
+            --prod \
+            --context production \
+            --message "Publish Android APK assets for ${PACKAGE_VERSION} (build ${ANDROID_VERSION_CODE})" \
+            --timeout 15m \
+            --json)
+          echo "$DEPLOY_JSON" | jq .
+
+          LIVE_MANIFEST=$(curl -sf "${NETLIFY_SITE_URL}/releases/android/latest.json")
+          LIVE_VERSION_CODE=$(echo "$LIVE_MANIFEST" | jq -r '.versionCode // empty')
+
+          if [[ "$LIVE_VERSION_CODE" != "$ANDROID_VERSION_CODE" ]]; then
+            echo "Live Netlify manifest versionCode ${LIVE_VERSION_CODE:-unknown} did not match expected ${ANDROID_VERSION_CODE}." >&2
+            echo "$LIVE_MANIFEST" | jq .
+            exit 1
+          fi
+
+      - name: Commit updated APK manifest
         id: commit_assets
         env:
           PACKAGE_VERSION: ${{ steps.android_meta.outputs.package_version }}
@@ -173,146 +207,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add -A static/releases/android
+          git add static/releases/android/latest.json
 
           if git diff --cached --quiet; then
             echo "committed=false" >> "$GITHUB_OUTPUT"
-            echo "No APK asset changes to commit."
+            echo "No APK manifest changes to commit."
             exit 0
           fi
 
           git commit -m "chore: update Android APK assets for ${PACKAGE_VERSION}"
           git push origin "HEAD:${GITHUB_REF_NAME}"
           echo "committed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Trigger Netlify production build
-        if: steps.commit_assets.outputs.committed == 'true'
-        id: trigger_netlify_build
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        run: |
-          HOOK_TITLE="publish-assets-${GITHUB_REF_NAME}"
-          BUILD_HOOK_URL=$(curl -sf "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/build_hooks" \
-            -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" | jq -r --arg title "$HOOK_TITLE" --arg branch "$GITHUB_REF_NAME" '
-              map(select(.title == $title and .branch == $branch))
-              | .[0].url // empty
-            ')
-
-          if [[ -z "$BUILD_HOOK_URL" ]]; then
-            BUILD_HOOK_URL=$(curl -sf -X POST "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/build_hooks" \
-              -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d "$(jq -nc --arg title "$HOOK_TITLE" --arg branch "$GITHUB_REF_NAME" '{title: $title, branch: $branch}')" | jq -r '.url')
-          fi
-
-          if [[ -z "$BUILD_HOOK_URL" || "$BUILD_HOOK_URL" == "null" ]]; then
-            echo "Failed to resolve a Netlify build hook URL for ${GITHUB_REF_NAME}." >&2
-            exit 1
-          fi
-
-          echo "::add-mask::$BUILD_HOOK_URL"
-          TRIGGERED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          curl -sf -X POST "$BUILD_HOOK_URL" > /dev/null
-          echo "triggered_at=${TRIGGERED_AT}" >> "$GITHUB_OUTPUT"
-          echo "Triggered Netlify build hook ${HOOK_TITLE}."
-
-      - name: Verify Netlify production deploy
-        if: steps.commit_assets.outputs.committed == 'true'
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-          NETLIFY_SITE_URL: ${{ steps.netlify_meta.outputs.site_url }}
-          TRIGGERED_AT: ${{ steps.trigger_netlify_build.outputs.triggered_at }}
-        run: |
-          READY_DEPLOY_ID=""
-
-          for attempt in {1..24}; do
-            SITE_JSON=$(curl -sf "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}" \
-              -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}")
-            PUBLISHED_DEPLOY_ID=$(echo "$SITE_JSON" | jq -r '.published_deploy.id // empty')
-            PUBLISHED_DEPLOY_LOCKED=$(echo "$SITE_JSON" | jq -r '.published_deploy.locked // false')
-
-            LATEST_DEPLOY=$(curl -sf "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys?production=true&branch=${GITHUB_REF_NAME}&per_page=20" \
-              -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" | jq -c --arg triggered_at "$TRIGGERED_AT" '
-                map(select(.created_at >= $triggered_at))
-                | sort_by(.created_at)
-                | last // empty
-              ')
-
-            if [[ -z "$LATEST_DEPLOY" ]]; then
-              echo "Waiting for Netlify to create a production deploy (${attempt}/24)."
-              sleep 30
-              continue
-            fi
-
-            DEPLOY_ID=$(echo "$LATEST_DEPLOY" | jq -r '.id')
-            DEPLOY_STATE=$(echo "$LATEST_DEPLOY" | jq -r '.state')
-            DEPLOY_ERROR=$(echo "$LATEST_DEPLOY" | jq -r '.error_message // empty')
-
-            echo "Netlify deploy ${DEPLOY_ID} is ${DEPLOY_STATE}."
-
-            if [[ -n "$DEPLOY_ERROR" ]]; then
-              echo "Netlify deploy error: ${DEPLOY_ERROR}" >&2
-            fi
-
-            if [[ "$DEPLOY_STATE" == "error" ]]; then
-              exit 1
-            fi
-
-            if [[ "$DEPLOY_STATE" == "current" ]]; then
-              READY_DEPLOY_ID="$DEPLOY_ID"
-              break
-            fi
-
-            if [[ "$DEPLOY_STATE" == "ready" ]]; then
-              if [[ "$PUBLISHED_DEPLOY_ID" != "$DEPLOY_ID" ]]; then
-                if [[ "$PUBLISHED_DEPLOY_LOCKED" == "true" && -n "$PUBLISHED_DEPLOY_ID" ]]; then
-                  curl -sf -X POST "https://api.netlify.com/api/v1/deploys/${PUBLISHED_DEPLOY_ID}/unlock" \
-                    -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" > /dev/null
-                  echo "Unlocked Netlify deploy ${PUBLISHED_DEPLOY_ID}."
-                fi
-
-                curl -sf -X POST "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys/${DEPLOY_ID}/restore" \
-                  -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" > /dev/null
-                echo "Promoted Netlify deploy ${DEPLOY_ID} to production."
-                sleep 30
-                continue
-              fi
-
-              READY_DEPLOY_ID="$DEPLOY_ID"
-              break
-            fi
-
-            sleep 30
-          done
-
-          if [[ -z "$READY_DEPLOY_ID" ]]; then
-            echo "Netlify did not publish a production deploy for ${GITHUB_REF_NAME}." >&2
-            exit 1
-          fi
-
-          if [[ -z "$NETLIFY_SITE_URL" ]]; then
-            echo "Netlify site URL is unavailable for live manifest verification." >&2
-            exit 1
-          fi
-
-          LIVE_VERSION_CODE=""
-          LIVE_MANIFEST=""
-
-          for attempt in {1..10}; do
-            LIVE_MANIFEST=$(curl -sf "${NETLIFY_SITE_URL}/releases/android/latest.json")
-            LIVE_VERSION_CODE=$(echo "$LIVE_MANIFEST" | jq -r '.versionCode // empty')
-
-            if [[ "$LIVE_VERSION_CODE" == "$ANDROID_VERSION_CODE" ]]; then
-              echo "Live Netlify manifest versionCode ${LIVE_VERSION_CODE} is published."
-              exit 0
-            fi
-
-            echo "Waiting for live manifest propagation (${attempt}/10)."
-            sleep 15
-          done
-
-          echo "Live Netlify manifest versionCode ${LIVE_VERSION_CODE:-unknown} did not match expected ${ANDROID_VERSION_CODE}." >&2
-          echo "$LIVE_MANIFEST" | jq .
-          exit 1
