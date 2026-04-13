@@ -237,6 +237,44 @@ test.describe('Podcast view', () => {
 		// No assertion needed — just verify no exception
 	});
 
+	test('restored last episode rebinds its audio source on resume after reload', async ({ page }) => {
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+		await expect(page.getByText('Episode 2: Deep Dive')).toBeVisible({ timeout: 5000 });
+		await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+
+		await page.evaluate(() => {
+			const raw = localStorage.getItem('podcast-data');
+			if (!raw) throw new Error('podcast-data missing');
+			const data = JSON.parse(raw);
+			const podcast = data.podcasts[0];
+			const episode = podcast.episodes[1];
+			data.lastPodcastId = podcast.id;
+			data.lastEpisodeId = episode.id;
+			data.lastPositionSec = 123;
+			episode.positionSec = 123;
+			localStorage.setItem('podcast-data', JSON.stringify(data));
+		});
+
+		const restoredPage = await page.context().newPage();
+		await setupMocks(restoredPage);
+		await restoredPage.goto('/');
+		await goToTab(restoredPage, 'Podcasts');
+		await expect(restoredPage.getByText('Episode 2: Deep Dive').first()).toBeVisible({ timeout: 5000 });
+
+		await restoredPage.getByLabel(/Play|Pause/i).click({ force: true });
+
+		await expect
+			.poll(async () => {
+				return restoredPage.locator('audio').evaluateAll((audioElements) => {
+					return audioElements.map((audioElement) => (audioElement as HTMLAudioElement).src);
+				});
+			}, { timeout: 5000 })
+			.toContain('https://example.com/ep2.mp3');
+
+		await restoredPage.close();
+	});
+
 	// ── Episode view navigation ────────────────────────────────────────────
 	test('back button returns from episode view to podcast list', async ({ page }) => {
 		await page.getByPlaceholder('Search podcasts…').fill('test');

@@ -301,6 +301,7 @@
 	// Prevents background folder scans from overwriting the track list after the user has
 	// explicitly selected a song via playBrowseFile / playCurrentFolder / playFolderPath.
 	let trackListLockedByUser = false;
+	let libraryScanPromise: Promise<StoredAudioFile[]> | null = null;
 
 	// ── folder browse state ──
 	// rootDirHandle and allFiles MUST be $state so hasFolderLoaded $derived updates
@@ -651,6 +652,108 @@
 		return file.relativePath && file.relativePath.length > 0 ? file.relativePath : file.name;
 	}
 
+	function collectStoredFilesFromSnapshot(files: StoredAudioFile[], path: string[]): StoredAudioFile[] {
+		const prefix = path.length > 0 ? path.join('/') + '/' : '';
+		return sortFiles(files.filter((file) => {
+			const relativePath = getRelativePath(file);
+			return prefix ? relativePath.startsWith(prefix) : true;
+		}));
+	}
+
+	function buildBrowseEntriesFromSnapshot(files: StoredAudioFile[], path: string[]): BrowseEntry[] {
+		const prefix = path.length > 0 ? path.join('/') + '/' : '';
+		const folderCounts = new Map<string, number>();
+		const directFiles: BrowseEntry[] = [];
+
+		for (const file of files) {
+			const normalized = getRelativePath(file);
+			if (!normalized.startsWith(prefix)) continue;
+			const remaining = normalized.slice(prefix.length);
+			if (!remaining) continue;
+			const slash = remaining.indexOf('/');
+			if (slash === -1) {
+				directFiles.push({ kind: 'file', name: remaining, file });
+				continue;
+			}
+
+			const folderName = remaining.slice(0, slash);
+			folderCounts.set(folderName, (folderCounts.get(folderName) ?? 0) + 1);
+		}
+
+		const folders: BrowseEntry[] = Array.from(folderCounts.entries(), ([name, count]) => ({
+			kind: 'folder',
+			name,
+			count,
+		}));
+
+		folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+		directFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+		return [...folders, ...directFiles];
+	}
+
+	function startLibraryScan(folderName: string) {
+		trackListLockedByUser = false;
+		let scanPromise: Promise<StoredAudioFile[]>;
+		scanPromise = (async (): Promise<StoredAudioFile[]> => {
+			if (rootDirHandle) {
+				return collectStoredFilesFromDirHandle(rootDirHandle);
+			}
+
+			if (nativeTreeUri) {
+				const collectedFiles: StoredAudioFile[] = [];
+				let scanCompleted = false;
+				let scanId = '';
+
+				try {
+					const startedScan = await DirectoryReader.startAudioScan({ treeUri: nativeTreeUri });
+					scanId = startedScan.scanId;
+
+					while (!scanCompleted) {
+						const batch = await DirectoryReader.getAudioScanBatch({ scanId, batchSize: 250 });
+						const mappedBatch = batch.files.map((file) => createStoredNativeAudioFile(file));
+						if (mappedBatch.length > 0) {
+							collectedFiles.push(...mappedBatch);
+							if (libraryScanPromise === scanPromise) {
+								allFiles = [...allFiles, ...mappedBatch];
+								browseVersion += 1;
+							}
+						}
+						scanCompleted = batch.done;
+					}
+				} finally {
+					if (scanId && !scanCompleted) {
+						try {
+							await DirectoryReader.cancelAudioScan({ scanId });
+						} catch (error) {
+							console.warn('Unable to cancel native audio scan.', error);
+						}
+					}
+				}
+
+				return collectedFiles;
+			}
+
+			return allFiles;
+		})();
+
+		libraryScanPromise = scanPromise;
+		void scanPromise
+			.then(async (scannedFiles) => {
+				if (libraryScanPromise !== scanPromise) return;
+				allFiles = scannedFiles;
+				if (!trackListLockedByUser) hydrateTracksFromLibrary(scannedFiles);
+				await saveCachedLibrary(folderName, scannedFiles);
+			})
+			.catch((error) => {
+				console.error('Failed to scan selected library.', error);
+			})
+			.finally(() => {
+				if (libraryScanPromise === scanPromise) {
+					libraryScanPromise = null;
+				}
+			});
+	}
+
 	// ── Per-track resume helpers ──────────────────────────────────
 	function getTrackKey(source: StoredAudioFile): string {
 		if (source.source === 'drive')  return `d:${source.fileId}`;
@@ -808,6 +911,7 @@
 		musicSettings.librarySource = 'drive';
 		musicSettings.nativeTreeUri = '';
 		musicSettings.lastFolderName = 'Google Drive';
+		libraryScanPromise = null;
 		rootDirHandle = null;
 		nativeTreeUri = null;
 		pendingHandle = null;
@@ -994,18 +1098,13 @@
 			nativeTreeUri = fav.treeUri;
 			musicSettings.nativeTreeUri = fav.treeUri;
 			pendingHandle = null;
+			libraryScanPromise = null;
 			allFiles = [];
 			activateDeviceLibrary(fav.name);
 			browsePath = [];
 			browseVersion++;
 			showQueue = true;
-			trackListLockedByUser = false;
-			void (async () => {
-				const cachedFiles = await collectAllFromPath([]);
-				allFiles = cachedFiles;
-				if (!trackListLockedByUser) hydrateTracksFromLibrary(cachedFiles);
-				await saveCachedLibrary(fav.name, cachedFiles);
-			})();
+			startLibraryScan(fav.name);
 		}
 		} finally {
 			switchingToFavId = null;
@@ -1218,6 +1317,8 @@
 				return haystack.includes(filter);
 			});
 			browseEntries = files.map((file) => ({ kind: 'file', name: file.name, file }));
+		} else if (allFiles.length > 0) {
+			browseEntries = buildBrowseEntriesFromSnapshot(allFiles, path);
 		} else if (rootDirHandle) {
 				// Navigate to the directory at `path`
 				let dir: FileSystemDirectoryHandle = rootDirHandle;
@@ -1261,35 +1362,6 @@
 					}
 				}
 
-				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				browseEntries = [...folders, ...files];
-			} else if (allFiles.length > 0) {
-				const prefix = path.length > 0 ? path.join('/') + '/' : '';
-				const seen = new Set<string>();
-				const folders: BrowseEntry[] = [];
-				const files: BrowseEntry[] = [];
-				for (const file of allFiles) {
-					const normalized = getRelativePath(file);
-					if (!normalized.startsWith(prefix)) continue;
-					const remaining = normalized.slice(prefix.length);
-					if (!remaining) continue;
-					const slash = remaining.indexOf('/');
-					if (slash === -1) {
-						files.push({ kind: 'file', name: remaining, file });
-					} else {
-						const folderName = remaining.slice(0, slash);
-						if (!seen.has(folderName)) {
-							seen.add(folderName);
-							const subPrefix = prefix + folderName + '/';
-							const count = allFiles.filter(f => {
-								const p = getRelativePath(f);
-								return p.startsWith(subPrefix);
-							}).length;
-							folders.push({ kind: 'folder', name: folderName, count });
-						}
-					}
-				}
 				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 				browseEntries = [...folders, ...files];
@@ -1348,23 +1420,18 @@
 	// ── Collect all files under a browse path ──
 	async function collectAllFromPath(path: string[]): Promise<StoredAudioFile[]> {
 		if (musicSettings.librarySource === 'drive') {
-			const prefix = path.length > 0 ? path.join('/') + '/' : '';
-			return sortFiles(allFiles.filter(f => {
-				const p = getRelativePath(f);
-				return prefix ? p.startsWith(prefix) : true;
-			}));
+			return collectStoredFilesFromSnapshot(allFiles, path);
+		} else if (allFiles.length > 0) {
+			return collectStoredFilesFromSnapshot(allFiles, path);
+		} else if (libraryScanPromise) {
+			const scannedFiles = await libraryScanPromise;
+			return collectStoredFilesFromSnapshot(scannedFiles, path);
 		} else if (rootDirHandle) {
 			const dir = await resolveDirAtPath(path);
 			return dir ? (await collectFilesFromDirHandle(dir)).map((file) => createStoredAudioFile(file)) : [];
 		} else if (nativeTreeUri) {
 			const result = await DirectoryReader.listAudioFiles({ treeUri: nativeTreeUri, path: pathToString(path) });
 			return result.files.map((file) => createStoredNativeAudioFile(file));
-		} else if (allFiles.length > 0) {
-			const prefix = path.length > 0 ? path.join('/') + '/' : '';
-			return allFiles.filter(f => {
-				const p = getRelativePath(f);
-				return p.startsWith(prefix);
-			});
 		}
 		return [];
 	}
@@ -1530,13 +1597,7 @@
 				} catch (error) {
 					console.warn('Unable to persist tree URI permission.', error);
 				}
-				trackListLockedByUser = false;
-				void (async () => {
-					const cachedFiles = await collectAllFromPath([]);
-					allFiles = cachedFiles;
-					if (!trackListLockedByUser) hydrateTracksFromLibrary(cachedFiles);
-					await saveCachedLibrary(folderName, cachedFiles);
-				})();
+				startLibraryScan(folderName);
 			} catch (error) {
 				console.error('Failed to open native folder.', error);
 				if (nativeFileInputEl) {
@@ -1564,13 +1625,7 @@
 				browseVersion++;  // triggers browse entry reload
 				showQueue = true;
 				void saveHandleToIDB(dirHandle);
-				trackListLockedByUser = false;
-				void (async () => {
-					const cachedFiles = await collectStoredFilesFromDirHandle(dirHandle);
-					allFiles = cachedFiles;
-					if (!trackListLockedByUser) hydrateTracksFromLibrary(cachedFiles);
-					await saveCachedLibrary(dirHandle.name, cachedFiles);
-				})();
+				startLibraryScan(dirHandle.name);
 			} catch { /* user cancelled */ }
 		} else {
 			folderInputEl?.click();
@@ -1584,6 +1639,7 @@
 		rootDirHandle = null;
 		nativeTreeUri = null;
 		musicSettings.nativeTreeUri = '';
+		libraryScanPromise = null;
 		allFiles = files.map((file) => createStoredAudioFile(file));
 		activateDeviceLibrary(files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files');
 		browsePath = [];
@@ -1610,6 +1666,7 @@
 		nativeTreeUri = null;
 		musicSettings.nativeTreeUri = '';
 		pendingHandle = null;
+		libraryScanPromise = null;
 		allFiles = files.map((file) => createStoredAudioFile(file));
 		activateDeviceLibrary('Selected Files');
 		browsePath = [];
@@ -1638,13 +1695,7 @@
 				browseVersion++;
 				showQueue = true;
 				void saveHandleToIDB(rootDirHandle);
-				trackListLockedByUser = false;
-				void (async () => {
-					const cachedFiles = await collectStoredFilesFromDirHandle(rootDirHandle);
-					allFiles = cachedFiles;
-					if (!trackListLockedByUser) hydrateTracksFromLibrary(cachedFiles);
-					await saveCachedLibrary(rootDirHandle.name, cachedFiles);
-				})();
+				startLibraryScan(rootDirHandle.name);
 			}
 		} catch { /* user denied */ }
 	}
@@ -1720,7 +1771,9 @@
 		loadingFolderPath = folderKey;
 		initAudioContext(); // unlock AudioContext while still in user gesture
 		try {
-			const files = await collectAllFromPath(path);
+			const files = nativeTreeUri && libraryScanPromise
+				? collectStoredFilesFromSnapshot(await libraryScanPromise, path)
+				: await collectAllFromPath(path);
 			if (files.length === 0) { alert('No audio files found in this folder.'); return; }
 			loadTracks(files, path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName);
 			await startAudioAt(0);

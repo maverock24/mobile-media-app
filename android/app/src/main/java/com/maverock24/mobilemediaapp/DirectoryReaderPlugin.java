@@ -13,8 +13,36 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.util.ArrayDeque;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
 @CapacitorPlugin(name = "DirectoryReader")
 public class DirectoryReaderPlugin extends Plugin {
+	private static final int DEFAULT_SCAN_BATCH_SIZE = 250;
+	private static final Map<String, AudioScanSession> AUDIO_SCAN_SESSIONS = new ConcurrentHashMap<>();
+
+	private static final class AudioScanNode {
+		private final DocumentFile file;
+		private final String relativePath;
+
+		private AudioScanNode(DocumentFile file, String relativePath) {
+			this.file = file;
+			this.relativePath = relativePath;
+		}
+	}
+
+	private static final class AudioScanSession {
+		private final ArrayDeque<AudioScanNode> pendingNodes = new ArrayDeque<>();
+		private final String folderName;
+		private int foldersScanned = 0;
+
+		private AudioScanSession(DocumentFile target, String basePath) {
+			this.folderName = target.getName() != null ? target.getName() : "Selected Folder";
+			this.pendingNodes.addLast(new AudioScanNode(target, basePath));
+		}
+	}
 
 	@PluginMethod
 	public void rememberTreeUri(PluginCall call) {
@@ -35,6 +63,111 @@ public class DirectoryReaderPlugin extends Plugin {
 		} catch (Exception exception) {
 			call.reject(exception.getMessage());
 		}
+	}
+
+	@PluginMethod
+	public void startAudioScan(PluginCall call) {
+		try {
+			DocumentFile target = getTargetDirectory(call);
+			String basePath = call.getString("path", "");
+			AudioScanSession session = new AudioScanSession(target, basePath);
+			String scanId = UUID.randomUUID().toString();
+			AUDIO_SCAN_SESSIONS.put(scanId, session);
+
+			JSObject result = new JSObject();
+			result.put("scanId", scanId);
+			result.put("folderName", session.folderName);
+			result.put("foldersScanned", session.foldersScanned);
+			result.put("foldersQueued", session.pendingNodes.size());
+			call.resolve(result);
+		} catch (Exception exception) {
+			call.reject(exception.getMessage());
+		}
+	}
+
+	@PluginMethod
+	public void getAudioScanBatch(PluginCall call) {
+		String scanId = call.getString("scanId");
+		if (scanId == null || scanId.isEmpty()) {
+			call.reject("scanId is required.");
+			return;
+		}
+
+		AudioScanSession session = AUDIO_SCAN_SESSIONS.get(scanId);
+		if (session == null) {
+			call.reject("Audio scan session not found.");
+			return;
+		}
+
+		int batchSize = call.getInt("batchSize", DEFAULT_SCAN_BATCH_SIZE);
+		if (batchSize <= 0) {
+			batchSize = DEFAULT_SCAN_BATCH_SIZE;
+		}
+
+		JSArray files = new JSArray();
+		int filesAdded = 0;
+
+		while (filesAdded < batchSize && !session.pendingNodes.isEmpty()) {
+			AudioScanNode node = session.pendingNodes.removeFirst();
+			DocumentFile file = node.file;
+			if (file == null || !file.exists()) {
+				continue;
+			}
+
+			if (file.isDirectory()) {
+				session.foldersScanned += 1;
+				DocumentFile[] children = file.listFiles();
+				if (children == null) {
+					continue;
+				}
+
+				for (DocumentFile child : children) {
+					if (child == null) continue;
+					String childName = child.getName();
+					if (childName == null || childName.isEmpty()) {
+						continue;
+					}
+
+					session.pendingNodes.addLast(
+						new AudioScanNode(child, buildRelativePath(node.relativePath, childName))
+					);
+				}
+				continue;
+			}
+
+			String fileName = file.getName();
+			if (fileName == null || fileName.isEmpty()) {
+				continue;
+			}
+
+			if (!file.isFile() || !fileName.toLowerCase().endsWith(".mp3")) {
+				continue;
+			}
+
+			files.put(createFileObject(file, node.relativePath));
+			filesAdded += 1;
+		}
+
+		boolean done = session.pendingNodes.isEmpty();
+		if (done) {
+			AUDIO_SCAN_SESSIONS.remove(scanId);
+		}
+
+		JSObject result = new JSObject();
+		result.put("files", files);
+		result.put("foldersScanned", session.foldersScanned);
+		result.put("foldersQueued", session.pendingNodes.size());
+		result.put("done", done);
+		call.resolve(result);
+	}
+
+	@PluginMethod
+	public void cancelAudioScan(PluginCall call) {
+		String scanId = call.getString("scanId");
+		if (scanId != null && !scanId.isEmpty()) {
+			AUDIO_SCAN_SESSIONS.remove(scanId);
+		}
+		call.resolve();
 	}
 
 	@PluginMethod

@@ -425,30 +425,28 @@
 	}
 
 	// ── Playback ─────────────────────────────────────────────────
-	function playEpisode(podcast: Podcast, episode: Episode) {
-		if (!episode.audioUrl) {
-			addToast({ message: 'This episode has no playable audio URL.', type: 'error' });
-			return;
+	function getEpisodeResumePosition(episode: Episode): number {
+		const savedPosition = episode.positionSec ?? 0;
+		if (episode.id !== podcastData.lastEpisodeId) {
+			return savedPosition;
 		}
-		claimAudio('podcast');
-		currentEpisode = { podcast, episode };
-		duration = episode.duration;
-		currentTime = 0;
-		audioEl.src = episode.audioUrl;
+
+		return Math.max(savedPosition, podcastData.lastPositionSec);
+	}
+
+	function syncEpisodeAudioSource(podcast: Podcast, episode: Episode, resumeAt: number) {
 		audioEl.playbackRate = podcastSettings.playbackSpeed;
-		// TASK-2.3: Use positionSec directly when > 0, don't compute from percentage
-		const resumeAt = (episode.positionSec ?? 0) > 10 ? episode.positionSec : 0;
-		if (resumeAt > 10) {
-			audioEl.addEventListener('loadedmetadata', () => { audioEl.currentTime = resumeAt; currentTime = resumeAt; }, { once: true });
-		}
-		isBuffering = true;
-		audioEl.play().catch((err) => {
-			isBuffering = false;
-			console.error('[Podcast] play() failed:', err, 'url:', episode.audioUrl);
-			if (err?.name !== 'AbortError') {
-				addToast({ message: `Playback failed: ${err?.message ?? 'Unknown error'}`, type: 'error' });
+		if (audioEl.src !== episode.audioUrl) {
+			audioEl.src = episode.audioUrl;
+			if (resumeAt > 10) {
+				audioEl.addEventListener('loadedmetadata', () => {
+					if (currentEpisode?.episode.id !== episode.id) return;
+					audioEl.currentTime = resumeAt;
+					currentTime = resumeAt;
+				}, { once: true });
 			}
-		});
+		}
+
 		mediaEngine.setNowPlaying({
 			id:         episode.id,
 			source:     'podcast',
@@ -460,12 +458,40 @@
 		}, 'podcast');
 	}
 
+	function playEpisode(podcast: Podcast, episode: Episode) {
+		if (!episode.audioUrl) {
+			addToast({ message: 'This episode has no playable audio URL.', type: 'error' });
+			return;
+		}
+		claimAudio('podcast');
+		currentEpisode = { podcast, episode };
+		const resumeAt = getEpisodeResumePosition(episode);
+		duration = episode.duration;
+		currentTime = resumeAt > 10 ? resumeAt : 0;
+		syncEpisodeAudioSource(podcast, episode, resumeAt);
+		isBuffering = true;
+		audioEl.play().catch((err) => {
+			isBuffering = false;
+			console.error('[Podcast] play() failed:', err, 'url:', episode.audioUrl);
+			if (err?.name !== 'AbortError') {
+				addToast({ message: `Playback failed: ${err?.message ?? 'Unknown error'}`, type: 'error' });
+			}
+		});
+	}
+
 	function togglePlay() {
 		if (!audioEl || !currentEpisode) return;
 		if (isPlaying) {
 			audioEl.pause();
 		} else {
 			claimAudio('podcast');
+			if (audioEl.src !== currentEpisode.episode.audioUrl) {
+				syncEpisodeAudioSource(
+					currentEpisode.podcast,
+					currentEpisode.episode,
+					getEpisodeResumePosition(currentEpisode.episode)
+				);
+			}
 			audioEl.play().catch((err) => { console.error('[Podcast] togglePlay() failed:', err); });
 		}
 	}
@@ -536,9 +562,10 @@
 		if (!pod) return;
 		const ep = pod.episodes.find(e => e.id === podcastData.lastEpisodeId);
 		if (!ep) return;
+		const resumeAt = getEpisodeResumePosition(ep);
 		currentEpisode = { podcast: pod, episode: ep };
 		duration = ep.duration;
-		currentTime = podcastData.lastPositionSec;
+		currentTime = resumeAt;
 	});
 
 	$effect(() => { return () => { audioEl?.pause(); }; });
