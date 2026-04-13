@@ -191,10 +191,25 @@ jobs:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
-          BUILD_RESPONSE=$(curl -sf -X POST \
-            "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/builds?branch=${GITHUB_REF_NAME}&clear_cache=true" \
-            -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" \
-            -H "Content-Length: 0")
+          HOOK_TITLE="publish-assets-${GITHUB_REF_NAME}"
+          BUILD_HOOK_URL=$(curl -sf "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/build_hooks" \
+            -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" | jq -r --arg title "$HOOK_TITLE" --arg branch "$GITHUB_REF_NAME" '
+              map(select(.title == $title and .branch == $branch))
+              | .[0].url // empty
+            ')
 
-          echo "Triggered Netlify build:"
-          echo "$BUILD_RESPONSE" | jq .
+          if [[ -z "$BUILD_HOOK_URL" ]]; then
+            BUILD_HOOK_URL=$(curl -sf -X POST "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/build_hooks" \
+              -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -nc --arg title "$HOOK_TITLE" --arg branch "$GITHUB_REF_NAME" '{title: $title, branch: $branch}')" | jq -r '.url')
+          fi
+
+          if [[ -z "$BUILD_HOOK_URL" || "$BUILD_HOOK_URL" == "null" ]]; then
+            echo "Failed to resolve a Netlify build hook URL for ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+
+          echo "::add-mask::$BUILD_HOOK_URL"
+          curl -sf -X POST "$BUILD_HOOK_URL" > /dev/null
+          echo "Triggered Netlify build hook ${HOOK_TITLE}."
