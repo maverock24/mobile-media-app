@@ -4,6 +4,7 @@
 	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
 	import Input from '$lib/components/ui/Input.svelte';
+	import PlayerControls from '$lib/components/PlayerControls.svelte';
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
@@ -355,6 +356,7 @@
 
 	// ── derived ──
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
+	const controlsOwnedByMusic = $derived(mediaEngine.source === 'music' && !!currentTrack);
 
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
 	const progressPercent = $derived(
@@ -693,7 +695,7 @@
 
 	function startLibraryScan(folderName: string) {
 		trackListLockedByUser = false;
-		let scanPromise: Promise<StoredAudioFile[]>;
+		let scanPromise: Promise<StoredAudioFile[]> | null = null;
 		scanPromise = (async (): Promise<StoredAudioFile[]> => {
 			if (rootDirHandle) {
 				return collectStoredFilesFromDirHandle(rootDirHandle);
@@ -713,7 +715,7 @@
 						const mappedBatch = batch.files.map((file) => createStoredNativeAudioFile(file));
 						if (mappedBatch.length > 0) {
 							collectedFiles.push(...mappedBatch);
-							if (libraryScanPromise === scanPromise) {
+							if (scanPromise && libraryScanPromise === scanPromise) {
 								allFiles = [...allFiles, ...mappedBatch];
 								browseVersion += 1;
 							}
@@ -1916,6 +1918,11 @@
 		currentTime = newTime;
 		if (audioEl) audioEl.currentTime = newTime;
 	}
+	function handleSeekSeconds(seconds: number) {
+		seekingValue = null;
+		currentTime = seconds;
+		if (audioEl) audioEl.currentTime = seconds;
+	}
 	function handleVolume(e: Event) {
 		const input = e.target as HTMLInputElement;
 		musicSettings.volume = parseFloat(input.value);
@@ -2327,7 +2334,7 @@
 		</div>
 
 		<!-- ─── Mini player bar ─── -->
-		{#if currentTrack}
+		{#if controlsOwnedByMusic && currentTrack}
 		<div class="border-t bg-background shrink-0 pb-safe">
 			<!-- Track info row – tap to expand full player -->
 			<div class="flex items-center gap-3 px-4 pt-3 pb-1">
@@ -2437,51 +2444,6 @@
 			</Button>
 		</div>
 
-		<!-- Progress -->
-		<div class="w-full space-y-1">
-			<input type="range" min="0" max="100" value={progressPercent}
-				oninput={handleSeekInput}
-				onchange={handleSeekCommit}
-				class="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-secondary accent-primary" />
-			<div class="flex justify-between text-xs text-muted-foreground">
-				<span>{formatTime(currentTime)}</span>
-				<span class="text-muted-foreground/60 text-[10px]">{musicSettings.lastTrackIndex + 1} / {tracks.length}</span>
-				<span>{formatTime(duration)}</span>
-			</div>
-		</div>
-
-		<!-- Playback Controls -->
-		<div class="flex items-center justify-between w-full">
-			<Button variant="ghost" size="icon"
-				onclick={() => (musicSettings.isShuffle = !musicSettings.isShuffle)}
-				aria-label="Toggle shuffle"
-				title="Toggle shuffle"
-				class={musicSettings.isShuffle ? 'text-primary' : 'text-muted-foreground'}>
-				<Shuffle class="w-6 h-6" />
-			</Button>
-			<Button variant="ghost" size="icon" onclick={prevTrack}>
-				<SkipBack class="w-8 h-8" />
-			</Button>
-			<Button size="icon" onclick={togglePlay}
-				class="w-14 h-14 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg">
-				{#if isBuffering}
-					<div class="w-7 h-7 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"></div>
-				{:else if isPlaying}
-					<Pause class="w-7 h-7" />
-				{:else}
-					<Play class="w-7 h-7 ml-0.5" />
-				{/if}
-			</Button>
-			<Button variant="ghost" size="icon" onclick={() => advanceTrack(isPlaying || isBuffering, true)}>
-				<SkipForward class="w-8 h-8" />
-			</Button>
-			<Button variant="ghost" size="icon"
-				onclick={() => (musicSettings.isRepeat = !musicSettings.isRepeat)}
-				class={musicSettings.isRepeat ? 'text-primary' : 'text-muted-foreground'}>
-				<Repeat class="w-6 h-6" />
-			</Button>
-		</div>
-
 		<!-- Volume -->
 		<div class="flex items-center gap-3 w-full">
 			<Button variant="ghost" size="icon" onclick={toggleMute} class="text-muted-foreground shrink-0">
@@ -2497,6 +2459,41 @@
 				class="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-secondary accent-primary" />
 		</div>
 	</div>
+
+	{#if controlsOwnedByMusic}
+	<div class="border-t bg-card/95 px-4 pt-3 pb-3 shrink-0 space-y-3">
+		<div class="flex items-center justify-between gap-3">
+			<Button variant="ghost" size="icon"
+				onclick={() => (musicSettings.isShuffle = !musicSettings.isShuffle)}
+				aria-label="Toggle shuffle"
+				title="Toggle shuffle"
+				class={musicSettings.isShuffle ? 'text-primary' : 'text-muted-foreground'}>
+				<Shuffle class="w-6 h-6" />
+			</Button>
+			<div class="text-[10px] text-muted-foreground tabular-nums text-center min-w-0 px-2">
+				{musicSettings.lastTrackIndex + 1} / {tracks.length}
+			</div>
+			<Button variant="ghost" size="icon"
+				onclick={() => (musicSettings.isRepeat = !musicSettings.isRepeat)}
+				aria-label="Toggle repeat"
+				title="Toggle repeat"
+				class={musicSettings.isRepeat ? 'text-primary' : 'text-muted-foreground'}>
+				<Repeat class="w-6 h-6" />
+			</Button>
+		</div>
+		<PlayerControls
+			isPlaying={isPlaying}
+			isBuffering={isBuffering}
+			currentTime={currentTime}
+			duration={duration}
+			showTrackNav={true}
+			onPlayToggle={togglePlay}
+			onSeek={handleSeekSeconds}
+			onPrev={prevTrack}
+			onNext={() => advanceTrack(isPlaying || isBuffering, true)}
+		/>
+	</div>
+	{/if}
 
 	<!-- Speed panel -->
 	{#if showPanel === 'speed'}

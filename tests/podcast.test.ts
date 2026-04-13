@@ -204,6 +204,22 @@ test.describe('Podcast view', () => {
 		await expect(page.getByText('Episode 1: Introduction').first()).toBeVisible();
 	});
 
+	test('clicking an episode row starts playback without using the play button', async ({ page }) => {
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+
+		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
+		await page.getByText('Episode 1: Introduction').click();
+
+		await expect
+			.poll(async () => {
+				return page.locator('audio').evaluateAll((audioElements) => {
+					return audioElements.map((audioElement) => (audioElement as HTMLAudioElement).src);
+				});
+			}, { timeout: 5000 })
+			.toContain('https://example.com/ep1.mp3');
+	});
+
 	// ── Now-playing bar controls ───────────────────────────────────────────
 	test('now-playing bar has skip-back, play/pause, skip-forward buttons', async ({ page }) => {
 		await page.getByPlaceholder('Search podcasts…').fill('test');

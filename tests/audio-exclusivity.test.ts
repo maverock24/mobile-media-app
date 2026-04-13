@@ -143,6 +143,22 @@ test.describe('Cross-view audio exclusivity', () => {
 			return audio ? audio.paused : true;
 		});
 		expect(isPaused).toBe(true);
+		await expect(page.locator('button[aria-label="Previous"]:visible')).toHaveCount(0);
+		await expect(page.locator('button[aria-label="Pause"]:visible')).toHaveCount(0);
+		await expect(page.getByRole('region', { name: /Mini player/i }).getByText('Cross Test Episode')).toBeVisible({ timeout: 3000 });
+	});
+
+	test('radio top controls are hidden when a podcast is the active source', async ({ page }) => {
+		await goToTab(page, 'Radio');
+		await goToTab(page, 'Podcasts');
+		await page.getByPlaceholder('Search podcasts…').fill('cross');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+		await expect(page.getByText('Cross Test Episode')).toBeVisible({ timeout: 5000 });
+		await page.locator('button.rounded-full.w-9:visible').first().click();
+
+		await goToTab(page, 'Radio');
+		await expect(page.locator('button[aria-label="Stop"]:visible')).toHaveCount(0);
+		await expect(page.getByRole('region', { name: /Mini player/i }).getByText('Cross Test Episode')).toBeVisible({ timeout: 3000 });
 	});
 
 	test('podcast now-playing bar persists when switching views', async ({ page }) => {

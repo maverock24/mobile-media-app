@@ -59,6 +59,7 @@
 	let episodesLoading    = $state(false);
 	let episodesRefreshing = $state(false); // background refresh while episodes already shown
 	let episodesError      = $state<string | null>(null);
+	let hasRestoredSelectedPodcast = false;
 
 	// AbortController for in-flight loadEpisodes (TASK-2.1: prevents race conditions)
 	let episodeLoadController: AbortController | null = null;
@@ -177,6 +178,7 @@
 
 	// ── Derived ─────────────────────────────────────────────────
 	const subscribedPodcasts = $derived(podcastData.podcasts.filter(p => p.subscribed));
+	const controlsOwnedByPodcast = $derived(mediaEngine.source === 'podcast' && !!currentEpisode);
 
 	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
@@ -479,6 +481,15 @@
 		});
 	}
 
+	function activateEpisode(podcast: Podcast, episode: Episode) {
+		if (currentEpisode?.episode.id === episode.id) {
+			togglePlay();
+			return;
+		}
+
+		playEpisode(podcast, episode);
+	}
+
 	function togglePlay() {
 		if (!audioEl || !currentEpisode) return;
 		if (isPlaying) {
@@ -554,6 +565,22 @@
 
 	// ── Restore last-played episode on mount ──────────────────────
 	$effect(() => {
+		if (hasRestoredSelectedPodcast) return;
+		if (selectedPodcast !== null) {
+			hasRestoredSelectedPodcast = true;
+			return;
+		}
+		if (podcastData.lastPodcastId < 0) {
+			hasRestoredSelectedPodcast = true;
+			return;
+		}
+		const pod = podcastData.podcasts.find(p => p.id === podcastData.lastPodcastId);
+		if (!pod) return;
+		hasRestoredSelectedPodcast = true;
+		openPodcast(pod);
+	});
+
+	$effect(() => {
 		if (!podcastData.lastEpisodeId || podcastData.lastPodcastId < 0) return;
 		// Only restore if nothing is currently playing — avoids clobbering live playback
 		// when background RSS refresh mutates podcastData.podcasts and re-triggers this effect
@@ -566,6 +593,17 @@
 		currentEpisode = { podcast: pod, episode: ep };
 		duration = ep.duration;
 		currentTime = resumeAt;
+		mediaEngine.setNowPlaying({
+			id:         ep.id,
+			source:     'podcast',
+			title:      ep.title,
+			subtitle:   pod.title,
+			audioUrl:   ep.audioUrl,
+			artworkUrl: pod.artworkUrl,
+			duration:   ep.duration,
+		}, 'podcast');
+		mediaEngine.updateTime(resumeAt, ep.duration);
+		mediaEngine.setPlaying(false);
 	});
 
 	$effect(() => { return () => { audioEl?.pause(); }; });
@@ -644,7 +682,17 @@
 				</div>
 			{:else}
 				{#each selectedPodcast.episodes as episode}
-					<div class="p-4 border-b hover:bg-accent/40 transition-colors">
+					<div
+						class="p-4 border-b hover:bg-accent/40 transition-colors cursor-pointer"
+						role="button"
+						tabindex="0"
+						onclick={() => selectedPodcast && activateEpisode(selectedPodcast, episode)}
+						onkeydown={(event) => {
+							if (event.key !== 'Enter' && event.key !== ' ') return;
+							event.preventDefault();
+							if (selectedPodcast) activateEpisode(selectedPodcast, episode);
+						}}
+					>
 						<div class="flex items-start gap-3">
 							<div class="flex-1 min-w-0">
 								<div class="flex items-center gap-2 mb-1">
@@ -677,11 +725,10 @@
 							<Button
 								size="icon" variant={currentEpisode?.episode.id === episode.id && (isPlaying || isBuffering) ? 'default' : 'outline'}
 								class="shrink-0 w-9 h-9 rounded-full"
-								onclick={() => {
-									if (currentEpisode?.episode.id === episode.id) {
-										togglePlay();
-									} else if (selectedPodcast) {
-										playEpisode(selectedPodcast, episode);
+								onclick={(event) => {
+									event.stopPropagation();
+									if (selectedPodcast) {
+										activateEpisode(selectedPodcast, episode);
 									}
 								}}
 							>
@@ -851,7 +898,7 @@
 {/if}
 
 	<!-- ── Now Playing Bar ── -->
-	{#if currentEpisode}
+	{#if controlsOwnedByPodcast && currentEpisode}
 		<div class="border-t bg-background shrink-0 pb-safe">
 			<!-- Track info row -->
 			<div class="flex items-center gap-3 px-4 pt-3 pb-1">

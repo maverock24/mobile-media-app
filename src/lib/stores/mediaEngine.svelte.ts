@@ -74,8 +74,13 @@ export const mediaEngine = $state<NowPlayingState & {
 	setNowPlaying(item: MediaItem, source: MediaSource): void;
 
 	// --- Callbacks for views to override behavior ---
+	_onPlay: (() => void) | null;
+	_onPause: (() => void) | null;
+	_onSeek: ((time: number) => void) | null;
 	_onNext: (() => void) | null;
 	_onPrev: (() => void) | null;
+	setPlaybackHandlers(play: (() => void) | null, pause: (() => void) | null, seek: ((time: number) => void) | null): void;
+	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null): void;
 	setCallbacks(next: (() => void) | null, prev: (() => void) | null): void;
 }>({
 	item:        null,
@@ -94,6 +99,9 @@ export const mediaEngine = $state<NowPlayingState & {
 	crossfadeDuration: 0,
 	eqBands: [0, 0, 0, 0, 0, 0],
 
+	_onPlay: null,
+	_onPause: null,
+	_onSeek: null,
 	_onNext: null,
 	_onPrev: null,
 
@@ -255,6 +263,17 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.currentTime = 0;
 		this.duration = 0;
 		this.source = null;
+	},
+
+	setPlaybackHandlers(play, pause, seek) {
+		this._onPlay = play;
+		this._onPause = pause;
+		this._onSeek = seek;
+	},
+
+	setSkipHandlers(next, prev) {
+		this._onNext = next;
+		this._onPrev = prev;
 	},
 
 	setCallbacks(next, prev) {
@@ -440,19 +459,22 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 		});
 
 		$effect(() => {
-			navigator.mediaSession.setActionHandler('play',          () => mediaEngine.resume());
-			navigator.mediaSession.setActionHandler('pause',         () => mediaEngine.pause());
-			navigator.mediaSession.setActionHandler('stop',          () => mediaEngine.pause());
-			navigator.mediaSession.setActionHandler('nexttrack',     () => mediaEngine.next());
-			navigator.mediaSession.setActionHandler('previoustrack', () => mediaEngine.prev());
+			navigator.mediaSession.setActionHandler('play',          () => mediaEngine._onPlay?.() ?? mediaEngine.resume());
+			navigator.mediaSession.setActionHandler('pause',         () => mediaEngine._onPause?.() ?? mediaEngine.pause());
+			navigator.mediaSession.setActionHandler('stop',          () => mediaEngine._onPause?.() ?? mediaEngine.pause());
+			navigator.mediaSession.setActionHandler('nexttrack',     () => mediaEngine._onNext?.() ?? mediaEngine.next());
+			navigator.mediaSession.setActionHandler('previoustrack', () => mediaEngine._onPrev?.() ?? mediaEngine.prev());
 			navigator.mediaSession.setActionHandler('seekto', (d) => {
-				if (d.seekTime != null) mediaEngine.seek(d.seekTime);
+				if (d.seekTime == null) return;
+				mediaEngine._onSeek?.(d.seekTime) ?? mediaEngine.seek(d.seekTime);
 			});
 			navigator.mediaSession.setActionHandler('seekforward', (d) => {
-				mediaEngine.seek(mediaEngine.currentTime + (d.seekOffset ?? 30));
+				const nextTime = mediaEngine.currentTime + (d.seekOffset ?? 30);
+				mediaEngine._onSeek?.(nextTime) ?? mediaEngine.seek(nextTime);
 			});
 			navigator.mediaSession.setActionHandler('seekbackward', (d) => {
-				mediaEngine.seek(mediaEngine.currentTime - (d.seekOffset ?? 10));
+				const nextTime = mediaEngine.currentTime - (d.seekOffset ?? 10);
+				mediaEngine._onSeek?.(nextTime) ?? mediaEngine.seek(nextTime);
 			});
 		});
 	});
@@ -468,12 +490,14 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		$effect(() => {
 			mediaActionHandle = MediaControls.addListener('mediaAction', (event) => {
 				switch (event.action) {
-					case 'play':          mediaEngine.resume(); break;
-					case 'pause':         mediaEngine.pause();  break;
-					case 'nexttrack':     mediaEngine.next();   break;
-					case 'previoustrack': mediaEngine.prev();   break;
+					case 'play':          mediaEngine._onPlay?.() ?? mediaEngine.resume(); break;
+					case 'pause':         mediaEngine._onPause?.() ?? mediaEngine.pause();  break;
+					case 'nexttrack':     mediaEngine._onNext?.() ?? mediaEngine.next();    break;
+					case 'previoustrack': mediaEngine._onPrev?.() ?? mediaEngine.prev();    break;
 					case 'seekto':
-						if (event.positionSec != null) mediaEngine.seek(event.positionSec);
+						if (event.positionSec != null) {
+							mediaEngine._onSeek?.(event.positionSec) ?? mediaEngine.seek(event.positionSec);
+						}
 						break;
 				}
 			});

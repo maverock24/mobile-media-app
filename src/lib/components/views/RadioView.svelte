@@ -194,6 +194,7 @@
 	}
 
 	let activeTab = $state<'favorites' | 'search'>('favorites');
+	const controlsOwnedByRadio = $derived(mediaEngine.source === 'radio' && !!currentStation);
 </script>
 
 <!-- Hidden audio element -->
@@ -202,7 +203,7 @@
 <div class="flex flex-col h-full bg-background/85">
 
 	<!-- ── Now Playing bar ──────────────────────────────────────── -->
-	{#if currentStation}
+	{#if controlsOwnedByRadio}
 		<div class="shrink-0 border-b bg-primary/5 px-4 py-3 flex items-center gap-3">
 			{#if currentStation.favicon}
 				<img src={currentStation.favicon} alt="" class="w-10 h-10 rounded-lg object-cover shrink-0" />

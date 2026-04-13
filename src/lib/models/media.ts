@@ -9,8 +9,10 @@ export interface MediaItem {
 	/** Which domain this track belongs to. */
 	source: MediaSource;
 	title: string;
+	album?: string;
 	subtitle: string;           // artist / podcast name
 	audioUrl: string;
+	resolveUrl?: () => Promise<string | null | undefined>;
 	artworkUrl?: string;
 	duration?: number;          // seconds, if known ahead of time
 }
