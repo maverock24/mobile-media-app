@@ -20,12 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ANDROID_VERSION_CODE: ${{ github.run_number }}
+      GIT_LFS_SKIP_SMUDGE: 1
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
