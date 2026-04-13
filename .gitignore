@@ -29,6 +29,7 @@ android/local.properties
 *.jks
 *.keystore
 static/releases/android/latest.apk
+static/releases/android/latest.json
 
 # Vite
 vite.config.js.timestamp-*

@@ -198,23 +198,3 @@ jobs:
             echo "$LIVE_MANIFEST" | jq .
             exit 1
           fi
-
-      - name: Commit updated APK manifest
-        id: commit_assets
-        env:
-          PACKAGE_VERSION: ${{ steps.android_meta.outputs.package_version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add static/releases/android/latest.json
-
-          if git diff --cached --quiet; then
-            echo "committed=false" >> "$GITHUB_OUTPUT"
-            echo "No APK manifest changes to commit."
-            exit 0
-          fi
-
-          git commit -m "chore: update Android APK assets for ${PACKAGE_VERSION}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          echo "committed=true" >> "$GITHUB_OUTPUT"
