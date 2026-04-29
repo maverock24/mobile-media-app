@@ -396,7 +396,6 @@
 	function syncTrackToMediaEngine(index: number) {
 		const track = tracks[index];
 		if (!track) return;
-		if (mediaEngine.source && mediaEngine.source !== 'music') return;
 		mediaEngine.setNowPlaying({
 			id:         String(track.id),
 			source:     'music',
