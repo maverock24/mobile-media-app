@@ -429,6 +429,17 @@
 							</label>
 						{/each}
 					</div>
+					<div class="pt-1 space-y-2">
+						<button
+							class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-border text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+							onclick={() => window.dispatchEvent(new CustomEvent('music-library:rescan'))}
+							disabled={musicSettings.librarySource !== 'drive' && !musicSettings.nativeTreeUri && !musicSettings.lastFolderName}
+						>
+							<RefreshCw class="w-4 h-4" />
+							Rescan Current Library Index
+						</button>
+						<p class="text-xs text-muted-foreground">Refresh the saved music index after adding or removing files from a folder.</p>
+					</div>
 				</div>
 			{/if}
 		</div>

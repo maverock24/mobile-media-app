@@ -102,6 +102,11 @@ test.describe('Settings view', () => {
 		await expect(page.getByText(/Auto.?play|album art/i).first()).toBeVisible({ timeout: 2000 });
 	});
 
+	test('music section shows the rescan library index action', async ({ page }) => {
+		await page.getByRole('button', { name: /^Music Player/ }).click();
+		await expect(page.getByRole('button', { name: /Rescan Current Library Index/i })).toBeVisible({ timeout: 2000 });
+	});
+
 	test('only one section expands at a time', async ({ page }) => {
 		await page.getByRole('button', { name: /^Appearance/ }).click();
 		await expect(page.getByText('Theme', { exact: true })).toBeVisible();

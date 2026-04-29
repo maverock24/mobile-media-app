@@ -73,7 +73,37 @@
 		modifiedAt?: number;
 	};
 	type CachedLibraryFile = CachedWebLibraryFile | CachedNativeLibraryFile;
-	type CachedLibrary = { folderName: string; files: CachedLibraryFile[]; savedAt: number };
+	type CachedLibrary = { folderName: string; files: CachedLibraryFile[]; savedAt: number; cacheKey?: string };
+
+	const LAST_LIBRARY_CACHE_KEY = 'last-library';
+	const BACKGROUND_LIBRARY_SCAN_BATCH_SIZE = 120;
+	const FOLDER_PLAY_SCAN_BATCH_SIZE = 48;
+	const FOLDER_PLAY_PRIME_COUNT = 6;
+
+	function getStoredFileKey(source: StoredAudioFile): string {
+		if (source.source === 'drive') return `d:${source.fileId}`;
+		if (source.source === 'native') return `n:${source.relativePath}`;
+		return `w:${source.relativePath}`;
+	}
+
+	function mergeStoredFiles(existing: StoredAudioFile[], incoming: StoredAudioFile[]): StoredAudioFile[] {
+		if (incoming.length === 0) return existing;
+		const seen = new Set(existing.map((file) => getStoredFileKey(file)));
+		const merged = [...existing];
+		for (const file of incoming) {
+			const key = getStoredFileKey(file);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			merged.push(file);
+		}
+		return merged;
+	}
+
+	function getDeviceLibraryCacheKey(options: { treeUri?: string | null; folderName?: string | null } = {}): string {
+		if (options.treeUri) return `device:${options.treeUri}`;
+		if (options.folderName) return `device-folder:${options.folderName}`;
+		return LAST_LIBRARY_CACHE_KEY;
+	}
 
 	// ── IndexedDB persistence for FileSystemDirectoryHandle ──────
 	function openIDB(): Promise<IDBDatabase> {
@@ -123,7 +153,7 @@
 		try { const db = await openIDB(); const h = await idbGet<FileSystemDirectoryHandle>(db, 'handles', 'last-dir'); db.close(); return h; }
 		catch { return null; }
 	}
-	async function saveCachedLibrary(folderName: string, files: StoredAudioFile[]) {
+	async function saveCachedLibrary(folderName: string, files: StoredAudioFile[], cacheKey = getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName })) {
 		const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
 			if (file.source === 'web') {
 				accumulator.push({
@@ -150,12 +180,32 @@
 		}, []);
 
 		if (cachedFiles.length === 0) return;
-		try { const db = await openIDB(); await idbPut(db, 'libraries', { folderName, files: cachedFiles, savedAt: Date.now() } satisfies CachedLibrary, 'last-library'); db.close(); }
+		try {
+			const db = await openIDB();
+			const payload = { folderName, files: cachedFiles, savedAt: Date.now(), cacheKey } satisfies CachedLibrary;
+			await idbPut(db, 'libraries', payload, cacheKey);
+			if (cacheKey !== LAST_LIBRARY_CACHE_KEY) {
+				await idbPut(db, 'libraries', payload, LAST_LIBRARY_CACHE_KEY);
+			}
+			db.close();
+		}
 		catch { /* ignore cache write failures */ }
 	}
-	async function loadCachedLibrary(): Promise<CachedLibrary | null> {
-		try { const db = await openIDB(); const r = await idbGet<CachedLibrary>(db, 'libraries', 'last-library'); db.close(); return r; }
+	async function loadCachedLibrary(cacheKey = LAST_LIBRARY_CACHE_KEY): Promise<CachedLibrary | null> {
+		try { const db = await openIDB(); const r = await idbGet<CachedLibrary>(db, 'libraries', cacheKey); db.close(); return r; }
 		catch { return null; }
+	}
+	async function deleteCachedLibrary(cacheKey: string): Promise<void> {
+		try { const db = await openIDB(); await idbDelete(db, 'libraries', cacheKey); db.close(); }
+		catch { /* ignore cache delete failures */ }
+	}
+	async function loadDeviceCachedLibrary(treeUri: string | null, folderName: string): Promise<CachedLibrary | null> {
+		const cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName });
+		const cached = await loadCachedLibrary(cacheKey);
+		if (cached) return cached;
+		if (cacheKey === LAST_LIBRARY_CACHE_KEY) return null;
+		const fallback = await loadCachedLibrary();
+		return fallback?.folderName === folderName ? fallback : null;
 	}
 
 	// ── Separate IDB for Google Drive file list cache (avoids version conflicts with music-app) ─
@@ -277,6 +327,7 @@
 	let isLiked        = $state(false);
 	let isLoading        = $state(false);
 	let loadingFolderPath = $state<string | null>(null); // per-folder spinner key
+	let queueSessionId = 0;
 	let showQueue   = $state(false);   // true → browse / folder view
 
 	// ── Swipe right in full player → go back to browse list ──────
@@ -692,8 +743,61 @@
 		return [...folders, ...directFiles];
 	}
 
-	function startLibraryScan(folderName: string) {
-		trackListLockedByUser = false;
+	async function yieldScanToUi(): Promise<void> {
+		if (typeof window === 'undefined') return;
+		await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+	}
+
+	async function scanNativeAudioFiles(
+		path: string[],
+		batchSize: number,
+		onBatch?: (batch: StoredAudioFile[], state: { done: boolean; foldersScanned: number; foldersQueued: number; totalFiles: number }) => Promise<void> | void,
+	): Promise<StoredAudioFile[]> {
+		if (!nativeTreeUri) return [];
+
+		const collectedFiles: StoredAudioFile[] = [];
+		let scanCompleted = false;
+		let scanId = '';
+
+		try {
+			const startedScan = await DirectoryReader.startAudioScan({ treeUri: nativeTreeUri, path: pathToString(path) });
+			scanId = startedScan.scanId;
+
+			while (!scanCompleted) {
+				const batch = await DirectoryReader.getAudioScanBatch({ scanId, batchSize });
+				const mappedBatch = batch.files.map((file) => createStoredNativeAudioFile(file));
+				if (mappedBatch.length > 0) {
+					collectedFiles.push(...mappedBatch);
+					await onBatch?.(mappedBatch, {
+						done: batch.done,
+						foldersScanned: batch.foldersScanned,
+						foldersQueued: batch.foldersQueued,
+						totalFiles: collectedFiles.length,
+					});
+				}
+				scanCompleted = batch.done;
+				if (!scanCompleted) {
+					await yieldScanToUi();
+				}
+			}
+		} finally {
+			if (scanId && !scanCompleted) {
+				try {
+					await DirectoryReader.cancelAudioScan({ scanId });
+				} catch (error) {
+					console.warn('Unable to cancel native audio scan.', error);
+				}
+			}
+		}
+
+		return collectedFiles;
+	}
+
+	function startLibraryScan(folderName: string, options: { resetExistingFiles?: boolean } = {}) {
+		if (options.resetExistingFiles) {
+			allFiles = [];
+			browseVersion += 1;
+		}
 		let scanPromise: Promise<StoredAudioFile[]> | null = null;
 		scanPromise = (async (): Promise<StoredAudioFile[]> => {
 			if (rootDirHandle) {
@@ -701,37 +805,12 @@
 			}
 
 			if (nativeTreeUri) {
-				const collectedFiles: StoredAudioFile[] = [];
-				let scanCompleted = false;
-				let scanId = '';
-
-				try {
-					const startedScan = await DirectoryReader.startAudioScan({ treeUri: nativeTreeUri });
-					scanId = startedScan.scanId;
-
-					while (!scanCompleted) {
-						const batch = await DirectoryReader.getAudioScanBatch({ scanId, batchSize: 250 });
-						const mappedBatch = batch.files.map((file) => createStoredNativeAudioFile(file));
-						if (mappedBatch.length > 0) {
-							collectedFiles.push(...mappedBatch);
-							if (scanPromise && libraryScanPromise === scanPromise) {
-								allFiles = [...allFiles, ...mappedBatch];
-								browseVersion += 1;
-							}
-						}
-						scanCompleted = batch.done;
+				return scanNativeAudioFiles([], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, async (mappedBatch) => {
+					if (scanPromise && libraryScanPromise === scanPromise) {
+						allFiles = [...allFiles, ...mappedBatch];
+						browseVersion += 1;
 					}
-				} finally {
-					if (scanId && !scanCompleted) {
-						try {
-							await DirectoryReader.cancelAudioScan({ scanId });
-						} catch (error) {
-							console.warn('Unable to cancel native audio scan.', error);
-						}
-					}
-				}
-
-				return collectedFiles;
+				});
 			}
 
 			return allFiles;
@@ -743,7 +822,7 @@
 				if (libraryScanPromise !== scanPromise) return;
 				allFiles = scannedFiles;
 				if (!trackListLockedByUser) hydrateTracksFromLibrary(scannedFiles);
-				await saveCachedLibrary(folderName, scannedFiles);
+				await saveCachedLibrary(folderName, scannedFiles, getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName }));
 			})
 			.catch((error) => {
 				console.error('Failed to scan selected library.', error);
@@ -757,9 +836,7 @@
 
 	// ── Per-track resume helpers ──────────────────────────────────
 	function getTrackKey(source: StoredAudioFile): string {
-		if (source.source === 'drive')  return `d:${source.fileId}`;
-		if (source.source === 'native') return `n:${source.relativePath}`;
-		return `w:${source.relativePath}`;
+		return getStoredFileKey(source);
 	}
 
 	/** Sync both lastTrackIndex and lastTrackKey together */
@@ -1105,10 +1182,33 @@
 			browsePath = [];
 			browseVersion++;
 			showQueue = true;
-			startLibraryScan(fav.name);
+			const cachedLibrary = await loadDeviceCachedLibrary(fav.treeUri, fav.name);
+			if (cachedLibrary && cachedLibrary.files.length > 0) {
+				allFiles = restoreStoredFilesFromCache(cachedLibrary);
+				hydrateTracksFromLibrary(allFiles);
+				browseVersion++;
+			}
 		}
 		} finally {
 			switchingToFavId = null;
+		}
+	}
+
+	async function rescanCurrentLibraryIndex() {
+		if (musicSettings.librarySource === 'drive') {
+			await refreshGoogleDrive();
+			return;
+		}
+
+		const folderName = musicSettings.lastFolderName || 'Library';
+		const cacheKey = getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName });
+		await deleteCachedLibrary(cacheKey);
+		if (cacheKey !== LAST_LIBRARY_CACHE_KEY) {
+			await deleteCachedLibrary(LAST_LIBRARY_CACHE_KEY);
+		}
+
+		if (nativeTreeUri || rootDirHandle) {
+			startLibraryScan(folderName, { resetExistingFiles: true });
 		}
 	}
 
@@ -1549,6 +1649,7 @@
 		// from firing advanceTrack while the new track is still loading.
 		if (audioEl) { audioEl.pause(); audioEl.src = ''; }
 		revokeAll();
+		queueSessionId += 1;
 		const sorted = sortFiles(files);
 		tracks = sorted.map((f, i) => {
 			const { title, artist } = parseFilename(f.name);
@@ -1561,6 +1662,47 @@
 		preloadRequestId += 1;
 		currentTime = 0; duration = 0; isPlaying = false; isBuffering = false;
 		trackListLockedByUser = true;
+	}
+
+	function appendTracksToQueue(files: StoredAudioFile[], folder: string, expectedQueueSessionId: number) {
+		if (files.length === 0 || queueSessionId !== expectedQueueSessionId) return;
+		const previousTracks = tracks;
+		const currentTrack = previousTracks[musicSettings.lastTrackIndex];
+		const currentTrackKey = currentTrack ? getTrackKey(currentTrack.source) : '';
+		const preloadedTrackKey = preloadedTrackIndex !== null && previousTracks[preloadedTrackIndex]
+			? getTrackKey(previousTracks[preloadedTrackIndex].source)
+			: '';
+		const mergedFiles = mergeStoredFiles(previousTracks.map((track) => track.source), files);
+		if (mergedFiles.length === previousTracks.length) return;
+
+		const existingByKey = new Map(previousTracks.map((track) => [getTrackKey(track.source), track]));
+		tracks = sortFiles(mergedFiles).map((file, index) => {
+			const existing = existingByKey.get(getTrackKey(file));
+			const { title, artist } = parseFilename(file.name);
+			return {
+				id: index,
+				title,
+				artist,
+				filename: file.name,
+				url: existing?.url ?? '',
+				duration: existing?.duration ?? 0,
+				cleanup: existing?.cleanup,
+				source: file,
+			};
+		});
+		musicSettings.lastFolderName = folder;
+
+		if (currentTrackKey) {
+			const nextIndex = tracks.findIndex((track) => getTrackKey(track.source) === currentTrackKey);
+			if (nextIndex >= 0) {
+				setCurrentTrack(nextIndex);
+			}
+		}
+
+		if (preloadedTrackKey) {
+			const nextPreloadedIndex = tracks.findIndex((track) => getTrackKey(track.source) === preloadedTrackKey);
+			preloadedTrackIndex = nextPreloadedIndex >= 0 ? nextPreloadedIndex : null;
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -1593,12 +1735,17 @@
 				browsePath = [];
 				browseVersion++;
 				showQueue = true;
+				const cachedLibrary = await loadDeviceCachedLibrary(treeUri, folderName);
 				try {
 					await DirectoryReader.rememberTreeUri({ treeUri });
 				} catch (error) {
 					console.warn('Unable to persist tree URI permission.', error);
 				}
-				startLibraryScan(folderName);
+				if (cachedLibrary && cachedLibrary.files.length > 0) {
+					allFiles = restoreStoredFilesFromCache(cachedLibrary);
+					hydrateTracksFromLibrary(allFiles);
+					browseVersion++;
+				}
 			} catch (error) {
 				console.error('Failed to open native folder.', error);
 				if (nativeFileInputEl) {
@@ -1626,7 +1773,12 @@
 				browseVersion++;  // triggers browse entry reload
 				showQueue = true;
 				void saveHandleToIDB(dirHandle);
-				startLibraryScan(dirHandle.name);
+				const cachedLibrary = await loadDeviceCachedLibrary(null, dirHandle.name);
+				if (cachedLibrary && cachedLibrary.files.length > 0) {
+					allFiles = restoreStoredFilesFromCache(cachedLibrary);
+					hydrateTracksFromLibrary(allFiles);
+					browseVersion++;
+				}
 			} catch { /* user cancelled */ }
 		} else {
 			folderInputEl?.click();
@@ -1696,7 +1848,12 @@
 				browseVersion++;
 				showQueue = true;
 				void saveHandleToIDB(rootDirHandle);
-				startLibraryScan(rootDirHandle.name);
+				const cachedLibrary = await loadDeviceCachedLibrary(null, rootDirHandle.name);
+				if (cachedLibrary && cachedLibrary.files.length > 0) {
+					allFiles = restoreStoredFilesFromCache(cachedLibrary);
+					hydrateTracksFromLibrary(allFiles);
+					browseVersion++;
+				}
 			}
 		} catch { /* user denied */ }
 	}
@@ -1706,10 +1863,15 @@
 	// ─────────────────────────────────────────────────────────────
 
 	// ── Shared audio start sequence — used by all user-initiated play functions ──
-	async function startAudioAt(index: number): Promise<boolean> {
+	async function startAudioAt(index: number, options: { suppressAlert?: boolean } = {}): Promise<boolean> {
 		if (!audioEl || !tracks[index]) return false;
 		const url = await ensureTrackUrl(index, true);
-		if (!url) { alert('Unable to load this track.'); return false; }
+		if (!url) {
+			if (!options.suppressAlert) {
+				alert('Unable to load this track.');
+			}
+			return false;
+		}
 		// Do NOT call audioEl.load() — calling load() then play() immediately causes an AbortError
 		// ("play() request was interrupted by a new load request") in Chromium/Android WebView.
 		// Setting src and calling play() directly is sufficient; the browser loads internally.
@@ -1722,6 +1884,74 @@
 		isBuffering = true;
 		audioEl.play().catch(() => { isBuffering = false; });
 		return true;
+	}
+
+	async function startFirstPlayableTrack(startIndex = 0): Promise<boolean> {
+		for (let index = startIndex; index < tracks.length; index += 1) {
+			setCurrentTrack(index);
+			currentTime = 0;
+			duration = 0;
+			if (await startAudioAt(index, { suppressAlert: true })) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	async function playNativeFolderFromScan(path: string[], folderLabel: string): Promise<boolean> {
+		if (!nativeTreeUri) return false;
+
+		let playbackStarted = false;
+		let hasResolvedStart = false;
+		let activePlaybackQueueSessionId = queueSessionId;
+		let resolveStart: ((value: boolean) => void) | null = null;
+		const startPromise = new Promise<boolean>((resolve) => {
+			resolveStart = resolve;
+		});
+
+		const collectedFiles: StoredAudioFile[] = [];
+		void scanNativeAudioFiles(path, FOLDER_PLAY_SCAN_BATCH_SIZE, async (mappedBatch, state) => {
+			const mergedFiles = mergeStoredFiles(collectedFiles, mappedBatch);
+			if (mergedFiles.length === collectedFiles.length) return;
+			collectedFiles.splice(0, collectedFiles.length, ...mergedFiles);
+
+			if (!playbackStarted) {
+				if (collectedFiles.length < FOLDER_PLAY_PRIME_COUNT && !state.done) return;
+				loadTracks(collectedFiles, folderLabel);
+				activePlaybackQueueSessionId = queueSessionId;
+				playbackStarted = await startFirstPlayableTrack();
+				if (playbackStarted && !hasResolvedStart) {
+					hasResolvedStart = true;
+					resolveStart?.(true);
+				}
+				return;
+			}
+
+			appendTracksToQueue(mappedBatch, folderLabel, activePlaybackQueueSessionId);
+		}).then(async () => {
+			if (!playbackStarted && collectedFiles.length > 0) {
+				loadTracks(collectedFiles, folderLabel);
+				activePlaybackQueueSessionId = queueSessionId;
+				playbackStarted = await startFirstPlayableTrack();
+			}
+			if (path.length === 0 && collectedFiles.length > 0) {
+				allFiles = collectedFiles;
+				browseVersion += 1;
+				await saveCachedLibrary(folderLabel, collectedFiles, getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName: folderLabel }));
+			}
+			if (!hasResolvedStart) {
+				hasResolvedStart = true;
+				resolveStart?.(playbackStarted);
+			}
+		}).catch((error) => {
+			console.error('Failed to scan folder for playback.', error);
+			if (!hasResolvedStart) {
+				hasResolvedStart = true;
+				resolveStart?.(false);
+			}
+		});
+
+		return startPromise;
 	}
 
 	// Play a single file → load all siblings as context
@@ -1755,7 +1985,9 @@
 		isChangingTrack = true;
 		try {
 			loadTracks(files, label);
-			await startAudioAt(0);
+			if (!(await startFirstPlayableTrack())) {
+				alert('No playable audio files were found in this folder.');
+			}
 		} catch (e) {
 			console.error('Failed to play folder:', e);
 		} finally {
@@ -1769,15 +2001,32 @@
 		if (isChangingTrack) return;
 		isChangingTrack = true;
 		const folderKey = path.join('/');
+		const folderLabel = path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName || 'Library';
 		loadingFolderPath = folderKey;
 		initAudioContext(); // unlock AudioContext while still in user gesture
 		try {
-			const files = nativeTreeUri && libraryScanPromise
-				? collectStoredFilesFromSnapshot(await libraryScanPromise, path)
-				: await collectAllFromPath(path);
+			const indexedFiles = collectStoredFilesFromSnapshot(allFiles, path);
+			if (indexedFiles.length > 0) {
+				loadTracks(indexedFiles, folderLabel);
+				if (!(await startFirstPlayableTrack())) {
+					alert('No playable audio files were found in this folder.');
+				}
+				return;
+			}
+
+			if (nativeTreeUri) {
+				if (!(await playNativeFolderFromScan(path, folderLabel))) {
+					alert('No audio files found in this folder.');
+				}
+				return;
+			}
+
+			const files = await collectAllFromPath(path);
 			if (files.length === 0) { alert('No audio files found in this folder.'); return; }
-			loadTracks(files, path.length > 0 ? path[path.length - 1] : musicSettings.lastFolderName);
-			await startAudioAt(0);
+			loadTracks(files, folderLabel);
+			if (!(await startFirstPlayableTrack())) {
+				alert('No playable audio files were found in this folder.');
+			}
 		} catch (e) {
 			console.error('Failed to play folder:', e);
 			alert('Could not load the folder. Please try again.');
@@ -1958,7 +2207,10 @@
 		}
 		void (async () => {
 			try {
-				const [handle, cachedLibrary] = await Promise.all([loadHandleFromIDB(), loadCachedLibrary()]);
+				const [handle, cachedLibrary] = await Promise.all([
+					loadHandleFromIDB(),
+					loadDeviceCachedLibrary(musicSettings.nativeTreeUri || null, musicSettings.lastFolderName),
+				]);
 				if (cachedLibrary && cachedLibrary.files.length > 0) {
 					allFiles = restoreStoredFilesFromCache(cachedLibrary);
 					activateDeviceLibrary(cachedLibrary.folderName);
@@ -1997,6 +2249,13 @@
 			}
 		})();
 		});
+	});
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		const onRescan = () => { void rescanCurrentLibraryIndex(); };
+		window.addEventListener('music-library:rescan', onRescan);
+		return () => window.removeEventListener('music-library:rescan', onRescan);
 	});
 
 	$effect(() => { return () => { revokeAll(); audioCtx?.close(); }; });
