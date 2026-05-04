@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { env } from '$env/dynamic/public';
+	import { Capacitor } from '@capacitor/core';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { radioData, type RadioStation } from '$lib/stores/settings.svelte';
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
@@ -16,6 +18,14 @@
 	let searchResults = $state<RadioStation[]>([]);
 	let searching     = $state(false);
 	let searchError   = $state('');
+	const radioApiBaseUrl = (() => {
+		const configuredBaseUrl = env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
+		if (configuredBaseUrl) return configuredBaseUrl;
+		if (Capacitor.isNativePlatform()) {
+			return 'https://mobile-media-app-maverock24.netlify.app';
+		}
+		return '';
+	})();
 
 	// ── Register stop-callback with media engine ─────────────────
 	$effect(() => {
@@ -128,15 +138,47 @@
 		}
 	}
 
-	// ── Search (radio-browser.info public API) ───────────────────
-	// The API has multiple servers; pick one randomly to distribute load.
-	const RADIO_SERVERS = [
-		'https://de1.api.radio-browser.info',
-		'https://at1.api.radio-browser.info',
-		'https://nl1.api.radio-browser.info',
-	];
-	function radioApiBase() {
-		return RADIO_SERVERS[Math.floor(Math.random() * RADIO_SERVERS.length)] + '/json';
+	// ── Search (radio-browser.info via hosted proxy on Netlify/native) ─────
+	function resolveRadioApiUrl(path: string): string {
+		if (/^https?:\/\//i.test(path)) {
+			return path;
+		}
+
+		if (!radioApiBaseUrl) {
+			return path;
+		}
+
+		return `${radioApiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+	}
+
+	async function readRadioJson<T>(requestUrl: string): Promise<T> {
+		const response = await fetch(requestUrl);
+		if (!response.ok) {
+			let message = `Radio search failed: HTTP ${response.status}`;
+			try {
+				const payload = await response.json() as Record<string, unknown>;
+				if (typeof payload.error === 'string') {
+					message = payload.error;
+				} else if (typeof payload.message === 'string') {
+					message = payload.message;
+				}
+			} catch {
+				// Fall back to the status-derived message.
+			}
+			throw new Error(message);
+		}
+
+		return await response.json() as T;
+	}
+
+	function describeRadioRequestError(error: unknown, fallback: string): string {
+		if (error instanceof Error) {
+			if (/failed to fetch|fetch failed/i.test(error.message)) {
+				return fallback;
+			}
+			return error.message;
+		}
+		return fallback;
 	}
 
 	async function search() {
@@ -146,18 +188,8 @@
 		searchError = '';
 		searchResults = [];
 		try {
-			const params = new URLSearchParams({
-				name:       q,
-				limit:      '100',  // fetch more to compensate for HTTP-only stations being filtered out
-				order:      'votes',
-				reverse:    'true',
-				hidebroken: 'true',
-			});
-			const res = await fetch(`${radioApiBase()}/stations/search?${params}`, {
-				headers: { 'User-Agent': 'MediaHubApp/1.0' }
-			});
-			if (!res.ok) throw new Error(`Search failed: ${res.status}`);
-			const data = await res.json() as RadioStation[];
+			const requestUrl = resolveRadioApiUrl(`/api/radio/search?q=${encodeURIComponent(q)}`);
+			const data = await readRadioJson<RadioStation[]>(requestUrl);
 			// Filter to HTTPS-only streams — HTTP streams are blocked as mixed content
 			// when the app is served over HTTPS
 			const httpsOnly = data.filter(s => s.url_resolved?.startsWith('https://'));
@@ -167,8 +199,8 @@
 			} else if (!httpsOnly.length) {
 				searchError = 'No secure (HTTPS) streams found for this query. Try a different search term.';
 			}
-		} catch (e) {
-			searchError = e instanceof Error ? e.message : 'Search failed';
+		} catch (error) {
+			searchError = describeRadioRequestError(error, 'Radio search is unavailable right now. Try again.');
 		} finally {
 			searching = false;
 		}
@@ -203,7 +235,7 @@
 <div class="flex flex-col h-full bg-background/85">
 
 	<!-- ── Now Playing bar ──────────────────────────────────────── -->
-	{#if controlsOwnedByRadio}
+	{#if currentStation && controlsOwnedByRadio}
 		<div class="shrink-0 border-b bg-primary/5 px-4 py-3 flex items-center gap-3">
 			{#if currentStation.favicon}
 				<img src={currentStation.favicon} alt="" class="w-10 h-10 rounded-lg object-cover shrink-0" />

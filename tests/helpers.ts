@@ -21,7 +21,7 @@ export async function waitForHydration(page: Page): Promise<void> {
 	await page.waitForTimeout(300);
 }
 
-export async function goToTab(page: Page, label: 'Music' | 'Podcasts' | 'Essays' | 'Weather' | 'Settings') {
+export async function goToTab(page: Page, label: 'Music' | 'Podcasts' | 'Radio' | 'Essays' | 'Weather' | 'Settings') {
 	await waitForHydration(page);
 	const tab = page.getByRole('tab', { name: label, exact: true });
 	await tab.click();
