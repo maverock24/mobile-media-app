@@ -78,7 +78,9 @@
 	const LAST_LIBRARY_CACHE_KEY = 'last-library';
 	const BACKGROUND_LIBRARY_SCAN_BATCH_SIZE = 120;
 	const FOLDER_PLAY_SCAN_BATCH_SIZE = 48;
-	const FOLDER_PLAY_PRIME_COUNT = 6;
+	const FOLDER_PLAY_INITIAL_BATCH_SIZE = 1;
+	const FOLDER_PLAY_PRIME_COUNT = 1;
+	const FOLDER_PLAY_QUEUE_FLUSH_SIZE = 400;
 
 	function getStoredFileKey(source: StoredAudioFile): string {
 		if (source.source === 'drive') return `d:${source.fileId}`;
@@ -428,19 +430,22 @@
 		});
 	});
 
-	// ── register MediaSession skip handlers for Android Auto / lock-screen controls ──
-	$effect(() => {
-		// Guard: methods may not be accessible if the $state proxy wraps them
-		if (typeof mediaEngine.setCallbacks !== 'function') return;
-		mediaEngine.setCallbacks(
-			() => { void advanceTrack(isPlaying || isBuffering); },
-			() => { void prevTrack(); }
-		);
-		return () => {
-			if (typeof mediaEngine.setCallbacks === 'function')
-				mediaEngine.setCallbacks(null, null);
-		};
-	});
+	function claimMusicControls() {
+		if (typeof mediaEngine.setPlaybackHandlers === 'function') {
+			mediaEngine.setPlaybackHandlers(
+				() => { void togglePlay(); },
+				() => { void togglePlay(); },
+				(seconds) => { handleSeekSeconds(seconds); }
+			);
+		}
+
+		if (typeof mediaEngine.setCallbacks === 'function') {
+			mediaEngine.setCallbacks(
+				() => { void advanceTrack(isPlaying || isBuffering); },
+				() => { void prevTrack(); }
+			);
+		}
+	}
 
 	// MediaSession play/pause/seek handlers are managed by mediaEngine directly.
 
@@ -456,6 +461,7 @@
 			artworkUrl: undefined,
 			duration:   track.duration > 0 ? track.duration : undefined,
 		}, 'music');
+		claimMusicControls();
 	}
 
 	// ── reload browse entries when path or folder version changes ──
@@ -751,6 +757,7 @@
 	async function scanNativeAudioFiles(
 		path: string[],
 		batchSize: number,
+		options: { initialBatchSize?: number } = {},
 		onBatch?: (batch: StoredAudioFile[], state: { done: boolean; foldersScanned: number; foldersQueued: number; totalFiles: number }) => Promise<void> | void,
 	): Promise<StoredAudioFile[]> {
 		if (!nativeTreeUri) return [];
@@ -758,13 +765,18 @@
 		const collectedFiles: StoredAudioFile[] = [];
 		let scanCompleted = false;
 		let scanId = '';
+		let isFirstBatch = true;
 
 		try {
 			const startedScan = await DirectoryReader.startAudioScan({ treeUri: nativeTreeUri, path: pathToString(path) });
 			scanId = startedScan.scanId;
 
 			while (!scanCompleted) {
-				const batch = await DirectoryReader.getAudioScanBatch({ scanId, batchSize });
+				const effectiveBatchSize = isFirstBatch
+					? Math.max(1, options.initialBatchSize ?? batchSize)
+					: batchSize;
+				const batch = await DirectoryReader.getAudioScanBatch({ scanId, batchSize: effectiveBatchSize });
+				isFirstBatch = false;
 				const mappedBatch = batch.files.map((file) => createStoredNativeAudioFile(file));
 				if (mappedBatch.length > 0) {
 					collectedFiles.push(...mappedBatch);
@@ -1904,13 +1916,18 @@
 		let playbackStarted = false;
 		let hasResolvedStart = false;
 		let activePlaybackQueueSessionId = queueSessionId;
+		let queuedFileCount = 0;
 		let resolveStart: ((value: boolean) => void) | null = null;
 		const startPromise = new Promise<boolean>((resolve) => {
 			resolveStart = resolve;
 		});
 
 		const collectedFiles: StoredAudioFile[] = [];
-		void scanNativeAudioFiles(path, FOLDER_PLAY_SCAN_BATCH_SIZE, async (mappedBatch, state) => {
+		void scanNativeAudioFiles(
+			path,
+			FOLDER_PLAY_SCAN_BATCH_SIZE,
+			{ initialBatchSize: FOLDER_PLAY_INITIAL_BATCH_SIZE },
+			async (mappedBatch, state) => {
 			const mergedFiles = mergeStoredFiles(collectedFiles, mappedBatch);
 			if (mergedFiles.length === collectedFiles.length) return;
 			collectedFiles.splice(0, collectedFiles.length, ...mergedFiles);
@@ -1919,6 +1936,7 @@
 				if (collectedFiles.length < FOLDER_PLAY_PRIME_COUNT && !state.done) return;
 				loadTracks(collectedFiles, folderLabel);
 				activePlaybackQueueSessionId = queueSessionId;
+				queuedFileCount = collectedFiles.length;
 				playbackStarted = await startFirstPlayableTrack();
 				if (playbackStarted && !hasResolvedStart) {
 					hasResolvedStart = true;
@@ -1927,12 +1945,31 @@
 				return;
 			}
 
-			appendTracksToQueue(mappedBatch, folderLabel, activePlaybackQueueSessionId);
+			const pendingQueueGrowth = collectedFiles.length - queuedFileCount;
+			if (pendingQueueGrowth < FOLDER_PLAY_QUEUE_FLUSH_SIZE && !state.done) {
+				return;
+			}
+
+			appendTracksToQueue(
+				collectedFiles.slice(queuedFileCount),
+				folderLabel,
+				activePlaybackQueueSessionId
+			);
+			queuedFileCount = collectedFiles.length;
 		}).then(async () => {
 			if (!playbackStarted && collectedFiles.length > 0) {
 				loadTracks(collectedFiles, folderLabel);
 				activePlaybackQueueSessionId = queueSessionId;
+				queuedFileCount = collectedFiles.length;
 				playbackStarted = await startFirstPlayableTrack();
+			}
+			if (playbackStarted && collectedFiles.length > queuedFileCount) {
+				appendTracksToQueue(
+					collectedFiles.slice(queuedFileCount),
+					folderLabel,
+					activePlaybackQueueSessionId
+				);
+				queuedFileCount = collectedFiles.length;
 			}
 			if (path.length === 0 && collectedFiles.length > 0) {
 				allFiles = collectedFiles;

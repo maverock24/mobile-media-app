@@ -34,30 +34,19 @@
 		});
 	});
 
-	// ── Lock screen / Android Auto play/pause handlers ───────────
-	// Radio is a live stream — no seek or skip, just play/pause/stop.
-	$effect(() => {
-		if (typeof mediaEngine.setPlaybackHandlers !== 'function') return;
-		mediaEngine.setPlaybackHandlers(
-			() => { togglePlay(); },  // play
-			() => { togglePlay(); },  // pause / stop
-			null                      // no seek for live streams
-		);
-		return () => {
-			if (typeof mediaEngine.setPlaybackHandlers === 'function')
-				mediaEngine.setPlaybackHandlers(null, null, null);
-		};
-	});
+	function claimRadioControls() {
+		if (typeof mediaEngine.setPlaybackHandlers === 'function') {
+			mediaEngine.setPlaybackHandlers(
+				() => { togglePlay(); },
+				() => { togglePlay(); },
+				null
+			);
+		}
 
-	$effect(() => {
-		if (typeof mediaEngine.setSkipHandlers !== 'function') return;
-		// No next/prev for radio live streams
-		mediaEngine.setSkipHandlers(null, null);
-		return () => {
-			if (typeof mediaEngine.setSkipHandlers === 'function')
-				mediaEngine.setSkipHandlers(null, null);
-		};
-	});
+		if (typeof mediaEngine.setSkipHandlers === 'function') {
+			mediaEngine.setSkipHandlers(null, null);
+		}
+	}
 
 	// ── Audio element event wiring ───────────────────────────────
 	$effect(() => {
@@ -115,6 +104,7 @@
 			audioUrl:   station.url_resolved,
 			artworkUrl: station.favicon || undefined,
 		}, 'radio');
+		claimRadioControls();
 	}
 
 	function stopPlayback() {
@@ -226,56 +216,12 @@
 	}
 
 	let activeTab = $state<'favorites' | 'search'>('favorites');
-	const controlsOwnedByRadio = $derived(mediaEngine.source === 'radio' && !!currentStation);
 </script>
 
 <!-- Hidden audio element -->
 <audio bind:this={audioEl} preload="none"></audio>
 
 <div class="flex flex-col h-full bg-background/85">
-
-	<!-- ── Now Playing bar ──────────────────────────────────────── -->
-	{#if currentStation && controlsOwnedByRadio}
-		<div class="shrink-0 border-b bg-primary/5 px-4 py-3 flex items-center gap-3">
-			{#if currentStation.favicon}
-				<img src={currentStation.favicon} alt="" class="w-10 h-10 rounded-lg object-cover shrink-0" />
-			{:else}
-				<div class="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
-					<Radio class="w-5 h-5 text-primary" />
-				</div>
-			{/if}
-			<div class="flex-1 min-w-0">
-				<p class="text-sm font-semibold truncate">{currentStation.name}</p>
-				<p class="text-xs text-muted-foreground truncate">{stationMeta(currentStation)}</p>
-			</div>
-
-			{#if isBuffering}
-				<div class="w-10 h-10 flex items-center justify-center">
-					<Loader class="w-5 h-5 animate-spin text-primary" />
-				</div>
-			{:else}
-				<button
-					onclick={togglePlay}
-					class="w-10 h-10 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
-					aria-label={isPlaying ? 'Pause' : 'Play'}
-				>
-					{#if isPlaying}
-						<Pause class="w-5 h-5" />
-					{:else}
-						<Play class="w-5 h-5 ml-0.5" />
-					{/if}
-				</button>
-			{/if}
-
-			<button
-				onclick={stopPlayback}
-				class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-				aria-label="Stop"
-			>
-				<X class="w-5 h-5" />
-			</button>
-		</div>
-	{/if}
 
 	<!-- ── Tab bar ──────────────────────────────────────────────── -->
 	<div class="shrink-0 flex border-b">

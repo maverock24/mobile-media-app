@@ -1,5 +1,7 @@
 
 <script lang="ts">
+	import { env } from '$env/dynamic/public';
+	import { Capacitor } from '@capacitor/core';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
 	import Badge from '$lib/components/ui/Badge.svelte';
@@ -60,6 +62,15 @@
 	let episodesRefreshing = $state(false); // background refresh while episodes already shown
 	let episodesError      = $state<string | null>(null);
 	let hasRestoredSelectedPodcast = false;
+	const podcastApiBaseUrl = (() => {
+		const configuredBaseUrl = env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
+		if (configuredBaseUrl) return configuredBaseUrl;
+		if (Capacitor.isNativePlatform()) {
+			return 'https://mobile-media-app-maverock24.netlify.app';
+		}
+		return '';
+	})();
+	const useHostedPodcastProxy = podcastApiBaseUrl.length > 0;
 
 	// AbortController for in-flight loadEpisodes (TASK-2.1: prevents race conditions)
 	let episodeLoadController: AbortController | null = null;
@@ -80,31 +91,22 @@
 		});
 	});
 
-	// ── Lock screen / Android Auto play/pause/seek/skip handlers ──
-	$effect(() => {
-		if (typeof mediaEngine.setPlaybackHandlers !== 'function') return;
-		mediaEngine.setPlaybackHandlers(
-			() => { togglePlay(); },   // play
-			() => { togglePlay(); },   // pause
-			(pos) => { handleSeekSeconds(pos); } // seek
-		);
-		return () => {
-			if (typeof mediaEngine.setPlaybackHandlers === 'function')
-				mediaEngine.setPlaybackHandlers(null, null, null);
-		};
-	});
+	function claimPodcastControls() {
+		if (typeof mediaEngine.setPlaybackHandlers === 'function') {
+			mediaEngine.setPlaybackHandlers(
+				() => { togglePlay(); },
+				() => { togglePlay(); },
+				(pos) => { handleSeekSeconds(pos); }
+			);
+		}
 
-	$effect(() => {
-		if (typeof mediaEngine.setSkipHandlers !== 'function') return;
-		mediaEngine.setSkipHandlers(
-			() => { nextEpisode(); },
-			() => { prevEpisode(); }
-		);
-		return () => {
-			if (typeof mediaEngine.setSkipHandlers === 'function')
-				mediaEngine.setSkipHandlers(null, null);
-		};
-	});
+		if (typeof mediaEngine.setSkipHandlers === 'function') {
+			mediaEngine.setSkipHandlers(
+				() => { nextEpisode(); },
+				() => { prevEpisode(); }
+			);
+		}
+	}
 
 	// ── Audio element event wiring ───────────────────────────────
 	$effect(() => {
@@ -183,7 +185,49 @@
 	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
 	const rssCache = new Map<string, { data: unknown; ts: number }>();
-	async function fetchRss(feedUrl: string, signal?: AbortSignal): Promise<unknown> {
+	function resolvePodcastApiUrl(path: string): string {
+		if (/^https?:\/\//i.test(path)) {
+			return path;
+		}
+
+		if (!podcastApiBaseUrl) {
+			return path;
+		}
+
+		return `${podcastApiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+	}
+
+	async function readPodcastJson<T>(requestUrl: string, signal?: AbortSignal): Promise<T> {
+		const response = await fetch(requestUrl, { signal });
+		if (!response.ok) {
+			let message = `Podcast request failed: HTTP ${response.status}`;
+			try {
+				const payload = await response.json() as Record<string, unknown>;
+				if (typeof payload.error === 'string') {
+					message = payload.error;
+				} else if (typeof payload.message === 'string') {
+					message = payload.message;
+				}
+			} catch {
+				// Fall back to the status-derived message when the response has no JSON body.
+			}
+			throw new Error(message);
+		}
+
+		return await response.json() as T;
+	}
+
+	function describePodcastRequestError(error: unknown, fallback: string): string {
+		if (error instanceof Error) {
+			if (/failed to fetch|fetch failed/i.test(error.message)) {
+				return fallback;
+			}
+			return error.message;
+		}
+		return fallback;
+	}
+
+	async function fetchRss(feedUrl: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
 		// Validate that the feed URL is a legitimate HTTP(S) address
 		try {
 			const parsed = new URL(feedUrl);
@@ -195,9 +239,10 @@
 		}
 		const cached = rssCache.get(feedUrl);
 		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data;
-		const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`, { signal });
-		if (!res.ok) throw new Error(`RSS fetch failed: HTTP ${res.status}`);
-		const data = await res.json();
+		const requestUrl = useHostedPodcastProxy
+			? resolvePodcastApiUrl(`/api/podcast/feed?url=${encodeURIComponent(feedUrl)}`)
+			: `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`;
+		const data = await readPodcastJson<Record<string, unknown>>(requestUrl, signal);
 		if (data.status === 'ok') rssCache.set(feedUrl, { data, ts: Date.now() });
 		return data;
 	}
@@ -242,11 +287,10 @@
 		if (q.length < 2) { searchResults = []; return; }
 		searchLoading = true;
 		try {
-			const res = await fetch(
-				`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=podcast&entity=podcast&limit=20`
-			);
-			if (!res.ok) throw new Error(`iTunes search failed: HTTP ${res.status}`);
-			const data = await res.json();
+			const requestUrl = useHostedPodcastProxy
+				? resolvePodcastApiUrl(`/api/podcast/search?q=${encodeURIComponent(q)}`)
+				: `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=podcast&entity=podcast&limit=20`;
+			const data = await readPodcastJson<{ results?: ItunesResult[] }>(requestUrl);
 			searchResults = (data.results ?? []) as ItunesResult[];
 		} catch { searchResults = []; }
 		searchLoading = false;
@@ -335,12 +379,10 @@
 		try {
 			if (!podcast.feedUrl) {
 				// Resolve feedUrl via iTunes lookup (no &entity param — gets the podcast object)
-				const lu = await fetch(
-					`https://itunes.apple.com/lookup?id=${podcast.itunesId}`,
-					{ signal }
-				);
-				if (!lu.ok) throw new Error(`iTunes lookup failed: HTTP ${lu.status}`);
-				const luData = await lu.json();
+				const lookupUrl = useHostedPodcastProxy
+					? resolvePodcastApiUrl(`/api/podcast/lookup?id=${podcast.itunesId}`)
+					: `https://itunes.apple.com/lookup?id=${podcast.itunesId}`;
+				const luData = await readPodcastJson<{ results?: Array<Record<string, unknown>> }>(lookupUrl, signal);
 				const r = luData.results?.[0];
 				if (!r?.feedUrl) {
 					episodesError = 'No RSS feed available for this podcast.';
@@ -395,7 +437,7 @@
 		} catch (e: unknown) {
 			// Ignore aborted requests (TASK-2.1: user navigated away or new load started)
 			if (signal.aborted) return;
-			const msg = e instanceof Error ? e.message : 'Failed to load episodes.';
+			const msg = describePodcastRequestError(e, 'Unable to load this podcast right now. Please try again.');
 			// Suppress errors on background refresh — episodes already shown
 			if (!force || !podcast.episodesLoaded) {
 				episodesError = msg;
@@ -458,6 +500,7 @@
 			artworkUrl: podcast.artworkUrl,
 			duration:   episode.duration
 		}, 'podcast');
+		claimPodcastControls();
 	}
 
 	function playEpisode(podcast: Podcast, episode: Episode) {
@@ -602,6 +645,7 @@
 			artworkUrl: pod.artworkUrl,
 			duration:   ep.duration,
 		}, 'podcast');
+		claimPodcastControls();
 		mediaEngine.updateTime(resumeAt, ep.duration);
 		mediaEngine.setPlaying(false);
 	});

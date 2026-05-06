@@ -174,6 +174,43 @@ test.describe('MP3 Player view', () => {
 		await expect(page.getByText('Track One').first()).toBeVisible();
 	});
 
+	test('keeps the bottom mini-player visible on the Music tab while playing', async ({ page }) => {
+		const [fc] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fc.setFiles(tmpDir);
+
+		await page.getByText('Track One').first().click({ timeout: 5000 });
+		await page.waitForTimeout(300);
+
+		await expect(page.getByRole('region', { name: /Mini player/i })).toBeVisible();
+	});
+
+	test('bottom mini-player play button does not switch away from the current tab', async ({ page }) => {
+		const [fc] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fc.setFiles(tmpDir);
+
+		await page.getByText('Track One').first().click({ timeout: 5000 });
+		await page.waitForTimeout(300);
+		await goToTab(page, 'Settings');
+
+		const miniPlayer = page.getByRole('region', { name: /Mini player/i });
+		await expect(miniPlayer).toBeVisible();
+		await miniPlayer.getByRole('button', { name: /Play|Pause/i }).click();
+
+		await expect(page.getByRole('tab', { name: 'Settings', exact: true })).toHaveAttribute('aria-selected', 'true');
+	});
+
 	test('speed panel opens and shows speed options', async ({ page }) => {
 		const [fc] = await Promise.all([
 			page.waitForEvent('filechooser'),

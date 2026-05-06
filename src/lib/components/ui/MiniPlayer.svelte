@@ -3,7 +3,7 @@
 	import { Play, Pause } from 'lucide-svelte';
 
 	interface Props {
-		/** The tab that currently owns playback — hide mini-player when user is on that tab */
+		/** The currently selected tab. */
 		activeTab: string;
 		/** Clicking the bar body navigates back to the owning tab */
 		onNavigateTo?: (tab: string) => void;
@@ -21,8 +21,7 @@
 
 	const visible = $derived(
 		mediaEngine.item !== null &&
-		ownerTab !== null &&
-		ownerTab !== activeTab
+		ownerTab !== null
 	);
 
 	const progress = $derived(
@@ -30,6 +29,15 @@
 			? (mediaEngine.currentTime / mediaEngine.duration) * 100
 			: 0
 	);
+
+	function togglePlayback() {
+		if (mediaEngine.isPlaying) {
+			mediaEngine._onPause?.() ?? mediaEngine.pause();
+			return;
+		}
+
+		mediaEngine._onPlay?.() ?? mediaEngine.resume();
+	}
 </script>
 
 {#if visible}
@@ -68,7 +76,7 @@
 			<!-- Play/Pause — this wires to the active view's audio via mediaSession or user tap -->
 			<button
 				class="w-10 h-10 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors shrink-0"
-				onclick={() => ownerTab && onNavigateTo?.(ownerTab)}
+				onclick={togglePlayback}
 				aria-label={mediaEngine.isPlaying ? 'Pause' : 'Play'}
 			>
 				{#if mediaEngine.isPlaying}

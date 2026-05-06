@@ -113,7 +113,7 @@
 		{/if}
 	</main>
 
-	<!-- Mini-player: shown when audio is playing but user is on a different tab -->
+	<!-- Mini-player: shown whenever music, podcast, or radio playback is active -->
 	<MiniPlayer {activeTab} onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
 
 	<!-- Toast notifications -->

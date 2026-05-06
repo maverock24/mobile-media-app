@@ -1,17 +1,17 @@
 import https from 'node:https';
-import { json, type RequestHandler, type ResponseInit } from '@sveltejs/kit';
+import { json, type RequestHandler } from '@sveltejs/kit';
 
 export const prerender = false;
 
 const RADIO_SERVERS = [
-	'https://de1.api.radio-browser.info',
-	'https://at1.api.radio-browser.info',
-	'https://nl1.api.radio-browser.info',
+	'https://all.api.radio-browser.info',
+	'https://de2.api.radio-browser.info',
 ];
 const DEFAULT_CACHE_CONTROL = 'public, max-age=300';
 
-function radioApiBase() {
-	return `${RADIO_SERVERS[Math.floor(Math.random() * RADIO_SERVERS.length)]}/json`;
+function radioApiBases(): string[] {
+	const startIndex = Math.floor(Math.random() * RADIO_SERVERS.length);
+	return RADIO_SERVERS.map((_, index) => `${RADIO_SERVERS[(startIndex + index) % RADIO_SERVERS.length]}/json`);
 }
 
 function buildHeaders(headers?: HeadersInit, cacheControl = DEFAULT_CACHE_CONTROL): Headers {
@@ -82,11 +82,17 @@ export const GET: RequestHandler = async ({ url }) => {
 		hidebroken: 'true',
 	});
 
-	try {
-		const payload = await readUpstreamJson(`${radioApiBase()}/stations/search?${params}`);
-		return radioJson(payload);
-	} catch (error) {
-		const message = error instanceof Error ? error.message : 'Radio search failed.';
-		return radioError(502, message);
+	let lastError: unknown = null;
+
+	for (const apiBase of radioApiBases()) {
+		try {
+			const payload = await readUpstreamJson(`${apiBase}/stations/search?${params}`);
+			return radioJson(payload);
+		} catch (error) {
+			lastError = error;
+		}
 	}
+
+	const message = lastError instanceof Error ? lastError.message : 'Radio search failed.';
+	return radioError(502, message);
 };
