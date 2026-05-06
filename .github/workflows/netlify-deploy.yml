@@ -180,10 +180,16 @@ jobs:
             exit 1
           fi
 
+          # Rebuild the web app so static/releases/android/ (APK + latest.json written
+          # in the previous step) gets copied into build/releases/android/ by SvelteKit.
+          # Without this, netlify deploy uploads the committed build/ which has no APK assets.
+          pnpm build
+
           DEPLOY_JSON=$(pnpm exec netlify deploy \
             --auth "$NETLIFY_AUTH_TOKEN" \
             --site "$NETLIFY_SITE_ID" \
             --prod \
+            --dir build \
             --context production \
             --message "Publish Android APK assets for ${PACKAGE_VERSION} (build ${ANDROID_VERSION_CODE})" \
             --timeout 15m \

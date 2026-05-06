@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { env } from '$env/dynamic/public';
-	import { Capacitor } from '@capacitor/core';
+	import { Capacitor, CapacitorHttp } from '@capacitor/core';
 	import { Filesystem, Directory } from '@capacitor/filesystem';
 	import { DirectoryReader } from '$lib/native/directory-reader';
 	import { onMount } from 'svelte';
@@ -77,27 +77,43 @@
 		releaseError = '';
 
 		try {
-			const response = await fetch(resolveReleaseUrl(`/releases/android/latest.json?ts=${Date.now()}`), {
-				cache: 'no-store'
-			});
+			const url = resolveReleaseUrl(`/releases/android/latest.json?ts=${Date.now()}`);
+			let release: AndroidReleaseInfo;
 
-			if (response.status === 404) {
-				androidRelease = null;
-				return;
+			if (Capacitor.isNativePlatform()) {
+				// Use CapacitorHttp on Android — plain fetch() from capacitor://localhost
+				// is unreliable for cross-origin requests in Capacitor 8's WebView.
+				const resp = await CapacitorHttp.get({ url });
+				if (resp.status === 404) {
+					androidRelease = null;
+					return;
+				}
+				if (resp.status !== 200) {
+					throw new Error(`Unable to load release info — server returned ${resp.status}`);
+				}
+				release = resp.data as AndroidReleaseInfo;
+			} else {
+				const response = await fetch(url, { cache: 'no-store' });
+				if (response.status === 404) {
+					androidRelease = null;
+					return;
+				}
+				if (!response.ok) {
+					throw new Error(`Unable to load the latest Android build (${response.status})`);
+				}
+				release = (await response.json()) as AndroidReleaseInfo;
 			}
 
-			if (!response.ok) {
-				throw new Error(`Unable to load the latest Android build (${response.status})`);
-			}
-
-			const release = (await response.json()) as AndroidReleaseInfo;
 			androidRelease = {
 				...release,
 				url: resolveReleaseUrl(release.url)
 			};
 		} catch (error) {
 			androidRelease = null;
-			releaseError = error instanceof Error ? error.message : 'Unable to load the latest Android build.';
+			const msg = error instanceof Error ? error.message : '';
+			releaseError = /failed to fetch|failed to connect|network/i.test(msg)
+				? 'Could not reach update server. Check your connection and try again.'
+				: (msg || 'Unable to load the latest Android build.');
 		} finally {
 			isCheckingRelease = false;
 		}
