@@ -9,7 +9,11 @@ const config = {
 		adapter: isMobileBuild
 			? staticAdapter({
 				pages: 'dist-mobile',
-				assets: 'dist-mobile'
+				assets: 'dist-mobile',
+				// The APK is a static bundle; server routes like /api/radio/search are
+				// intentionally unavailable there because native clients use the hosted
+				// Netlify origin for dynamic endpoints.
+				strict: false
 			})
 			: netlifyAdapter({
 				edge: false,
