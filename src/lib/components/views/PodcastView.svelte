@@ -5,7 +5,6 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
 	import Badge from '$lib/components/ui/Badge.svelte';
-	import PlayerControls from '$lib/components/PlayerControls.svelte';
 	import { podcastSettings, podcastData } from '$lib/stores/settings.svelte';
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
@@ -180,7 +179,6 @@
 
 	// ── Derived ─────────────────────────────────────────────────
 	const subscribedPodcasts = $derived(podcastData.podcasts.filter(p => p.subscribed));
-	const controlsOwnedByPodcast = $derived(mediaEngine.source === 'podcast' && !!currentEpisode);
 
 	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
@@ -941,38 +939,4 @@
 	</div>
 {/if}
 
-	<!-- ── Now Playing Bar ── -->
-	{#if controlsOwnedByPodcast && currentEpisode}
-		<div class="border-t bg-background shrink-0 pb-safe">
-			<!-- Track info row -->
-			<div class="flex items-center gap-3 px-4 pt-3 pb-1">
-				<div class="shrink-0">
-					{#if currentEpisode.podcast.artworkUrl}
-						<img src={currentEpisode.podcast.artworkUrl} alt="" class="w-10 h-10 rounded-xl object-cover" />
-					{:else}
-						<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-700 flex items-center justify-center">
-							<Mic2 class="w-5 h-5 text-white" />
-						</div>
-					{/if}
-				</div>
-				<div class="flex-1 min-w-0">
-					<p class="text-sm font-semibold truncate">{currentEpisode.episode.title}</p>
-					<p class="text-xs text-muted-foreground truncate">{currentEpisode.podcast.title}</p>
-				</div>
-			</div>
-			<div class="px-4 pb-3">
-				<PlayerControls
-					isPlaying={isPlaying}
-					isBuffering={isBuffering}
-					currentTime={currentTime}
-					duration={duration}
-					showTrackNav={true}
-					onPlayToggle={togglePlay}
-					onSeek={handleSeekSeconds}
-					onPrev={prevEpisode}
-					onNext={nextEpisode}
-				/>
-			</div>
-		</div>
-	{/if}
 </div>

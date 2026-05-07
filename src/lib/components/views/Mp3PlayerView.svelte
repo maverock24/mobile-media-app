@@ -4,7 +4,6 @@
 	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
 	import Input from '$lib/components/ui/Input.svelte';
-	import PlayerControls from '$lib/components/PlayerControls.svelte';
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
@@ -409,12 +408,8 @@
 
 	// ── derived ──
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
-	const controlsOwnedByMusic = $derived(mediaEngine.source === 'music' && !!currentTrack);
 
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
-	const progressPercent = $derived(
-		seekingValue !== null ? seekingValue : (duration > 0 ? (currentTime / duration) * 100 : 0)
-	);
 	const currentLibraryLabel = $derived(
 		musicSettings.librarySource === 'drive' ? 'Google Drive' : musicSettings.lastFolderName || 'Library'
 	);
@@ -2628,62 +2623,6 @@
 			{/if}
 		</div>
 
-		<!-- ─── Mini player bar ─── -->
-		{#if controlsOwnedByMusic && currentTrack}
-		<div class="border-t bg-background shrink-0 pb-safe">
-			<!-- Track info row – tap to expand full player -->
-			<div class="flex items-center gap-3 px-4 pt-3 pb-1">
-				<button class="flex items-center gap-3 flex-1 min-w-0 text-left" onclick={() => (showQueue = false)}>
-					<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-800 flex items-center justify-center shrink-0">
-						{#if isPlaying}
-							<span class="flex gap-0.5 items-end h-4">
-								<span class="w-0.5 rounded bg-white animate-[bar1_0.8s_ease-in-out_infinite]" style="height:55%"></span>
-								<span class="w-0.5 rounded bg-white animate-[bar2_0.8s_ease-in-out_infinite_0.2s]" style="height:100%"></span>
-								<span class="w-0.5 rounded bg-white animate-[bar1_0.8s_ease-in-out_infinite_0.4s]" style="height:40%"></span>
-							</span>
-						{:else}
-							<Music2 class="w-5 h-5 text-white" />
-						{/if}
-					</div>
-					<div class="flex-1 min-w-0">
-						<p class="text-sm font-semibold truncate">{currentTrack.title}</p>
-						<p class="text-xs text-muted-foreground truncate">{currentTrack.artist}</p>
-					</div>
-				</button>
-				<!-- Playback controls -->
-				<div class="flex items-center gap-2 shrink-0">
-					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={prevTrack} aria-label="Previous">
-						<SkipBack class="w-6 h-6" />
-					</button>
-					<button class="w-12 h-12 flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-md" onclick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
-						{#if isBuffering}
-							<div class="w-6 h-6 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"></div>
-						{:else if isPlaying}
-							<Pause class="w-6 h-6" />
-						{:else}
-							<Play class="w-6 h-6 ml-0.5" />
-						{/if}
-					</button>
-					<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground hover:text-foreground" onclick={() => advanceTrack(isPlaying || isBuffering, true)} aria-label="Next">
-						<SkipForward class="w-6 h-6" />
-					</button>
-				</div>
-			</div>
-			<!-- Seek slider + times -->
-			<div class="px-4 pb-3 space-y-0.5">
-				<input
-					type="range" min="0" max="100" value={progressPercent}
-					oninput={handleSeekInput}
-					onchange={handleSeekCommit}
-					class="w-full h-2 rounded-full appearance-none cursor-pointer bg-secondary accent-primary"
-				/>
-				<div class="flex justify-between text-[10px] text-muted-foreground">
-					<span>{formatTime(currentTime)}</span>
-					<span>{formatTime(duration)}</span>
-				</div>
-			</div>
-		</div>
-		{/if}
 	</div>
 
 	<!-- ════════════════════════════════ PLAYER VIEW ════════════════════════════════ -->
@@ -2754,41 +2693,6 @@
 				class="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-secondary accent-primary" />
 		</div>
 	</div>
-
-	{#if controlsOwnedByMusic}
-	<div class="border-t bg-card/95 px-4 pt-3 pb-3 shrink-0 space-y-3">
-		<div class="flex items-center justify-between gap-3">
-			<Button variant="ghost" size="icon"
-				onclick={() => (musicSettings.isShuffle = !musicSettings.isShuffle)}
-				aria-label="Toggle shuffle"
-				title="Toggle shuffle"
-				class={musicSettings.isShuffle ? 'text-primary' : 'text-muted-foreground'}>
-				<Shuffle class="w-6 h-6" />
-			</Button>
-			<div class="text-[10px] text-muted-foreground tabular-nums text-center min-w-0 px-2">
-				{musicSettings.lastTrackIndex + 1} / {tracks.length}
-			</div>
-			<Button variant="ghost" size="icon"
-				onclick={() => (musicSettings.isRepeat = !musicSettings.isRepeat)}
-				aria-label="Toggle repeat"
-				title="Toggle repeat"
-				class={musicSettings.isRepeat ? 'text-primary' : 'text-muted-foreground'}>
-				<Repeat class="w-6 h-6" />
-			</Button>
-		</div>
-		<PlayerControls
-			isPlaying={isPlaying}
-			isBuffering={isBuffering}
-			currentTime={currentTime}
-			duration={duration}
-			showTrackNav={true}
-			onPlayToggle={togglePlay}
-			onSeek={handleSeekSeconds}
-			onPrev={prevTrack}
-			onNext={() => advanceTrack(isPlaying || isBuffering, true)}
-		/>
-	</div>
-	{/if}
 
 	<!-- Speed panel -->
 	{#if showPanel === 'speed'}
