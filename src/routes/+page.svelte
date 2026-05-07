@@ -8,6 +8,8 @@
 	import LoginView from '$lib/components/views/LoginView.svelte';
 	import MiniPlayer from '$lib/components/ui/MiniPlayer.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
+	import { initSleepTimer } from '$lib/stores/sleepTimer.svelte';
+	import { appSettings } from '$lib/stores/settings.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { Music, Mic2, Radio, Cloud, Settings2, User } from 'lucide-svelte';
@@ -15,6 +17,7 @@
 	type Tab = 'music' | 'podcasts' | 'radio' | 'login' | 'weather' | 'settings';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
 	const DEFAULT_TAB: Tab = 'music';
+	const DRIVE_MODE_TABS: Tab[] = ['music', 'podcasts', 'radio', 'settings'];
 
 	let activeTab = $state<Tab>(DEFAULT_TAB);
 
@@ -35,6 +38,7 @@
 
 	onMount(() => {
 		activeTab = readSavedTab();
+		initSleepTimer();
 	});
 
 	$effect(() => {
@@ -42,7 +46,26 @@
 		localStorage.setItem(NAVIGATION_STATE_KEY, JSON.stringify({ activeTab }));
 	});
 
+	$effect(() => {
+		if (typeof document === 'undefined') return;
+		document.body.classList.toggle('drive-mode', appSettings.driveMode);
+		document.documentElement.classList.toggle('drive-mode', appSettings.driveMode);
+		return () => {
+			document.body.classList.remove('drive-mode');
+			document.documentElement.classList.remove('drive-mode');
+		};
+	});
+
 	const tabs = $derived.by((): { id: Tab; label: string; icon: typeof Music }[] => {
+		if (appSettings.driveMode) {
+			return [
+				{ id: 'music', label: 'Music', icon: Music },
+				{ id: 'podcasts', label: 'Podcasts', icon: Mic2 },
+				{ id: 'radio', label: 'Radio', icon: Radio },
+				{ id: 'settings', label: 'Settings', icon: Settings2 }
+			];
+		}
+
 		const isDriveConnected = Boolean(googleDriveSession.user)
 			|| googleDriveSession.hasValidToken();
 
@@ -54,6 +77,13 @@
 			{ id: 'weather',  label: 'Weather',  icon: Cloud },
 			{ id: 'settings', label: 'Settings', icon: Settings2 }
 		];
+	});
+
+	$effect(() => {
+		if (!appSettings.driveMode) return;
+		if (!DRIVE_MODE_TABS.includes(activeTab)) {
+			activeTab = 'music';
+		}
 	});
 
 	// ── Swipe left/right to navigate between tabs ────────────────
@@ -77,7 +107,7 @@
 	}
 </script>
 
-<div class="flex flex-col h-dvh max-w-md mx-auto overflow-hidden relative" style="z-index:1;">
+<div class="drive-mode-shell flex flex-col h-dvh max-w-md mx-auto overflow-hidden relative" style="z-index:1;">
 	<!-- Content -->
 	<main class="flex-1 overflow-hidden relative"
 		ontouchstart={onTouchStart}

@@ -5,11 +5,20 @@
 	import { DirectoryReader } from '$lib/native/directory-reader';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
-	import { appSettings, musicSettings, podcastSettings, weatherSettings } from '$lib/stores/settings.svelte';
+	import { appSettings, musicSettings, podcastSettings, sleepTimerSettings, weatherSettings } from '$lib/stores/settings.svelte';
+	import {
+		sleepTimer,
+		SLEEP_TIMER_PRESETS,
+		setSleepTimer,
+		clearSleepTimer,
+		formatSleepTimerRemaining,
+	} from '$lib/stores/sleepTimer.svelte';
 	import {
 		Music2,
 		Mic2,
 		Cloud,
+		CarFront,
+		Moon,
 		Palette,
 		RotateCcw,
 		ChevronRight,
@@ -71,6 +80,12 @@
 	function toggle(section: string) {
 		expandedSection = expandedSection === section ? null : section;
 	}
+
+	const sleepTimerSummary = $derived(
+		sleepTimer.isActive
+			? `Stops in ${formatSleepTimerRemaining(sleepTimer.remainingMs)}`
+			: `Off · last ${sleepTimerSettings.lastDurationMin}m`
+	);
 
 	async function loadAndroidRelease() {
 		isCheckingRelease = true;
@@ -215,6 +230,7 @@
 		appSettings.fontSize = 'md';
 		appSettings.reducedMotion = false;
 		appSettings.hapticFeedback = true;
+		appSettings.driveMode = false;
 		// music
 		musicSettings.volume = 80;
 		musicSettings.isMuted = false;
@@ -237,6 +253,10 @@
 		podcastSettings.defaultTab = 'subscribed';
 		podcastSettings.markPlayedThreshold = 90;
 		podcastSettings.autoMarkPlayed = true;
+		// sleep timer
+		sleepTimerSettings.endsAt = 0;
+		sleepTimerSettings.lastDurationMin = 30;
+		clearSleepTimer({ silent: true });
 		// weather
 		weatherSettings.units = 'C';
 		weatherSettings.windUnit = 'kmh';
@@ -266,7 +286,7 @@
 				</div>
 				<div class="flex-1 min-w-0">
 					<p class="font-semibold">Appearance</p>
-					<p class="text-xs text-muted-foreground capitalize">{appSettings.theme} theme · {appSettings.fontSize} text</p>
+					<p class="text-xs text-muted-foreground capitalize">{appSettings.theme} theme · {appSettings.fontSize} text{appSettings.driveMode ? ' · drive mode on' : ''}</p>
 				</div>
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'app' ? 'rotate-90' : ''}" />
 			</button>
@@ -349,6 +369,69 @@
 								<span class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all {appSettings.hapticFeedback ? 'left-4' : 'left-0.5'}"></span>
 							</button>
 						</label>
+						<label class="flex items-center justify-between gap-3 rounded-xl border border-border/50 bg-background/40 px-3 py-3">
+							<div class="min-w-0">
+								<div class="flex items-center gap-2">
+									<CarFront class="w-4 h-4 text-primary shrink-0" />
+									<span class="text-sm font-medium">Drive Mode</span>
+								</div>
+								<p class="text-xs text-muted-foreground mt-1">Essential tabs only, larger text, higher contrast, and bigger media controls.</p>
+							</div>
+							<button
+								role="switch"
+								aria-label="Drive Mode"
+								aria-checked={appSettings.driveMode}
+								onclick={() => (appSettings.driveMode = !appSettings.driveMode)}
+								class="w-10 h-6 rounded-full transition-colors {appSettings.driveMode ? 'bg-primary' : 'bg-secondary'} relative shrink-0"
+							>
+								<span class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all {appSettings.driveMode ? 'left-4' : 'left-0.5'}"></span>
+							</button>
+						</label>
+					</div>
+				</div>
+			{/if}
+		</div>
+
+		<!-- ── Sleep Timer ───────────────────────────────────── -->
+		<div>
+			<button class="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent transition-colors" onclick={() => toggle('sleep-timer')}>
+				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-slate-700 flex items-center justify-center shrink-0">
+					<Moon class="w-5 h-5 text-white" />
+				</div>
+				<div class="flex-1 min-w-0">
+					<p class="font-semibold">Sleep Timer</p>
+					<p class="text-xs text-muted-foreground">{sleepTimerSummary}</p>
+				</div>
+				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'sleep-timer' ? 'rotate-90' : ''}" />
+			</button>
+			{#if expandedSection === 'sleep-timer'}
+				<div class="px-4 pb-4 space-y-4 bg-muted/20">
+					<p class="text-xs text-muted-foreground leading-relaxed">
+						Automatically pause music, podcasts, or radio after a preset duration. The timer keeps its target time across tab switches and app resume.
+					</p>
+
+					<div>
+						<p class="text-sm font-medium mb-2">Quick Presets</p>
+						<div class="flex flex-wrap gap-2">
+							{#each SLEEP_TIMER_PRESETS as minutes}
+								<button
+									class="px-3 py-1.5 rounded-lg text-xs border transition-colors {sleepTimer.isActive && sleepTimer.lastDurationMin === minutes ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
+									onclick={() => setSleepTimer(minutes)}
+								>
+									{minutes} minutes
+								</button>
+							{/each}
+						</div>
+					</div>
+
+					<div class="rounded-xl border border-border/60 bg-background/80 px-3 py-3 flex items-center justify-between gap-3">
+						<div>
+							<p class="text-sm font-medium">Current timer</p>
+							<p class="text-xs text-muted-foreground">{sleepTimerSummary}</p>
+						</div>
+						<Button variant="outline" class="gap-2 shrink-0" onclick={() => clearSleepTimer()} disabled={!sleepTimer.isActive}>
+							Off
+						</Button>
 					</div>
 				</div>
 			{/if}

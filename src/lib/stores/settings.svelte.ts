@@ -8,7 +8,16 @@ export const appSettings = persisted('app-settings', {
 	accentColor: 'slate' as 'slate' | 'blue' | 'violet' | 'rose' | 'orange' | 'green',
 	fontSize: 'md' as 'sm' | 'md' | 'lg',
 	reducedMotion: false,
-	hapticFeedback: true
+	hapticFeedback: true,
+	driveMode: false,
+});
+
+// ─────────────────────────────────────────────────────────────
+// Sleep timer settings
+// ─────────────────────────────────────────────────────────────
+export const sleepTimerSettings = persisted('sleep-timer-settings', {
+	endsAt: 0,
+	lastDurationMin: 30,
 });
 
 // ─────────────────────────────────────────────────────────────

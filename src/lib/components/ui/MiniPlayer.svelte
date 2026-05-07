@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
-	import { Play, Pause, SkipBack, SkipForward } from 'lucide-svelte';
+	import {
+		sleepTimer,
+		SLEEP_TIMER_PRESETS,
+		setSleepTimer,
+		clearSleepTimer,
+		formatSleepTimerRemaining,
+	} from '$lib/stores/sleepTimer.svelte';
+	import { Play, Pause, SkipBack, SkipForward, Moon, X } from 'lucide-svelte';
 
 	interface Props {
 		/** The currently selected tab. */
@@ -9,6 +16,7 @@
 		onNavigateTo?: (tab: string) => void;
 	}
 	let { activeTab, onNavigateTo }: Props = $props();
+	let showSleepTimerOptions = $state(false);
 
 	const ownerTab = $derived.by(() => {
 		switch (mediaEngine.source) {
@@ -33,6 +41,9 @@
 	const canSeek = $derived(mediaEngine.source === 'music' || mediaEngine.source === 'podcast');
 	const canSkipPrevious = $derived(mediaEngine._onPrev !== null);
 	const canSkipNext = $derived(mediaEngine._onNext !== null);
+	const sleepTimerLabel = $derived(
+		sleepTimer.isActive ? formatSleepTimerRemaining(sleepTimer.remainingMs) : 'Off'
+	);
 
 	function formatTime(seconds: number): string {
 		if (!seconds || seconds < 0) return '0:00';
@@ -69,15 +80,29 @@
 	function skipNext() {
 		mediaEngine._onNext?.() ?? mediaEngine.next();
 	}
+
+	function applySleepTimer(minutes: number) {
+		setSleepTimer(minutes);
+		showSleepTimerOptions = false;
+	}
+
+	function toggleSleepTimerOptions() {
+		showSleepTimerOptions = !showSleepTimerOptions;
+	}
+
+	function clearSleepTimerFromMiniPlayer() {
+		clearSleepTimer();
+		showSleepTimerOptions = false;
+	}
 </script>
 
 {#if visible}
 	<div
-		class="border-t bg-background/95 backdrop-blur-sm shrink-0"
+		class="mini-player-root border-t bg-background/95 backdrop-blur-sm shrink-0"
 		role="region"
 		aria-label="Mini player — {mediaEngine.item?.title}"
 	>
-		<div class="flex items-center gap-3 px-3 py-2">
+		<div class="mini-player-main flex items-center gap-3 px-3 py-2">
 			<!-- Artwork -->
 			{#if mediaEngine.item?.artworkUrl}
 				<img
@@ -95,14 +120,23 @@
 				onclick={() => ownerTab && onNavigateTo?.(ownerTab)}
 				aria-label="Return to {ownerTab} player"
 			>
-				<p class="text-sm font-semibold truncate">{mediaEngine.item?.title}</p>
-				<p class="text-xs text-muted-foreground truncate">{mediaEngine.item?.subtitle}</p>
+				<p class="mini-player-info-title text-sm font-semibold truncate">{mediaEngine.item?.title}</p>
+				<p class="mini-player-info-subtitle text-xs text-muted-foreground truncate">{mediaEngine.item?.subtitle}</p>
 			</button>
 
 			<div class="flex items-center gap-1 shrink-0">
+				<button
+					class="mini-player-action mini-player-sleep w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+					onclick={toggleSleepTimerOptions}
+					aria-label="Sleep timer"
+					title={sleepTimer.isActive ? `Sleep timer ${sleepTimerLabel}` : 'Set sleep timer'}
+				>
+					<Moon class="w-4 h-4 {sleepTimer.isActive ? 'text-primary' : ''}" />
+				</button>
+
 				{#if canSkipPrevious}
 					<button
-						class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+						class="mini-player-action w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
 						onclick={skipPrevious}
 						aria-label="Previous"
 					>
@@ -111,7 +145,7 @@
 				{/if}
 
 				<button
-					class="w-10 h-10 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
+					class="mini-player-action mini-player-primary w-10 h-10 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
 					onclick={togglePlayback}
 					aria-label={mediaEngine.isPlaying ? 'Pause' : 'Play'}
 				>
@@ -124,7 +158,7 @@
 
 				{#if canSkipNext}
 					<button
-						class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+						class="mini-player-action w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
 						onclick={skipNext}
 						aria-label="Next"
 					>
@@ -134,15 +168,46 @@
 			</div>
 		</div>
 
+		{#if sleepTimer.isActive || showSleepTimerOptions}
+			<div class="px-3 pb-2 space-y-2">
+				<div class="flex items-center justify-between text-[11px] text-muted-foreground">
+					<span>Sleep timer {sleepTimer.isActive ? `in ${sleepTimerLabel}` : 'off'}</span>
+					{#if sleepTimer.isActive}
+						<button
+							class="mini-player-chip inline-flex items-center gap-1 rounded-full px-2 py-1 hover:bg-accent transition-colors"
+							onclick={clearSleepTimerFromMiniPlayer}
+							aria-label="Clear sleep timer"
+						>
+							<X class="w-3 h-3" />
+							Off
+						</button>
+					{/if}
+				</div>
+
+				{#if showSleepTimerOptions}
+					<div class="flex flex-wrap gap-2">
+						{#each SLEEP_TIMER_PRESETS as minutes}
+							<button
+								class="mini-player-chip px-3 py-1.5 rounded-full text-xs border transition-colors {sleepTimer.isActive && sleepTimer.lastDurationMin === minutes ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
+								onclick={() => applySleepTimer(minutes)}
+							>
+								{minutes}m
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
+
 		{#if canSeek}
 			<div class="px-3 pb-2">
 				<input
+					class="mini-player-seek w-full h-2 rounded-full appearance-none cursor-pointer bg-muted accent-primary"
 					type="range"
 					min="0"
 					max="100"
 					value={progress}
 					oninput={handleSeekInput}
-					class="w-full h-2 rounded-full appearance-none cursor-pointer bg-muted accent-primary"
 					aria-label="Seek"
 					aria-valuenow={Math.round(progress)}
 				/>

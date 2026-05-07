@@ -52,6 +52,10 @@
     font-size: 110%;
   }
 
+  html.drive-mode {
+    font-size: 128%;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
@@ -92,6 +96,105 @@
 
   /* All direct children of body sit above the sky/aurora layers */
   body > * { position: relative; z-index: 1; }
+
+  body.drive-mode {
+    --color-background: hsl(220 35% 3%);
+    --color-foreground: hsl(0 0% 100%);
+    --color-card: hsl(220 28% 6%);
+    --color-card-foreground: hsl(0 0% 100%);
+    --color-popover: hsl(220 28% 6%);
+    --color-popover-foreground: hsl(0 0% 100%);
+    --color-primary: hsl(190 100% 60%);
+    --color-primary-foreground: hsl(220 35% 4%);
+    --color-secondary: hsl(220 20% 11%);
+    --color-secondary-foreground: hsl(0 0% 93%);
+    --color-muted: hsl(220 16% 9%);
+    --color-muted-foreground: hsl(0 0% 80%);
+    --color-accent: hsl(195 85% 18%);
+    --color-accent-foreground: hsl(190 100% 88%);
+    --color-border: hsl(0 0% 30%);
+    --color-input: hsl(0 0% 30%);
+    --color-ring: hsl(190 100% 70%);
+  }
+
+  body.drive-mode::before {
+    background:
+      radial-gradient(ellipse 85% 32% at 50% 0%, hsl(190 90% 20% / 0.35) 0%, transparent 60%),
+      linear-gradient(180deg, hsl(220 30% 5%) 0%, hsl(220 32% 2%) 100%);
+  }
+
+  body.drive-mode .aurora-canvas {
+    opacity: 0.2;
+  }
+
+  body.drive-mode .drive-mode-shell {
+    max-width: min(100vw, 34rem);
+  }
+
+  body.drive-mode .drive-mode-shell [role='tab'] {
+    min-height: 5.5rem;
+    gap: 0.45rem;
+  }
+
+  body.drive-mode .drive-mode-shell [role='tab'] svg {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  body.drive-mode .drive-mode-shell [role='tab'] span {
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+
+  body.drive-mode .mini-player-root {
+    border-top-width: 2px;
+  }
+
+  body.drive-mode .mini-player-main {
+    gap: 0.9rem;
+    padding: 0.9rem 1rem;
+  }
+
+  body.drive-mode .mini-player-info-title {
+    font-size: 1.05rem;
+    line-height: 1.25;
+  }
+
+  body.drive-mode .mini-player-info-subtitle {
+    font-size: 0.85rem;
+    line-height: 1.2;
+  }
+
+  body.drive-mode .mini-player-action {
+    width: 3.1rem;
+    height: 3.1rem;
+  }
+
+  body.drive-mode .mini-player-action svg {
+    width: 1.3rem;
+    height: 1.3rem;
+  }
+
+  body.drive-mode .mini-player-primary {
+    width: 3.8rem;
+    height: 3.8rem;
+  }
+
+  body.drive-mode .mini-player-primary svg {
+    width: 1.7rem;
+    height: 1.7rem;
+  }
+
+  body.drive-mode .mini-player-chip {
+    min-height: 2.5rem;
+    padding-inline: 0.9rem;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  body.drive-mode .mini-player-seek {
+    height: 0.8rem;
+  }
 }
 
 /* ── Scrollbar ── */
