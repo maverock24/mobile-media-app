@@ -96,10 +96,18 @@ jobs:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
-          NETLIFY_SITE_URL=$(curl -sf "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}" \
-            -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" | jq -r '.ssl_url // .url // empty')
+          NETLIFY_SITE_URL=""
+          if [[ -n "$NETLIFY_AUTH_TOKEN" && -n "$NETLIFY_SITE_ID" ]]; then
+            NETLIFY_SITE_URL=$(curl -sf "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}" \
+              -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" | jq -r '.ssl_url // .url // empty' || true)
+          fi
+
           echo "site_url=${NETLIFY_SITE_URL}" >> "$GITHUB_OUTPUT"
-          echo "Netlify site URL: ${NETLIFY_SITE_URL}"
+          if [[ -n "$NETLIFY_SITE_URL" ]]; then
+            echo "Netlify site URL: ${NETLIFY_SITE_URL}"
+          else
+            echo "Netlify site URL could not be resolved before deploy; will fall back to deploy metadata."
+          fi
 
       - name: Build Android APK
         env:
@@ -175,11 +183,6 @@ jobs:
           PUBLIC_BUILD_VERSION_CODE: ${{ github.run_number }}
           PUBLIC_RELEASE_BASE_URL: ${{ steps.netlify_meta.outputs.site_url }}
         run: |
-          if [[ -z "$NETLIFY_SITE_URL" ]]; then
-            echo "Netlify site URL is unavailable for deployment verification." >&2
-            exit 1
-          fi
-
           # Rebuild the web app so static/releases/android/ (APK + latest.json written
           # in the previous step) gets copied into build/releases/android/ by SvelteKit.
           # Without this, netlify deploy uploads the committed build/ which has no APK assets.
@@ -196,7 +199,21 @@ jobs:
             --json)
           echo "$DEPLOY_JSON" | jq .
 
-          LIVE_MANIFEST=$(curl -sf "${NETLIFY_SITE_URL}/releases/android/latest.json")
+          VERIFICATION_SITE_URL="$NETLIFY_SITE_URL"
+          if [[ -z "$VERIFICATION_SITE_URL" ]]; then
+            VERIFICATION_SITE_URL=$(echo "$DEPLOY_JSON" | jq -r '.deploy_ssl_url // .ssl_url // .deploy_url // .url // .site_url // empty')
+          fi
+          if [[ -z "$VERIFICATION_SITE_URL" ]]; then
+            VERIFICATION_SITE_URL=$(curl -sf "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}" \
+              -H "Authorization: Bearer ${NETLIFY_AUTH_TOKEN}" | jq -r '.ssl_url // .url // empty' || true)
+          fi
+          if [[ -z "$VERIFICATION_SITE_URL" ]]; then
+            echo "Could not determine Netlify site URL for deployment verification." >&2
+            exit 1
+          fi
+
+          echo "Verifying deployed manifest from ${VERIFICATION_SITE_URL}"
+          LIVE_MANIFEST=$(curl -sf "${VERIFICATION_SITE_URL}/releases/android/latest.json")
           LIVE_VERSION_CODE=$(echo "$LIVE_MANIFEST" | jq -r '.versionCode // empty')
 
           if [[ "$LIVE_VERSION_CODE" != "$ANDROID_VERSION_CODE" ]]; then
