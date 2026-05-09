@@ -59,6 +59,15 @@ test.describe('Settings view', () => {
 		await expect(page.getByRole('button', { name: 'Large' })).toBeVisible();
 	});
 
+	test('media controls position is selectable', async ({ page }) => {
+		await page.getByRole('button', { name: /^Appearance/ }).click();
+		await expect(page.getByText('Media Controls Position', { exact: true })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Top', exact: true })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Bottom', exact: true })).toBeVisible();
+		await page.getByRole('button', { name: 'Top', exact: true }).click();
+		await expect(page.getByRole('button', { name: 'Top', exact: true })).toHaveClass(/border-primary|text-primary/);
+	});
+
 	test('Reduced Motion toggle is switchable', async ({ page }) => {
 		await page.getByRole('button', { name: /^Appearance/ }).click();
 		const toggle = page.getByRole('switch', { name: 'Reduced Motion' });

@@ -267,7 +267,7 @@
 								</div>
 							{/if}
 							<button
-								class="flex-1 min-w-0 text-left"
+								class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left active:bg-accent/80"
 								onclick={() => playStation(station)}
 							>
 								<p class="text-sm font-medium truncate">{station.name}</p>
@@ -352,7 +352,7 @@
 									</div>
 								{/if}
 								<button
-									class="flex-1 min-w-0 text-left"
+									class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left active:bg-accent/80"
 									onclick={() => playStation(station)}
 								>
 									<p class="text-sm font-medium truncate">{station.name}</p>

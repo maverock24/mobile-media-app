@@ -102,16 +102,16 @@
 		role="region"
 		aria-label="Mini player — {mediaEngine.item?.title}"
 	>
-		<div class="mini-player-main flex items-center gap-3 px-3 py-2">
+		<div class="mini-player-main flex items-center gap-3 px-3 py-3">
 			<!-- Artwork -->
 			{#if mediaEngine.item?.artworkUrl}
 				<img
 					src={mediaEngine.item.artworkUrl}
 					alt=""
-					class="w-9 h-9 rounded-lg object-cover shrink-0"
+					class="w-11 h-11 rounded-xl object-cover shrink-0"
 				/>
 			{:else}
-				<div class="w-9 h-9 rounded-lg bg-muted shrink-0"></div>
+				<div class="w-11 h-11 rounded-xl bg-muted shrink-0"></div>
 			{/if}
 
 			<!-- Track info — tapping navigates back to the player -->
@@ -124,45 +124,45 @@
 				<p class="mini-player-info-subtitle text-xs text-muted-foreground truncate">{mediaEngine.item?.subtitle}</p>
 			</button>
 
-			<div class="flex items-center gap-1 shrink-0">
+			<div class="flex items-center gap-1.5 shrink-0">
 				<button
-					class="mini-player-action mini-player-sleep w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+					class="mini-player-action mini-player-sleep w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
 					onclick={toggleSleepTimerOptions}
 					aria-label="Sleep timer"
 					title={sleepTimer.isActive ? `Sleep timer ${sleepTimerLabel}` : 'Set sleep timer'}
 				>
-					<Moon class="w-4 h-4 {sleepTimer.isActive ? 'text-primary' : ''}" />
+					<Moon class="w-5 h-5 {sleepTimer.isActive ? 'text-primary' : ''}" />
 				</button>
 
 				{#if canSkipPrevious}
 					<button
-						class="mini-player-action w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+						class="mini-player-action w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
 						onclick={skipPrevious}
 						aria-label="Previous"
 					>
-						<SkipBack class="w-4 h-4" />
+						<SkipBack class="w-5 h-5" />
 					</button>
 				{/if}
 
 				<button
-					class="mini-player-action mini-player-primary w-10 h-10 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
+					class="mini-player-action mini-player-primary w-14 h-14 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
 					onclick={togglePlayback}
 					aria-label={mediaEngine.isPlaying ? 'Pause' : 'Play'}
 				>
 					{#if mediaEngine.isPlaying}
-						<Pause class="w-5 h-5" />
+						<Pause class="w-7 h-7" />
 					{:else}
-						<Play class="w-5 h-5 ml-0.5" />
+						<Play class="w-7 h-7 ml-1" />
 					{/if}
 				</button>
 
 				{#if canSkipNext}
 					<button
-						class="mini-player-action w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+						class="mini-player-action w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
 						onclick={skipNext}
 						aria-label="Next"
 					>
-						<SkipForward class="w-4 h-4" />
+						<SkipForward class="w-5 h-5" />
 					</button>
 				{/if}
 			</div>

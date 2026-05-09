@@ -74,6 +74,8 @@ export interface DriveConfigAppSettings {
 	fontSize: string;
 	reducedMotion: boolean;
 	hapticFeedback: boolean;
+	driveMode?: boolean;
+	mediaControlsPosition?: 'top' | 'bottom';
 }
 
 export interface DriveConfigWeatherSettings {

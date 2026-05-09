@@ -115,6 +115,41 @@ test.describe('MP3 Player view', () => {
 		await expect(page.getByText('Track Two').first()).toBeVisible();
 	});
 
+	test('long press selects tracks and loops only the selected files', async ({ page }) => {
+		const [fileChooser] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fileChooser.setFiles(tmpDir);
+		await expect(page.getByText('Track Two').first()).toBeVisible({ timeout: 5000 });
+
+		const trackTwo = page.getByRole('button', { name: /Track Two/i }).first();
+		const trackThree = page.getByRole('button', { name: /Track Three/i }).first();
+
+		await trackTwo.dispatchEvent('pointerdown', { button: 0, pointerType: 'touch' });
+		await page.waitForTimeout(550);
+		await trackTwo.dispatchEvent('pointerup', { button: 0, pointerType: 'touch' });
+
+		await expect(trackTwo).toHaveAttribute('aria-pressed', 'true');
+		await trackThree.click();
+		await expect(trackThree).toHaveAttribute('aria-pressed', 'true');
+		await expect(page.getByText('2 selected')).toBeVisible();
+
+		await page.getByRole('button', { name: /Loop/i }).click();
+		const miniPlayer = page.getByRole('region', { name: /Mini player/i });
+		await expect(miniPlayer).toContainText(/Track Two/i, { timeout: 5000 });
+
+		const audio = page.locator('audio').first();
+		await audio.dispatchEvent('ended');
+		await expect(miniPlayer).toContainText(/Track Three/i, { timeout: 5000 });
+
+		await audio.dispatchEvent('ended');
+		await expect(miniPlayer).toContainText(/Track Two/i, { timeout: 5000 });
+	});
+
 	test('restores the selected library after a page reload', async ({ page }) => {
 		const [fileChooser] = await Promise.all([
 			page.waitForEvent('filechooser'),
@@ -130,6 +165,37 @@ test.describe('MP3 Player view', () => {
 		await goToTab(page, 'Music');
 		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 5000 });
 		await expect(page.getByText('Track Two').first()).toBeVisible();
+	});
+
+	test('does not persist mp3 playback positions after pausing', async ({ page }) => {
+		const [fileChooser] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fileChooser.setFiles(tmpDir);
+
+		await page.getByText('Track One').first().click({ timeout: 5000 });
+		await page.waitForTimeout(300);
+
+		await page.evaluate(() => {
+			const audio = document.querySelector('audio');
+			if (!audio) throw new Error('audio element not found');
+			audio.currentTime = 42;
+			audio.dispatchEvent(new Event('pause'));
+		});
+
+		await page.reload();
+
+		const persistedState = await page.evaluate(() => ({
+			music: JSON.parse(localStorage.getItem('music-settings') || '{}'),
+			positions: JSON.parse(localStorage.getItem('mp3-track-positions') || '{"positions":{}}')
+		}));
+
+		expect(persistedState.music.lastTrackTimestamp ?? 0).toBe(0);
+		expect(persistedState.positions.positions ?? {}).toEqual({});
 	});
 
 	// ── Controls ───────────────────────────────────────────────────────────

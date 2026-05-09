@@ -108,6 +108,10 @@
 </script>
 
 <div class="drive-mode-shell flex flex-col h-dvh max-w-md mx-auto overflow-hidden relative" style="z-index:1;">
+	{#if appSettings.mediaControlsPosition === 'top'}
+		<MiniPlayer {activeTab} onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
+	{/if}
+
 	<!-- Content -->
 	<main class="flex-1 overflow-hidden relative"
 		ontouchstart={onTouchStart}
@@ -144,7 +148,9 @@
 	</main>
 
 	<!-- Mini-player: shown whenever music, podcast, or radio playback is active -->
-	<MiniPlayer {activeTab} onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
+	{#if appSettings.mediaControlsPosition !== 'top'}
+		<MiniPlayer {activeTab} onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
+	{/if}
 
 	<!-- Toast notifications -->
 	<ToastContainer />

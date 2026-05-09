@@ -725,7 +725,7 @@
 			{:else}
 				{#each selectedPodcast.episodes as episode}
 					<div
-						class="p-4 border-b hover:bg-accent/40 transition-colors cursor-pointer"
+						class="tap-feedback p-4 border-b hover:bg-accent/40 active:bg-accent/60 transition-colors cursor-pointer"
 						role="button"
 						tabindex="0"
 						onclick={() => selectedPodcast && activateEpisode(selectedPodcast, episode)}
@@ -766,7 +766,7 @@
 							</div>
 							<Button
 								size="icon" variant={currentEpisode?.episode.id === episode.id && (isPlaying || isBuffering) ? 'default' : 'outline'}
-								class="shrink-0 w-9 h-9 rounded-full"
+								class="shrink-0 w-11 h-11 rounded-full"
 								onclick={(event) => {
 									event.stopPropagation();
 									if (selectedPodcast) {
@@ -775,11 +775,11 @@
 								}}
 							>
 								{#if currentEpisode?.episode.id === episode.id && isBuffering}
-									<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+									<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
 								{:else if currentEpisode?.episode.id === episode.id && isPlaying}
-									<Pause class="w-4 h-4" />
+									<Pause class="w-5 h-5" />
 								{:else}
-									<Play class="w-4 h-4 ml-0.5" />
+									<Play class="w-5 h-5 ml-0.5" />
 								{/if}
 							</Button>
 						</div>
@@ -794,9 +794,6 @@
 	<div class="flex flex-col flex-1 min-h-0">
 		<!-- Search & Tabs header -->
 		<div class="p-4 border-b space-y-3 shrink-0">
-			<h1 class="text-xl font-bold flex items-center gap-2">
-				<Mic2 class="w-6 h-6" /> Podcasts
-			</h1>
 			<div class="relative">
 				<Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
 				<input
@@ -833,7 +830,7 @@
 				<!-- ── Subscribed List ── -->
 				{#each subscribedPodcasts as podcast}
 					{@const artGradient = artworkFallback(podcast)}
-					<div class="flex items-center gap-3 p-4 border-b hover:bg-accent/40 transition-colors cursor-pointer"
+					<div class="tap-feedback flex items-center gap-3 p-4 border-b hover:bg-accent/40 active:bg-accent/60 transition-colors cursor-pointer"
 						role="button" tabindex="0"
 						onclick={() => openPodcast(podcast)}
 						onkeydown={(e) => e.key === 'Enter' && openPodcast(podcast)}
@@ -888,7 +885,7 @@
 					{#each searchResults as item}
 						{@const subscribed = isSubscribed(item.trackId)}
 						{@const localPodcast = podcastData.podcasts.find(p => p.itunesId === item.trackId)}
-						<div class="flex items-center gap-3 p-4 border-b hover:bg-accent/40 transition-colors cursor-pointer"
+						<div class="tap-feedback flex items-center gap-3 p-4 border-b hover:bg-accent/40 active:bg-accent/60 transition-colors cursor-pointer"
 							role="button" tabindex="0"
 							onclick={() => localPodcast && openPodcast(localPodcast)}
 							onkeydown={(e) => e.key === 'Enter' && localPodcast && openPodcast(localPodcast)}

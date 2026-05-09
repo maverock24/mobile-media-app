@@ -244,8 +244,7 @@
 
 	<!-- ── Header ──────────────────────────────────────────────── -->
 	<div class="p-4 border-b space-y-3 shrink-0">
-		<div class="flex items-center justify-between">
-			<h1 class="text-xl font-bold">Weather</h1>
+		<div class="flex justify-end">
 			<div class="flex items-center gap-2">
 				<!-- °C / °F toggle -->
 				<div class="flex rounded-lg bg-muted overflow-hidden text-xs">
@@ -285,7 +284,7 @@
 						{#each geoResults as geo}
 							{@const alreadySaved = weatherSettings.savedCities.some(c => c.name === geo.name && c.lat.toFixed(2) === geo.latitude.toFixed(2))}
 							<button
-								class="w-full flex items-center gap-2 p-3 hover:bg-accent transition-colors text-left border-b last:border-0"
+								class="tap-feedback w-full flex items-center gap-2 p-3 hover:bg-accent active:bg-accent/80 transition-colors text-left border-b last:border-0"
 								onclick={() => addCity(geo)}
 								disabled={alreadySaved}
 							>

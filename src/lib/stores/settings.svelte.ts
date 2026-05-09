@@ -10,6 +10,7 @@ export const appSettings = persisted('app-settings', {
 	reducedMotion: false,
 	hapticFeedback: true,
 	driveMode: false,
+	mediaControlsPosition: 'bottom' as 'top' | 'bottom',
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -104,6 +105,10 @@ export const podcastData = persisted('podcast-data', {
 export const mp3TrackPositions = persisted('mp3-track-positions', {
 	positions: {} as Record<string, number>   // trackKey → seconds
 });
+
+if (Object.keys(mp3TrackPositions.positions).length > 0) {
+	mp3TrackPositions.positions = {};
+}
 
 // ─────────────────────────────────────────────────────────────
 // Weather settings  (v2 — cities now store lat/lon/timezone)

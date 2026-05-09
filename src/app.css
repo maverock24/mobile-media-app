@@ -197,6 +197,17 @@
   }
 }
 
+@layer components {
+  .tap-feedback {
+    transition: transform 140ms ease, background-color 140ms ease, color 140ms ease, opacity 140ms ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .tap-feedback:active {
+    transform: scale(0.985);
+  }
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }

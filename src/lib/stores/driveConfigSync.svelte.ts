@@ -23,7 +23,6 @@ import {
 	musicSettings,
 	podcastSettings,
 	podcastData,
-	mp3TrackPositions,
 	appSettings,
 	weatherSettings,
 } from '$lib/stores/settings.svelte';
@@ -202,14 +201,6 @@ class DriveConfigSync {
 			if (config.lastPodcastId   !== undefined) podcastData.lastPodcastId  = config.lastPodcastId;
 			if (config.lastPositionSec !== undefined) podcastData.lastPositionSec = config.lastPositionSec;
 
-			// Apply mp3 track positions (merge: Drive wins per-track)
-			if (config.mp3TrackPositions && typeof config.mp3TrackPositions === 'object') {
-				mp3TrackPositions.positions = {
-					...mp3TrackPositions.positions,
-					...config.mp3TrackPositions,
-				};
-			}
-
 			// Apply app settings
 			const as = config.appSettings;
 			if (as) {
@@ -218,6 +209,10 @@ class DriveConfigSync {
 				if (as.fontSize      !== undefined) appSettings.fontSize      = as.fontSize as typeof appSettings.fontSize;
 				if (as.reducedMotion !== undefined) appSettings.reducedMotion = as.reducedMotion;
 				if (as.hapticFeedback !== undefined) appSettings.hapticFeedback = as.hapticFeedback;
+				if (as.driveMode !== undefined) appSettings.driveMode = as.driveMode;
+				if (as.mediaControlsPosition !== undefined) {
+					appSettings.mediaControlsPosition = as.mediaControlsPosition as typeof appSettings.mediaControlsPosition;
+				}
 			}
 
 			// Apply weather settings
@@ -290,13 +285,15 @@ class DriveConfigSync {
 				podcastData.lastEpisodeId,
 				podcastData.lastPodcastId,
 				podcastData.lastPositionSec,
-				{ ...mp3TrackPositions.positions },
+				{},
 				{
 					theme:          appSettings.theme,
 					accentColor:    appSettings.accentColor,
 					fontSize:       appSettings.fontSize,
 					reducedMotion:  appSettings.reducedMotion,
 					hapticFeedback: appSettings.hapticFeedback,
+					driveMode:      appSettings.driveMode,
+					mediaControlsPosition: appSettings.mediaControlsPosition,
 				},
 				{
 					units:           weatherSettings.units,

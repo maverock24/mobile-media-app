@@ -231,6 +231,7 @@
 		appSettings.reducedMotion = false;
 		appSettings.hapticFeedback = true;
 		appSettings.driveMode = false;
+		appSettings.mediaControlsPosition = 'bottom';
 		// music
 		musicSettings.volume = 80;
 		musicSettings.isMuted = false;
@@ -270,23 +271,17 @@
 </script>
 
 <div class="flex flex-col h-full bg-background/85 overflow-y-auto">
-	<!-- Header -->
-	<div class="px-4 pt-5 pb-4 border-b">
-		<h1 class="text-xl font-bold">Settings</h1>
-		<p class="text-sm text-muted-foreground mt-0.5">Customize your experience</p>
-	</div>
-
 	<div class="flex-1 divide-y">
 
 		<!-- ── App / Appearance ──────────────────────────────── -->
 		<div>
-			<button class="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent transition-colors" onclick={() => toggle('app')}>
+			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('app')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-slate-400 to-slate-600 flex items-center justify-center shrink-0">
 					<Palette class="w-5 h-5 text-white" />
 				</div>
 				<div class="flex-1 min-w-0">
 					<p class="font-semibold">Appearance</p>
-					<p class="text-xs text-muted-foreground capitalize">{appSettings.theme} theme · {appSettings.fontSize} text{appSettings.driveMode ? ' · drive mode on' : ''}</p>
+					<p class="text-xs text-muted-foreground capitalize">{appSettings.theme} theme · {appSettings.fontSize} text · controls {appSettings.mediaControlsPosition}{appSettings.driveMode ? ' · drive mode on' : ''}</p>
 				</div>
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'app' ? 'rotate-90' : ''}" />
 			</button>
@@ -369,6 +364,23 @@
 								<span class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all {appSettings.hapticFeedback ? 'left-4' : 'left-0.5'}"></span>
 							</button>
 						</label>
+						<div class="rounded-xl border border-border/50 bg-background/40 px-3 py-3">
+							<p class="text-sm font-medium mb-1">Media Controls Position</p>
+							<p class="text-xs text-muted-foreground mb-3">Show the current media controls above the list or keep them below it.</p>
+							<div class="flex gap-2">
+								{#each [
+									{ id: 'top', label: 'Top' },
+									{ id: 'bottom', label: 'Bottom' }
+								] as option}
+									<button
+										class="flex-1 py-2 rounded-lg text-sm border transition-colors {appSettings.mediaControlsPosition === option.id ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
+										onclick={() => (appSettings.mediaControlsPosition = option.id as typeof appSettings.mediaControlsPosition)}
+									>
+										{option.label}
+									</button>
+								{/each}
+							</div>
+						</div>
 						<label class="flex items-center justify-between gap-3 rounded-xl border border-border/50 bg-background/40 px-3 py-3">
 							<div class="min-w-0">
 								<div class="flex items-center gap-2">
@@ -394,7 +406,7 @@
 
 		<!-- ── Sleep Timer ───────────────────────────────────── -->
 		<div>
-			<button class="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent transition-colors" onclick={() => toggle('sleep-timer')}>
+			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('sleep-timer')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-slate-700 flex items-center justify-center shrink-0">
 					<Moon class="w-5 h-5 text-white" />
 				</div>
@@ -439,7 +451,7 @@
 
 		<!-- ── Music ─────────────────────────────────────────── -->
 		<div>
-			<button class="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent transition-colors" onclick={() => toggle('music')}>
+			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('music')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center shrink-0">
 					<Music2 class="w-5 h-5 text-white" />
 				</div>
@@ -545,7 +557,7 @@
 
 		<!-- ── Podcasts ───────────────────────────────────────── -->
 		<div>
-			<button class="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent transition-colors" onclick={() => toggle('podcasts')}>
+			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('podcasts')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center shrink-0">
 					<Mic2 class="w-5 h-5 text-white" />
 				</div>
@@ -641,7 +653,7 @@
 
 		<!-- ── Weather ───────────────────────────────────────── -->
 		<div>
-			<button class="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent transition-colors" onclick={() => toggle('weather')}>
+			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('weather')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-blue-500 flex items-center justify-center shrink-0">
 					<Cloud class="w-5 h-5 text-white" />
 				</div>
@@ -714,7 +726,7 @@
 
 		<!-- ── App Updates ───────────────────────────────────── -->
 		<div>
-			<button class="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent transition-colors" onclick={() => toggle('updates')}>
+			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('updates')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center shrink-0">
 					<Smartphone class="w-5 h-5 text-white" />
 				</div>
@@ -859,7 +871,7 @@
 
 		<!-- ── Data ──────────────────────────────────────────── -->
 		<div>
-			<button class="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent transition-colors" onclick={() => toggle('data')}>
+			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('data')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
 					<Globe class="w-5 h-5 text-white" />
 				</div>
@@ -888,8 +900,4 @@
 
 	</div>
 
-	<!-- Version footer -->
-	<div class="p-4 text-center text-xs text-muted-foreground/50 border-t">
-		Mobile Media App · Settings auto-saved
-	</div>
 </div>
