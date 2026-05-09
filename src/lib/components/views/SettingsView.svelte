@@ -7,6 +7,11 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import { appSettings, musicSettings, podcastSettings, sleepTimerSettings, weatherSettings } from '$lib/stores/settings.svelte';
 	import {
+		clearStoredRuntimeError,
+		formatRuntimeErrorReport,
+		runtimeDiagnostics,
+	} from '$lib/stores/runtimeDiagnostics.svelte';
+	import {
 		sleepTimer,
 		SLEEP_TIMER_PRESETS,
 		setSleepTimer,
@@ -27,8 +32,10 @@
 		Smartphone,
 		Download,
 		RefreshCw,
+		Copy,
 		ExternalLink
 	} from 'lucide-svelte';
+	import { addToast } from '$lib/stores/toastStore.svelte';
 
 	type AndroidReleaseInfo = {
 		version: string;
@@ -86,6 +93,47 @@
 			? `Stops in ${formatSleepTimerRemaining(sleepTimer.remainingMs)}`
 			: `Off · last ${sleepTimerSettings.lastDurationMin}m`
 	);
+	const lastRuntimeErrorReport = $derived(
+		runtimeDiagnostics.lastRuntimeError
+			? formatRuntimeErrorReport(runtimeDiagnostics.lastRuntimeError)
+			: ''
+	);
+
+	function formatRuntimeErrorTimestamp(timestamp: number): string {
+		return new Date(timestamp).toLocaleString();
+	}
+
+	async function copyLastRuntimeError(): Promise<void> {
+		if (!runtimeDiagnostics.lastRuntimeError) return;
+
+		try {
+			if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+				await navigator.clipboard.writeText(lastRuntimeErrorReport);
+			} else if (typeof document !== 'undefined') {
+				const textarea = document.createElement('textarea');
+				textarea.value = lastRuntimeErrorReport;
+				textarea.setAttribute('readonly', 'true');
+				textarea.style.position = 'fixed';
+				textarea.style.opacity = '0';
+				document.body.appendChild(textarea);
+				textarea.select();
+				const copied = document.execCommand('copy');
+				document.body.removeChild(textarea);
+				if (!copied) throw new Error('Copy command failed');
+			} else {
+				throw new Error('Clipboard unavailable');
+			}
+
+			addToast({ message: 'Crash report copied.', type: 'info', autoDismissMs: 2500 });
+		} catch {
+			addToast({ message: 'Could not copy the crash report.', type: 'error' });
+		}
+	}
+
+	function clearLastRuntimeError(): void {
+		clearStoredRuntimeError();
+		addToast({ message: 'Stored crash report cleared.', type: 'info', autoDismissMs: 2500 });
+	}
 
 	async function loadAndroidRelease() {
 		isCheckingRelease = true;
@@ -886,6 +934,44 @@
 					<p class="text-xs text-muted-foreground leading-relaxed">
 						All settings are automatically saved to your browser's localStorage and restored on next visit. No data is sent to any server.
 					</p>
+					<div class="rounded-xl border border-border/60 bg-background/70 px-3 py-3 space-y-3">
+						<div class="flex items-start justify-between gap-3">
+							<div class="min-w-0">
+								<p class="text-sm font-medium">Last runtime error</p>
+								{#if runtimeDiagnostics.lastRuntimeError}
+									<p class="text-xs text-muted-foreground mt-1">
+										{formatRuntimeErrorTimestamp(runtimeDiagnostics.lastRuntimeError.recordedAt)}
+										· {runtimeDiagnostics.lastRuntimeError.source}
+										{#if runtimeDiagnostics.lastRuntimeError.activeTab}
+											· {runtimeDiagnostics.lastRuntimeError.activeTab}
+										{/if}
+									</p>
+								{:else}
+									<p class="text-xs text-muted-foreground mt-1">No stored runtime errors.</p>
+								{/if}
+							</div>
+							{#if runtimeDiagnostics.lastRuntimeError}
+								<div class="flex items-center gap-2 shrink-0">
+									<Button variant="outline" class="h-8 px-3 text-xs gap-1.5" onclick={copyLastRuntimeError}>
+										<Copy class="w-3.5 h-3.5" />
+										Copy report
+									</Button>
+									<Button variant="ghost" class="h-8 px-3 text-xs" onclick={clearLastRuntimeError}>
+										Clear
+									</Button>
+								</div>
+							{/if}
+						</div>
+
+						{#if runtimeDiagnostics.lastRuntimeError}
+							<div class="rounded-lg border border-border/60 bg-background/85 px-3 py-2 max-h-44 overflow-y-auto">
+								<pre class="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-foreground">{lastRuntimeErrorReport}</pre>
+							</div>
+							<p class="text-[11px] text-muted-foreground leading-relaxed">
+								Captures JavaScript runtime errors and unhandled promise rejections so you can copy them after reopening the app. Native Android process crashes still need device logs.
+							</p>
+						{/if}
+					</div>
 					<Button
 						variant="outline"
 						class="w-full gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"

@@ -12,9 +12,9 @@ test.describe('Settings view', () => {
 	});
 
 	// ── Structure ──────────────────────────────────────────────────────────
-	test('shows Settings heading and subtitle', async ({ page }) => {
-		await expect(page.getByText('Settings').first()).toBeVisible();
-		await expect(page.getByText('Customize your experience')).toBeVisible();
+	test('settings view no longer shows a page title', async ({ page }) => {
+		await expect(page.getByRole('heading', { name: 'Settings' })).toHaveCount(0);
+		await expect(page.getByText('Customize your experience')).toHaveCount(0);
 	});
 
 	test('shows all four section headers', async ({ page }) => {
@@ -29,6 +29,46 @@ test.describe('Settings view', () => {
 	test('shows Reset Settings button', async ({ page }) => {
 		await page.getByRole('button', { name: /^Data & Storage/ }).click();
 		await expect(page.getByRole('button', { name: /Reset.*Setting|Reset All/i })).toBeVisible();
+	});
+
+	test('shows and copies a stored runtime error report', async ({ page }) => {
+		await page.addInitScript(() => {
+			Object.defineProperty(navigator, 'clipboard', {
+				value: {
+					writeText: async (text: string) => {
+						(window as Window & { __copiedCrashReport?: string }).__copiedCrashReport = text;
+					}
+				},
+				configurable: true
+			});
+		});
+
+		await page.evaluate(() => {
+			localStorage.setItem('runtime-diagnostics', JSON.stringify({
+				lastRuntimeError: {
+					recordedAt: Date.UTC(2026, 4, 10, 12, 0, 0),
+					source: 'error',
+					message: 'Boom from previous session',
+					stack: 'Error: Boom from previous session\n    at test.ts:1:1',
+					details: 'test.ts:1:1',
+					href: 'http://127.0.0.1:4173/',
+					activeTab: 'music',
+					userAgent: 'Playwright'
+				}
+			}));
+		});
+		await page.reload();
+
+		await page.getByRole('button', { name: /^Data & Storage/ }).click();
+		await expect(page.getByText('Last runtime error', { exact: true })).toBeVisible();
+		await expect(page.getByText('Boom from previous session')).toBeVisible();
+
+		await page.getByRole('button', { name: 'Copy report' }).click();
+		await expect(page.getByText('Crash report copied.')).toBeVisible();
+
+		const copiedReport = await page.evaluate(() => (window as Window & { __copiedCrashReport?: string }).__copiedCrashReport || '');
+		expect(copiedReport).toContain('Boom from previous session');
+		expect(copiedReport).toContain('Source: error');
 	});
 
 	// ── Appearance section ─────────────────────────────────────────────────

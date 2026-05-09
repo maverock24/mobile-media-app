@@ -46,22 +46,20 @@ public class MediaControlsPlugin extends Plugin {
 	private boolean isPlaying = false;
 	private boolean hasNext = false;
 	private boolean hasPrevious = false;
+	private boolean playbackServiceRequested = false;
 
 	@Override
 	public void load() {
 		super.load();
 		instance = this;
-		startPlaybackService();
 	}
 
 	private void startPlaybackService() {
+		if (playbackService != null || playbackServiceRequested) return;
+		playbackServiceRequested = true;
 		Context context = getContext();
 		Intent intent = new Intent(context, MediaPlaybackService.class);
-		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-			context.startForegroundService(intent);
-		} else {
-			context.startService(intent);
-		}
+		context.startService(intent);
 		
 		// In a real production app, we'd use bindService to get the instance.
 		// For this MVP, we'll use a static setter in the service or just a singleton pattern.
@@ -71,6 +69,8 @@ public class MediaControlsPlugin extends Plugin {
 	public static void setServiceInstance(MediaPlaybackService service) {
 		if (instance != null) {
 			instance.playbackService = service;
+			instance.playbackServiceRequested = false;
+			instance.updateService();
 		}
 	}
 
@@ -179,7 +179,10 @@ public class MediaControlsPlugin extends Plugin {
 	}
 
 	private void updateService() {
-		if (playbackService == null) return;
+		if (playbackService == null) {
+			startPlaybackService();
+			return;
+		}
 
 		// 1. Update MediaSession Metadata
 		MediaMetadataCompat.Builder metaBuilder = new MediaMetadataCompat.Builder()

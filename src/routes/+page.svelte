@@ -10,12 +10,18 @@
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
 	import { initSleepTimer } from '$lib/stores/sleepTimer.svelte';
 	import { appSettings } from '$lib/stores/settings.svelte';
+	import {
+		runtimeDiagnostics,
+		recordUnhandledRejection,
+		recordWindowErrorEvent,
+	} from '$lib/stores/runtimeDiagnostics.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { Music, Mic2, Radio, Cloud, Settings2, User } from 'lucide-svelte';
 
 	type Tab = 'music' | 'podcasts' | 'radio' | 'login' | 'weather' | 'settings';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
+	const RUNTIME_ERROR_NOTICE_KEY = 'runtime-error-notice-shown';
 	const DEFAULT_TAB: Tab = 'music';
 	const DRIVE_MODE_TABS: Tab[] = ['music', 'podcasts', 'radio', 'settings'];
 
@@ -39,6 +45,30 @@
 	onMount(() => {
 		activeTab = readSavedTab();
 		initSleepTimer();
+
+		if (runtimeDiagnostics.lastRuntimeError && typeof sessionStorage !== 'undefined' && !sessionStorage.getItem(RUNTIME_ERROR_NOTICE_KEY)) {
+			addToast({
+				message: 'Previous runtime error saved in Settings > Data & Storage.',
+				type: 'warning',
+				autoDismissMs: 5000,
+			});
+			sessionStorage.setItem(RUNTIME_ERROR_NOTICE_KEY, '1');
+		}
+
+		const onWindowError = (event: ErrorEvent) => {
+			recordWindowErrorEvent(event, activeTab);
+		};
+		const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+			recordUnhandledRejection(event.reason, activeTab);
+		};
+
+		window.addEventListener('error', onWindowError);
+		window.addEventListener('unhandledrejection', onUnhandledRejection);
+
+		return () => {
+			window.removeEventListener('error', onWindowError);
+			window.removeEventListener('unhandledrejection', onUnhandledRejection);
+		};
 	});
 
 	$effect(() => {
