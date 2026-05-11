@@ -723,6 +723,7 @@
 			return;
 		}
 		cancelNetworkRetry(); // clear any pending retry for the previous episode
+		podcastSettings.playbackSpeed = 1.0; // reset speed for each new episode so the 1.5x button is off by default
 		claimAudio('podcast');
 		currentEpisode = { podcast, episode };
 		const resumeAt = getEpisodeResumePosition(episode);
