@@ -216,6 +216,20 @@
 	}
 
 	let activeTab = $state<'favorites' | 'search'>('favorites');
+
+	// ── Featured / well-known stations (HTTPS streams) ──────────
+	// Shown in the search tab before the user has searched.
+	// Stream URLs have been verified to use HTTPS so they work in the WebView.
+	const FEATURED_STATIONS: RadioStation[] = [
+		{ stationuuid: 'featured-bbc-radio4',         name: 'BBC Radio 4',         url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_radio_fourfm',          favicon: '', country: 'UK',  tags: 'news,speech,drama,bbc',       codec: 'MP3', bitrate: 128, votes: 0 },
+		{ stationuuid: 'featured-bbc-radio4-extra',   name: 'BBC Radio 4 Extra',   url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_radio_four_extra',      favicon: '', country: 'UK',  tags: 'comedy,drama,bbc',             codec: 'MP3', bitrate: 128, votes: 0 },
+		{ stationuuid: 'featured-bbc-world-service',  name: 'BBC World Service',   url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_world_service',         favicon: '', country: 'UK',  tags: 'news,world,bbc',               codec: 'MP3', bitrate: 128, votes: 0 },
+		{ stationuuid: 'featured-bbc-radio1',         name: 'BBC Radio 1',         url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_radio_one',             favicon: '', country: 'UK',  tags: 'pop,dance,bbc',                codec: 'MP3', bitrate: 128, votes: 0 },
+		{ stationuuid: 'featured-bbc-radio2',         name: 'BBC Radio 2',         url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_radio_two',             favicon: '', country: 'UK',  tags: 'pop,rock,bbc',                 codec: 'MP3', bitrate: 128, votes: 0 },
+		{ stationuuid: 'featured-bbc-radio6',         name: 'BBC Radio 6 Music',   url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_6music',                favicon: '', country: 'UK',  tags: 'indie,alternative,bbc',        codec: 'MP3', bitrate: 128, votes: 0 },
+		{ stationuuid: 'featured-bbc-radio3',         name: 'BBC Radio 3',         url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_radio_three',           favicon: '', country: 'UK',  tags: 'classical,jazz,bbc',           codec: 'MP3', bitrate: 128, votes: 0 },
+		{ stationuuid: 'featured-bbc-radio5',         name: 'BBC Radio 5 Live',    url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_radio_five_live',       favicon: '', country: 'UK',  tags: 'sport,news,bbc',               codec: 'MP3', bitrate: 128, votes: 0 },
+	];
 </script>
 
 <!-- Hidden audio element -->
@@ -336,9 +350,42 @@
 						<p class="text-sm">{searchError}</p>
 					</div>
 				{:else if searchResults.length === 0}
-					<div class="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground px-6 text-center">
-						<Radio class="w-10 h-10 opacity-30" />
-						<p class="text-sm">Search for your favorite radio stations by name.</p>
+					<div class="pb-2">
+						<p class="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">Featured Stations</p>
+						<ul class="divide-y">
+							{#each FEATURED_STATIONS as station (station.stationuuid)}
+								<li class="flex items-center gap-3 px-4 py-3 {currentStation?.stationuuid === station.stationuuid ? 'bg-primary/5' : ''}">
+									<div class="w-10 h-10 rounded-lg bg-muted flex items-center justify-center shrink-0">
+										<Radio class="w-5 h-5 text-muted-foreground" />
+									</div>
+									<button
+										class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left active:bg-accent/80"
+										onclick={() => playStation(station)}
+									>
+										<p class="text-sm font-medium truncate">{station.name}</p>
+										<p class="text-xs text-muted-foreground truncate">{station.country} · {station.tags.split(',')[0]}</p>
+									</button>
+									{#if currentStation?.stationuuid === station.stationuuid && isBuffering}
+										<Loader class="w-5 h-5 animate-spin text-primary shrink-0" />
+									{:else if currentStation?.stationuuid === station.stationuuid && isPlaying}
+										<div class="flex gap-0.5 items-end h-5 shrink-0">
+											{#each [3, 5, 4] as h}
+												<div class="w-1 bg-primary rounded-full animate-pulse" style="height:{h * 4}px"></div>
+											{/each}
+										</div>
+									{/if}
+									<button
+										onclick={() => toggleFavorite(station)}
+										class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent transition-colors shrink-0
+											{isFavorite(station) ? 'text-yellow-500' : 'text-muted-foreground hover:text-yellow-500'}"
+										aria-label={isFavorite(station) ? 'Remove from favorites' : 'Add to favorites'}
+									>
+										<Star class="w-5 h-5 {isFavorite(station) ? 'fill-yellow-500' : ''}" />
+									</button>
+								</li>
+							{/each}
+						</ul>
+						<p class="px-4 pt-3 text-xs text-muted-foreground text-center">Or search above for any station by name.</p>
 					</div>
 				{:else}
 					<ul class="divide-y">
