@@ -59,6 +59,9 @@
 	let searchLoading      = $state(false);
 	let episodesLoading    = $state(false);
 	let episodesRefreshing = $state(false); // background refresh while episodes already shown
+	let isRefreshingAll    = $state(false); // pull-to-refresh: background refresh of all subscribed
+	let pullDistance       = $state(0);     // pull-to-refresh: current drag distance (px)
+	let listScrollEl       = $state<HTMLElement | null>(null);
 	let episodesError      = $state<string | null>(null);
 	let hasRestoredSelectedPodcast = false;
 	const podcastApiBaseUrl = (() => {
@@ -175,6 +178,49 @@
 		void podcastData.lastEpisodeId;
 		void podcastData.lastPositionSec;
 		driveConfigSync.scheduleSave();
+	});
+
+	// ── Pull-to-refresh: non-passive touchmove so we can call preventDefault ──
+	const PULL_THRESHOLD = 64;
+	$effect(() => {
+		const el = listScrollEl;
+		if (!el) return;
+		let _startY = 0;
+		let _active = false;
+
+		function onTouchStart(e: TouchEvent) {
+			if ((el as HTMLElement).scrollTop === 0) {
+				_active = true;
+				_startY = e.touches[0].clientY;
+			}
+		}
+		function onTouchMove(e: TouchEvent) {
+			if (!_active) return;
+			const dy = e.touches[0].clientY - _startY;
+			if (dy > 0) {
+				pullDistance = Math.min(dy * 0.45, PULL_THRESHOLD + 20);
+				e.preventDefault();
+			} else {
+				_active = false;
+				pullDistance = 0;
+			}
+		}
+		function onTouchEnd() {
+			if (!_active) return;
+			const triggered = pullDistance >= PULL_THRESHOLD;
+			_active = false;
+			pullDistance = 0;
+			if (triggered) void refreshAllSubscribed();
+		}
+
+		el.addEventListener('touchstart', onTouchStart, { passive: true });
+		el.addEventListener('touchmove',  onTouchMove,  { passive: false });
+		el.addEventListener('touchend',   onTouchEnd,   { passive: true });
+		return () => {
+			el.removeEventListener('touchstart', onTouchStart);
+			el.removeEventListener('touchmove',  onTouchMove);
+			el.removeEventListener('touchend',   onTouchEnd);
+		};
 	});
 
 	// ── Derived ─────────────────────────────────────────────────
@@ -354,6 +400,78 @@
 	function deletePodcast(id: number) {
 		podcastData.podcasts = podcastData.podcasts.filter(p => p.id !== id);
 		if (selectedPodcast?.id === id) selectedPodcast = null;
+	}
+
+	// ── Background refresh for all subscribed podcasts (pull-to-refresh) ──────
+	async function refreshPodcastSilent(podcast: Podcast): Promise<void> {
+		const controller = new AbortController();
+		const signal = controller.signal;
+		try {
+			let p = podcast;
+			if (!p.feedUrl) {
+				const lookupUrl = useHostedPodcastProxy
+					? resolvePodcastApiUrl(`/api/podcast/lookup?id=${p.itunesId}`)
+					: `https://itunes.apple.com/lookup?id=${p.itunesId}`;
+				const luData = await readPodcastJson<{ results?: Array<Record<string, unknown>> }>(lookupUrl, signal);
+				const r = luData.results?.[0];
+				const resolvedFeedUrl = typeof r?.feedUrl === 'string' ? r.feedUrl : '';
+				if (!resolvedFeedUrl) return;
+				p = { ...p, feedUrl: resolvedFeedUrl };
+				podcastData.podcasts = podcastData.podcasts.map(pd => pd.id === p.id ? p : pd);
+			}
+			rssCache.delete(p.feedUrl);
+			const data = await fetchRss(p.feedUrl, signal);
+			if (data.status !== 'ok') return;
+			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map(
+				(item: Record<string, unknown>, i: number) => {
+					const enc = item.enclosure as { link?: string } | null;
+					const rawDur = item.itunes_duration ?? item.duration ?? 0;
+					return {
+						id:          `${p.itunesId}-${i}`,
+						title:       String(item.title ?? 'Untitled'),
+						description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
+						duration:    parseDuration(rawDur as string | number),
+						positionSec: 0,
+						publishedAt: String(item.pubDate ?? ''),
+						played:      false,
+						progress:    0,
+						audioUrl:    enc?.link ?? (String(item.link ?? '').match(/\.(mp3|m4a|ogg|aac|wav|flac)(\?|$)/i) ? String(item.link) : ''),
+					};
+				}
+			);
+			const existingMap = new Map(
+				(podcastData.podcasts.find(pd => pd.id === p.id)?.episodes ?? []).map(e => [e.id, e])
+			);
+			const mergedEps = eps.map(ep => {
+				const existing = existingMap.get(ep.id);
+				return existing
+					? { ...ep, played: existing.played, progress: existing.progress, positionSec: existing.positionSec }
+					: ep;
+			});
+			podcastData.podcasts = podcastData.podcasts.map(pd =>
+				pd.id === p.id ? { ...pd, episodes: mergedEps, episodesLoaded: true } : pd
+			);
+			if (selectedPodcast?.id === p.id) {
+				selectedPodcast = podcastData.podcasts.find(pd => pd.id === p.id) ?? selectedPodcast;
+			}
+		} catch {
+			// Silent — individual podcast failures don't block the rest
+		}
+	}
+
+	async function refreshAllSubscribed(): Promise<void> {
+		if (isRefreshingAll) return;
+		const toRefresh = subscribedPodcasts.slice(); // snapshot before async work
+		if (toRefresh.length === 0) return;
+		isRefreshingAll = true;
+		try {
+			for (const podcast of toRefresh) {
+				await refreshPodcastSilent(podcast);
+			}
+		} finally {
+			isRefreshingAll = false;
+			driveConfigSync.scheduleSave();
+		}
 	}
 
 	// ── Load episodes from RSS2JSON ──────────────────────────────
@@ -806,8 +924,26 @@
 			</div>
 		</div>
 
-		<div class="flex-1 overflow-y-auto">
+		<div class="flex-1 overflow-y-auto" bind:this={listScrollEl}>
 			{#if podcastSettings.defaultTab === 'subscribed' && !searchQuery}
+				<!-- Pull-to-refresh indicator -->
+				{#if isRefreshingAll || pullDistance > 0}
+					<div
+						class="flex items-center justify-center gap-2 overflow-hidden"
+						style:height="{isRefreshingAll ? 44 : Math.round((pullDistance / PULL_THRESHOLD) * 44)}px"
+						style:opacity="{isRefreshingAll ? 1 : Math.min(pullDistance / PULL_THRESHOLD, 1)}"
+					>
+						<span
+							class="inline-flex {isRefreshingAll ? 'animate-spin text-primary' : 'text-muted-foreground'}"
+							style:transform={isRefreshingAll ? '' : `rotate(${Math.round((pullDistance / PULL_THRESHOLD) * 180)}deg)`}
+						>
+							<RefreshCw class="w-4 h-4" />
+						</span>
+						{#if isRefreshingAll}
+							<span class="text-xs text-muted-foreground">Updating podcasts…</span>
+						{/if}
+					</div>
+				{/if}
 				<!-- ── Subscribed List ── -->
 				{#each subscribedPodcasts as podcast}
 					{@const artGradient = artworkFallback(podcast)}
