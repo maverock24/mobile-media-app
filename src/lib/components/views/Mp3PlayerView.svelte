@@ -357,6 +357,8 @@
 	// explicitly selected a song via playBrowseFile / playCurrentFolder / playFolderPath.
 	let trackListLockedByUser = false;
 	let libraryScanPromise: Promise<StoredAudioFile[]> | null = null;
+	// Progress of the background full-library index scan (null when not scanning)
+	let scanProgress = $state<{ pct: number; filesFound: number } | null>(null);
 
 	// ── folder browse state ──
 	// rootDirHandle and allFiles MUST be $state so hasFolderLoaded $derived updates
@@ -1040,17 +1042,23 @@
 			allFiles = [];
 			browseVersion += 1;
 		}
+		scanProgress = { pct: 0, filesFound: 0 };
 		let scanPromise: Promise<StoredAudioFile[]> | null = null;
 		scanPromise = (async (): Promise<StoredAudioFile[]> => {
 			if (rootDirHandle) {
-				return collectStoredFilesFromDirHandle(rootDirHandle);
+				// Web File System API — no batch progress available; scan runs to completion
+				const result = await collectStoredFilesFromDirHandle(rootDirHandle);
+				return result;
 			}
 
 			if (nativeTreeUri) {
-				return scanNativeAudioFiles([], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {}, async (mappedBatch: StoredAudioFile[]) => {
+				return scanNativeAudioFiles([], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {}, async (mappedBatch: StoredAudioFile[], state) => {
 					if (scanPromise && libraryScanPromise === scanPromise) {
 						allFiles = [...allFiles, ...mappedBatch];
 						browseVersion += 1;
+						const total = state.foldersScanned + state.foldersQueued;
+						const pct = total > 0 ? Math.min(99, Math.round((state.foldersScanned / total) * 100)) : 1;
+						scanProgress = { pct, filesFound: allFiles.length };
 					}
 				});
 			}
@@ -1063,6 +1071,7 @@
 			.then(async (scannedFiles) => {
 				if (libraryScanPromise !== scanPromise) return;
 				allFiles = scannedFiles;
+				scanProgress = null;
 				if (!trackListLockedByUser) hydrateTracksFromLibrary(scannedFiles);
 				await saveCachedLibrary(folderName, scannedFiles, getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName }));
 			})
@@ -1072,6 +1081,7 @@
 			.finally(() => {
 				if (libraryScanPromise === scanPromise) {
 					libraryScanPromise = null;
+					scanProgress = null;
 				}
 			});
 	}
@@ -1631,7 +1641,28 @@
 			});
 			browseEntries = files.map((file) => ({ kind: 'file', name: file.name, file }));
 		} else if (allFiles.length > 0) {
-			browseEntries = buildBrowseEntriesFromSnapshot(allFiles, path);
+			const snapshot = buildBrowseEntriesFromSnapshot(allFiles, path);
+			if (snapshot.length > 0 || libraryScanPromise === null) {
+				// Index is complete or partial but has entries for this path — use it instantly
+				browseEntries = snapshot;
+			} else if (nativeTreeUri) {
+				// Scan in progress and this subfolder not yet indexed — live single-level call
+				const result = await DirectoryReader.listEntries({ treeUri: nativeTreeUri, path: pathToString(path) });
+				const folders: BrowseEntry[] = [];
+				const files: BrowseEntry[] = [];
+				for (const entry of result.entries) {
+					if (entry.kind === 'folder') {
+						folders.push({ kind: 'folder', name: entry.name, count: 0 });
+					} else {
+						files.push({ kind: 'file', name: entry.name, file: createStoredNativeAudioFile(entry) });
+					}
+				}
+				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+				browseEntries = [...folders, ...files];
+			} else {
+				browseEntries = snapshot; // empty but nothing else we can do
+			}
 		} else if (rootDirHandle) {
 				// Navigate to the directory at `path`
 				let dir: FileSystemDirectoryHandle = rootDirHandle;
@@ -2729,7 +2760,18 @@
 			</div>
 		{/if}
 
-
+		<!-- Index scan progress bar (shown while building the in-memory folder index) -->
+		{#if scanProgress !== null && musicSettings.librarySource !== 'drive'}
+		<div class="px-4 py-2 border-b shrink-0 bg-muted/20">
+			<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1.5">
+				<div class="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin shrink-0"></div>
+				<span class="flex-1 truncate">Indexing library… {scanProgress.pct}% · {scanProgress.filesFound} file{scanProgress.filesFound === 1 ? '' : 's'} found</span>
+			</div>
+			<div class="h-1 rounded-full bg-muted overflow-hidden">
+				<div class="h-full bg-primary rounded-full transition-[width] duration-300" style="width: {scanProgress.pct}%"></div>
+			</div>
+		</div>
+		{/if}
 
 		<!-- Favorites strip -->
 		{#if musicSettings.favoriteFolders.length > 0}
