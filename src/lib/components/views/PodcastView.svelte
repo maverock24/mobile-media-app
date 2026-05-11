@@ -110,6 +110,42 @@
 		}
 	}
 
+	// ── Network-loss auto-resume ─────────────────────────────────
+	// When a MEDIA_ERR_NETWORK error fires (or the stream stalls while offline),
+	// we save the URL + position and listen for the 'online' event. Once the
+	// connection returns we reload the stream and seek back to where it stopped.
+	let _reconnectListener: (() => void) | null = null;
+
+	function cancelNetworkRetry() {
+		if (_reconnectListener) {
+			window.removeEventListener('online', _reconnectListener);
+			_reconnectListener = null;
+		}
+	}
+
+	function scheduleReconnectResume(url: string, positionSec: number) {
+		cancelNetworkRetry(); // replace any previous pending retry
+		_reconnectListener = () => {
+			cancelNetworkRetry();
+			if (!currentEpisode || !audioEl) return;
+			audioEl.src = url;
+			if (positionSec > 1) {
+				audioEl.addEventListener('loadedmetadata', () => {
+					if (audioEl.currentTime < positionSec) audioEl.currentTime = positionSec;
+				}, { once: true });
+			}
+			claimAudio('podcast');
+			isBuffering = true;
+			audioEl.play().catch((err) => {
+				isBuffering = false;
+				if (err?.name !== 'AbortError') {
+					addToast({ message: 'Reconnected but failed to resume. Tap play to retry.', type: 'warning', autoDismissMs: 5000 });
+				}
+			});
+		};
+		window.addEventListener('online', _reconnectListener);
+	}
+
 	// ── Audio element event wiring ───────────────────────────────
 	$effect(() => {
 		if (!audioEl) return;
@@ -146,8 +182,23 @@
 		};
 		const onError = () => {
 			const err = audioEl.error;
-			console.error('[Podcast] audio error:', err?.code, err?.message, 'url:', audioEl.src);
 			isBuffering = false;
+			// MEDIA_ERR_NETWORK (2): stream interrupted by a connectivity drop.
+			// Register an 'online' listener to automatically resume from the same position.
+			if (err?.code === 2 && currentEpisode) {
+				scheduleReconnectResume(audioEl.src, audioEl.currentTime);
+				addToast({ message: 'Connection lost — will resume when reconnected.', type: 'warning', autoDismissMs: 6000 });
+			} else {
+				console.error('[Podcast] audio error:', err?.code, err?.message, 'url:', audioEl.src);
+			}
+		};
+		// stalled = browser requested audio data but received nothing (common on network drop).
+		// Only treat it as a connectivity loss when the device reports it is offline.
+		const onStalled = () => {
+			if (!navigator.onLine && currentEpisode && !_reconnectListener) {
+				scheduleReconnectResume(audioEl.src, audioEl.currentTime);
+				addToast({ message: 'Connection lost — will resume when reconnected.', type: 'warning', autoDismissMs: 6000 });
+			}
 		};
 		audioEl.addEventListener('timeupdate',     onTimeUpdate);
 		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
@@ -157,6 +208,7 @@
 		audioEl.addEventListener('error',   onError);
 		audioEl.addEventListener('waiting', onWaiting);
 		audioEl.addEventListener('playing', onPlaying);
+		audioEl.addEventListener('stalled', onStalled);
 		return () => {
 			audioEl?.removeEventListener('timeupdate',     onTimeUpdate);
 			audioEl?.removeEventListener('loadedmetadata', onLoadedMetadata);
@@ -166,6 +218,8 @@
 			audioEl?.removeEventListener('error',   onError);
 			audioEl?.removeEventListener('waiting', onWaiting);
 			audioEl?.removeEventListener('playing', onPlaying);
+			audioEl?.removeEventListener('stalled', onStalled);
+			cancelNetworkRetry();
 		};
 	});
 
@@ -626,6 +680,7 @@
 			addToast({ message: 'This episode has no playable audio URL.', type: 'error' });
 			return;
 		}
+		cancelNetworkRetry(); // clear any pending retry for the previous episode
 		claimAudio('podcast');
 		currentEpisode = { podcast, episode };
 		const resumeAt = getEpisodeResumePosition(episode);
@@ -654,6 +709,7 @@
 	function togglePlay() {
 		if (!audioEl || !currentEpisode) return;
 		if (isPlaying) {
+			cancelNetworkRetry(); // user deliberately paused — no auto-resume
 			audioEl.pause();
 		} else {
 			claimAudio('podcast');
