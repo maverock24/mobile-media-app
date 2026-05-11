@@ -12,12 +12,16 @@
 		"cap:sync": "pnpm build:mobile && cap sync",
 		"cap:sync:android": "pnpm build:mobile && cap sync android",
 		"cap:open:android": "cap open android",
+		"lint": "pnpm check",
+		"typecheck": "pnpm check",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "playwright test",
+		"test:e2e": "playwright test",
 		"test:ui": "playwright test --ui",
 		"test:headed": "playwright test --headed",
-		"test:report": "playwright show-report"
+		"test:report": "playwright show-report",
+		"validate": "pnpm check && pnpm test"
 	},
 	"devDependencies": {
 		"@capacitor/cli": "^8.2.0",

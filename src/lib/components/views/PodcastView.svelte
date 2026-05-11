@@ -12,7 +12,7 @@
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
-		RefreshCw, Mic2, X
+		RefreshCw, X
 	} from 'lucide-svelte';
 
 	// ── Types ────────────────────────────────────────────────────
@@ -182,7 +182,7 @@
 
 	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
-	const rssCache = new Map<string, { data: unknown; ts: number }>();
+	const rssCache = new Map<string, { data: Record<string, unknown>; ts: number }>();
 	function resolvePodcastApiUrl(path: string): string {
 		if (/^https?:\/\//i.test(path)) {
 			return path;
@@ -382,11 +382,13 @@
 					: `https://itunes.apple.com/lookup?id=${podcast.itunesId}`;
 				const luData = await readPodcastJson<{ results?: Array<Record<string, unknown>> }>(lookupUrl, signal);
 				const r = luData.results?.[0];
-				if (!r?.feedUrl) {
+				const resolvedFeedUrl = typeof r?.feedUrl === 'string' ? r.feedUrl : '';
+				const resolvedArtworkUrl = typeof r?.artworkUrl600 === 'string' ? r.artworkUrl600 : '';
+				if (!resolvedFeedUrl) {
 					episodesError = 'No RSS feed available for this podcast.';
 					return;
 				}
-				podcast = { ...podcast, feedUrl: r.feedUrl, artworkUrl: podcast.artworkUrl || r.artworkUrl600 || '' };
+				podcast = { ...podcast, feedUrl: resolvedFeedUrl, artworkUrl: podcast.artworkUrl || resolvedArtworkUrl };
 				podcastData.podcasts = podcastData.podcasts.map(p => p.id === podcast.id ? podcast : p);
 				if (selectedPodcast?.id === podcast.id) {
 					selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
@@ -515,8 +517,8 @@
 		isBuffering = true;
 		audioEl.play().catch((err) => {
 			isBuffering = false;
-			console.error('[Podcast] play() failed:', err, 'url:', episode.audioUrl);
 			if (err?.name !== 'AbortError') {
+				console.error('[Podcast] play() failed:', err, 'url:', episode.audioUrl);
 				addToast({ message: `Playback failed: ${err?.message ?? 'Unknown error'}`, type: 'error' });
 			}
 		});
@@ -537,14 +539,16 @@
 			audioEl.pause();
 		} else {
 			claimAudio('podcast');
-			if (audioEl.src !== currentEpisode.episode.audioUrl) {
-				syncEpisodeAudioSource(
-					currentEpisode.podcast,
-					currentEpisode.episode,
-					getEpisodeResumePosition(currentEpisode.episode)
-				);
-			}
-			audioEl.play().catch((err) => { console.error('[Podcast] togglePlay() failed:', err); });
+			syncEpisodeAudioSource(
+				currentEpisode.podcast,
+				currentEpisode.episode,
+				getEpisodeResumePosition(currentEpisode.episode)
+			);
+			audioEl.play().catch((err) => {
+				if (err?.name !== 'AbortError') {
+					console.error('[Podcast] togglePlay() failed:', err);
+				}
+			});
 		}
 	}
 
@@ -665,41 +669,18 @@
 	<!-- ════════════════════════════════ EPISODE LIST ═══════════════════════════════ -->
 	<div class="flex flex-col flex-1 min-h-0">
 		<!-- Header -->
-		<div class="flex items-center gap-3 p-4 border-b shrink-0">
-			<Button variant="ghost" size="icon" onclick={() => (selectedPodcast = null, episodesError = null)}>
-				<ChevronLeft class="w-5 h-5" />
+		<div class="flex items-center gap-2 px-3 py-2 border-b shrink-0">
+			<Button
+				variant="ghost"
+				size="icon"
+				class="w-11 h-11"
+				onclick={() => (selectedPodcast = null, episodesError = null)}
+			>
+				<ChevronLeft class="w-6 h-6" />
 			</Button>
-			<div class="flex items-center gap-3 flex-1 min-w-0">
-				{#if selectedPodcast.artworkUrl}
-					<img src={selectedPodcast.artworkUrl} alt={selectedPodcast.title}
-						class="w-10 h-10 rounded-lg object-cover shrink-0" />
-				{:else}
-					<div class="w-10 h-10 rounded-lg bg-gradient-to-br {artworkFallback(selectedPodcast)} flex items-center justify-center shrink-0">
-						<Mic2 class="w-5 h-5 text-white" />
-					</div>
-				{/if}
-				<div class="min-w-0">
-					<h2 class="font-semibold text-sm truncate">{selectedPodcast.title}</h2>
-					<p class="text-xs text-muted-foreground">{selectedPodcast.author}</p>
-				</div>
+			<div class="flex-1 min-w-0 pr-2">
+				<h2 class="font-semibold text-base leading-tight truncate">{selectedPodcast.title}</h2>
 			</div>
-			<Button variant="ghost" size="icon"
-				title="Refresh episodes"
-				disabled={episodesRefreshing || episodesLoading}
-				onclick={() => selectedPodcast && loadEpisodes(selectedPodcast, true)}>
-				<RefreshCw class="w-5 h-5 {episodesRefreshing ? 'animate-spin' : ''}" />
-			</Button>
-			<Button variant="ghost" size="icon" onclick={() => {
-				if (selectedPodcast) {
-					selectedPodcast.subscribed ? unsubscribe(selectedPodcast) : subscribeFromItunes({ trackId: selectedPodcast.itunesId, trackName: selectedPodcast.title, artistName: selectedPodcast.author, artworkUrl600: selectedPodcast.artworkUrl, feedUrl: selectedPodcast.feedUrl, primaryGenreName: selectedPodcast.category, trackCount: selectedPodcast.episodes.length });
-				}
-			}}>
-				{#if selectedPodcast.subscribed}
-					<CheckCircle2 class="w-5 h-5 text-primary" />
-				{:else}
-					<Plus class="w-5 h-5" />
-				{/if}
-			</Button>
 		</div>
 
 		<!-- Episode list body -->

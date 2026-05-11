@@ -139,7 +139,7 @@
 
 <div class="drive-mode-shell flex flex-col h-dvh max-w-md mx-auto overflow-hidden relative" style="z-index:1;">
 	{#if appSettings.mediaControlsPosition === 'top'}
-		<MiniPlayer {activeTab} onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
+		<MiniPlayer activeTab={activeTab} position="top" onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
 	{/if}
 
 	<!-- Content -->
@@ -179,7 +179,7 @@
 
 	<!-- Mini-player: shown whenever music, podcast, or radio playback is active -->
 	{#if appSettings.mediaControlsPosition !== 'top'}
-		<MiniPlayer {activeTab} onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
+		<MiniPlayer activeTab={activeTab} position="bottom" onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
 	{/if}
 
 	<!-- Toast notifications -->

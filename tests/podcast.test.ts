@@ -76,6 +76,16 @@ async function setupMocks(page: Page) {
 	await page.route('**/oauth2.googleapis.com/**', (route) => route.abort());
 }
 
+async function playEpisode(page: Page, title: string) {
+	const row = page
+		.locator('div.tap-feedback')
+		.filter({ has: page.getByText(title, { exact: true }) })
+		.filter({ has: page.locator('button.rounded-full') })
+		.first();
+	await expect(row.getByText(title, { exact: true })).toBeVisible({ timeout: 5000 });
+	await row.locator('button.rounded-full').first().click();
+}
+
 test.describe('Podcast view', () => {
 	test.beforeEach(async ({ page }) => {
 		// Clear persisted state BEFORE page load so the app starts with empty storage
@@ -194,14 +204,10 @@ test.describe('Podcast view', () => {
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
 
 		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
-
-		// Click the play button next to the first episode
-		// Episode play buttons are rounded-full icon buttons
-		const episodeBtns = page.locator('button.rounded-full.w-9:visible');
-		await episodeBtns.first().click();
+		await playEpisode(page, 'Episode 1: Introduction');
 
 		// Now-playing bar shows episode title
-		await expect(page.getByText('Episode 1: Introduction').first()).toBeVisible();
+		await expect(page.getByRole('region', { name: /Mini player/i }).getByText('Episode 1: Introduction')).toBeVisible();
 	});
 
 	test('clicking an episode row starts playback without using the play button', async ({ page }) => {
@@ -226,13 +232,37 @@ test.describe('Podcast view', () => {
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
 
 		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9:visible').first().click();
+		await playEpisode(page, 'Episode 1: Introduction');
 
 		// Now-playing bar has 3 transport buttons detectable by aria-label.
 		// Audio fails to load in test (mocked URL), so isPlaying resets to false — button shows Play.
-		await expect(page.getByLabel('Previous track')).toBeVisible({ timeout: 3000 });
-		await expect(page.getByLabel(/Play|Pause/i)).toBeVisible();
-		await expect(page.getByLabel('Next track')).toBeVisible();
+		const miniPlayer = page.getByRole('region', { name: /Mini player/i });
+		await expect(miniPlayer.getByRole('button', { name: 'Previous', exact: true })).toBeVisible({ timeout: 3000 });
+		await expect(miniPlayer.locator('button.mini-player-primary')).toBeVisible();
+		await expect(miniPlayer.getByRole('button', { name: 'Next', exact: true })).toBeVisible();
+		await expect(miniPlayer.getByRole('button', { name: 'Play podcast at 1.5x speed' })).toBeVisible();
+	});
+
+	test('podcast mini-player 1.5x button toggles the playback speed preset', async ({ page }) => {
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
+		await playEpisode(page, 'Episode 1: Introduction');
+
+		const speedButton = page.getByRole('region', { name: /Mini player/i }).getByRole('button', { name: 'Play podcast at 1.5x speed' });
+		await speedButton.click();
+
+		await expect
+			.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('podcast-settings') || '{}').playbackSpeed))
+			.toBe(1.5);
+		await expect(speedButton).toHaveAttribute('aria-pressed', 'true');
+
+		await speedButton.click();
+
+		await expect
+			.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('podcast-settings') || '{}').playbackSpeed))
+			.toBe(1.0);
+		await expect(speedButton).toHaveAttribute('aria-pressed', 'false');
 	});
 
 	test('toggling play/pause works in now-playing bar', async ({ page }) => {
@@ -240,15 +270,15 @@ test.describe('Podcast view', () => {
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
 
 		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9:visible').first().click();
+		await playEpisode(page, 'Episode 1: Introduction');
 
 		// After episode click, isPlaying is briefly true then resets to false (audio load error).
 		// Either button (Play or Pause) should be visible in the now-playing bar.
-		const playPauseBtn = page.getByLabel(/Play|Pause/i);
+		const playPauseBtn = page.getByRole('region', { name: /Mini player/i }).locator('button.mini-player-primary');
 		await expect(playPauseBtn).toBeVisible({ timeout: 3000 });
 		await playPauseBtn.click({ force: true });
 		await page.waitForTimeout(100);
-		await page.getByLabel(/Play|Pause/i).click({ force: true });
+		await playPauseBtn.click({ force: true });
 		await page.waitForTimeout(100);
 		// No assertion needed — just verify no exception
 	});
@@ -278,7 +308,7 @@ test.describe('Podcast view', () => {
 		await goToTab(restoredPage, 'Podcasts');
 		await expect(restoredPage.getByText('Episode 2: Deep Dive').first()).toBeVisible({ timeout: 5000 });
 
-		await restoredPage.getByLabel(/Play|Pause/i).click({ force: true });
+		await restoredPage.getByRole('region', { name: /Mini player/i }).locator('button.mini-player-primary').click({ force: true });
 
 		await expect
 			.poll(async () => {

@@ -1,8 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // When PW_BASE_URL is set (e.g. a running dev server), use that directly.
-// Otherwise, let webServer build + preview on port 4173.
-const BASE_URL = process.env.PW_BASE_URL ?? 'http://localhost:4173';
+// Otherwise, let webServer build + preview on a dedicated local test port.
+const BASE_URL = process.env.PW_BASE_URL ?? 'http://127.0.0.1:4177';
 
 export default defineConfig({
 	testDir: './tests',
@@ -38,9 +38,9 @@ export default defineConfig({
 
 	// Build + start preview server unless caller already has one running (PW_BASE_URL).
 	webServer: process.env.PW_BASE_URL ? undefined : {
-		command: `PUBLIC_GOOGLE_CLIENT_ID=${process.env.PUBLIC_GOOGLE_CLIENT_ID ?? 'playwright-google-client-id.apps.googleusercontent.com'} pnpm build && PUBLIC_GOOGLE_CLIENT_ID=${process.env.PUBLIC_GOOGLE_CLIENT_ID ?? 'playwright-google-client-id.apps.googleusercontent.com'} pnpm preview`,
-		url: 'http://localhost:4173',
-		reuseExistingServer: false,
+		command: `PUBLIC_GOOGLE_CLIENT_ID=${process.env.PUBLIC_GOOGLE_CLIENT_ID ?? 'playwright-google-client-id.apps.googleusercontent.com'} pnpm build && PUBLIC_GOOGLE_CLIENT_ID=${process.env.PUBLIC_GOOGLE_CLIENT_ID ?? 'playwright-google-client-id.apps.googleusercontent.com'} pnpm preview --host 127.0.0.1 --port 4177`,
+		url: 'http://127.0.0.1:4177',
+		reuseExistingServer: !process.env.CI,
 		timeout: 120_000,
 	},
 });

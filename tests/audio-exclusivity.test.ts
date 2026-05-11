@@ -33,6 +33,20 @@ const MOCK_ITUNES = {
 	}],
 };
 
+const MOCK_STATIONS = [
+	{
+		stationuuid: 'uuid-1',
+		name: 'Test Jazz FM',
+		url_resolved: 'https://stream.testjazz.example/live',
+		favicon: '',
+		country: 'US',
+		tags: 'jazz,smooth',
+		codec: 'MP3',
+		bitrate: 128,
+		votes: 1000,
+	},
+];
+
 function createMinimalMp3(name: string, dir: string): string {
 	const buf = Buffer.from([
 		0x49, 0x44, 0x33, 0x03, 0x00, 0x00,
@@ -56,6 +70,16 @@ async function loadMp3(page: Page, dir: string) {
 	await fc.setFiles(dir);
 }
 
+async function playPodcastEpisode(page: Page, title: string) {
+	const row = page
+		.locator('div')
+		.filter({ has: page.getByText(title, { exact: true }) })
+		.filter({ has: page.locator('button.rounded-full') })
+		.first();
+	await expect(row.getByText(title, { exact: true })).toBeVisible({ timeout: 5000 });
+	await row.locator('button.rounded-full').first().click();
+}
+
 test.describe('Cross-view audio exclusivity', () => {
 	let tmpDir: string;
 	let mp3Path: string;
@@ -70,12 +94,16 @@ test.describe('Cross-view audio exclusivity', () => {
 	});
 
 	test.beforeEach(async ({ page }) => {
+		await page.route('**/api/radio/search**', (route) =>
+			route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_STATIONS) })
+		);
 		await page.route('**/itunes.apple.com/**', (route) =>
 			route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_ITUNES) })
 		);
 		await page.route('**/api.rss2json.com/**', (route) =>
 			route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_RSS_RESPONSE) })
 		);
+		await page.route('**/stream.testjazz.example/**', (route) => route.abort());
 		await page.route('**/example.com/**', (route) => route.abort());
 		await page.goto('/');
 	});
@@ -133,8 +161,7 @@ test.describe('Cross-view audio exclusivity', () => {
 		await goToTab(page, 'Podcasts');
 		await page.getByPlaceholder('Search podcasts…').fill('cross');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
-		await expect(page.getByText('Cross Test Episode')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9:visible').first().click();
+		await playPodcastEpisode(page, 'Cross Test Episode');
 
 		// 4. Switch back to Music — audio should be paused (claimAudio('podcast') was called)
 		await goToTab(page, 'Music');
@@ -143,24 +170,26 @@ test.describe('Cross-view audio exclusivity', () => {
 			return audio ? audio.paused : true;
 		});
 		expect(isPaused).toBe(true);
-		await expect(page.locator('button[aria-label="Previous"]:visible')).toHaveCount(0);
-		await expect(page.locator('button[aria-label="Pause"]:visible')).toHaveCount(0);
-		await expect(page.getByRole('region', { name: /Mini player/i }).getByText('Cross Test Episode')).toBeVisible({ timeout: 3000 });
+		const miniPlayer = page.getByRole('region', { name: /Mini player/i });
+		await expect(miniPlayer.getByText('Cross Test Episode')).toBeVisible({ timeout: 3000 });
+		await expect(miniPlayer.getByRole('button', { name: /Return to podcasts player/i })).toBeVisible();
 	});
 
 	test('starting music playback after a podcast switches the bottom controls back to music', async ({ page }) => {
 		await goToTab(page, 'Podcasts');
 		await page.getByPlaceholder('Search podcasts…').fill('cross');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
-		await expect(page.getByText('Cross Test Episode')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9:visible').first().click();
+		await playPodcastEpisode(page, 'Cross Test Episode');
 
 		await goToTab(page, 'Music');
 		await loadMp3(page, tmpDir);
 		await page.getByText('song').first().click({ timeout: 5000 });
 		await page.waitForTimeout(300);
 
-		await expect(page.getByRole('region', { name: /Mini player/i })).toHaveCount(0);
+		const miniPlayer = page.getByRole('region', { name: /Mini player/i });
+		await expect(miniPlayer).toContainText(/song/i);
+		await expect(miniPlayer.getByText('Cross Test Episode')).toHaveCount(0);
+		await expect(miniPlayer.getByRole('button', { name: /Return to music player/i })).toBeVisible();
 		await expect(page.locator('button[aria-label="Previous"]:visible')).toHaveCount(1);
 		await expect(page.locator('button[aria-label="Next"]:visible')).toHaveCount(1);
 		await expect(page.locator('button[aria-label="Previous track"]:visible')).toHaveCount(0);
@@ -172,20 +201,36 @@ test.describe('Cross-view audio exclusivity', () => {
 		await goToTab(page, 'Podcasts');
 		await page.getByPlaceholder('Search podcasts…').fill('cross');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
-		await expect(page.getByText('Cross Test Episode')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9:visible').first().click();
+		await playPodcastEpisode(page, 'Cross Test Episode');
 
 		await goToTab(page, 'Radio');
 		await expect(page.locator('button[aria-label="Stop"]:visible')).toHaveCount(0);
 		await expect(page.getByRole('region', { name: /Mini player/i }).getByText('Cross Test Episode')).toBeVisible({ timeout: 3000 });
 	});
 
+	test('starting podcast playback after radio replaces the shared controls content', async ({ page }) => {
+		await goToTab(page, 'Radio');
+		await page.getByRole('button', { name: /Search/i }).click();
+		await page.getByPlaceholder(/Search radio stations/i).fill('jazz');
+		await page.locator('form').getByRole('button', { name: 'Search', exact: true }).click();
+		await page.getByText('Test Jazz FM').click();
+		await expect(page.getByRole('region', { name: /Mini player/i }).getByText('Test Jazz FM')).toBeVisible({ timeout: 3000 });
+
+		await goToTab(page, 'Podcasts');
+		await page.getByPlaceholder('Search podcasts…').fill('cross');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+		await playPodcastEpisode(page, 'Cross Test Episode');
+
+		const miniPlayer = page.getByRole('region', { name: /Mini player/i });
+		await expect(miniPlayer.getByText('Cross Test Episode')).toBeVisible({ timeout: 3000 });
+		await expect(miniPlayer.getByText('Test Jazz FM')).toHaveCount(0);
+	});
+
 	test('podcast now-playing bar persists when switching views', async ({ page }) => {
 		await goToTab(page, 'Podcasts');
 		await page.getByPlaceholder('Search podcasts…').fill('cross');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
-		await expect(page.getByText('Cross Test Episode')).toBeVisible({ timeout: 5000 });
-		await page.locator('button.rounded-full.w-9:visible').first().click();
+		await playPodcastEpisode(page, 'Cross Test Episode');
 
 		// Now-playing bar appears
 		await expect(page.getByText('Cross Test Episode').first()).toBeVisible();

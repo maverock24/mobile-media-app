@@ -3,7 +3,7 @@
  */
 import { type Page, expect } from '@playwright/test';
 
-export const BASE = 'http://localhost:4173';
+export const BASE = 'http://127.0.0.1:4177';
 
 // ── Tab navigation ──────────────────────────────────────────────────────────
 // Wait for SvelteKit to fully hydrate the page before switching tabs.
@@ -11,12 +11,14 @@ export const BASE = 'http://localhost:4173';
 // for the tablist to appear (visible in prerendered HTML before JS runs).
 export async function waitForHydration(page: Page): Promise<void> {
 	// Prefer the hydration marker (set by onMount in +layout.svelte).
-	// If it never appears (e.g. an effect error prevented onMount from firing),
-	// fall back to the tablist being visible — a reliable sign of rendering.
-	await Promise.race([
-		page.waitForSelector('body[data-hydrated]', { timeout: 15_000 }),
-		page.waitForSelector('[role="tablist"]', { timeout: 15_000 }),
-	]);
+	// Only fall back to the prerendered tablist if hydration never completes,
+	// otherwise tests can click shell controls before the app is interactive.
+	const hydrated = await page.waitForSelector('body[data-hydrated]', { timeout: 15_000 })
+		.then(() => true)
+		.catch(() => false);
+	if (!hydrated) {
+		await page.waitForSelector('[role="tablist"]', { timeout: 15_000 });
+	}
 	// Small pause to let reactive effects settle after initial mount.
 	await page.waitForTimeout(300);
 }

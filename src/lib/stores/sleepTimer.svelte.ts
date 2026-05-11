@@ -14,7 +14,7 @@ export const sleepTimer = $state({
 	lastDurationMin: sleepTimerSettings.lastDurationMin,
 });
 
-let syncInterval: ReturnType<typeof setInterval> | null = null;
+let syncInterval: number | null = null;
 let initialized = false;
 
 function setTimerActive(endsAt: number) {

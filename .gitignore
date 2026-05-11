@@ -1,5 +1,10 @@
 node_modules
 
+# Editors and local tooling
+.vscode/*
+!.vscode/extensions.json
+.playwright-mcp/
+
 # Output
 .output
 .vercel
@@ -10,6 +15,15 @@ node_modules
 /dist-mobile
 playwright-report
 test-results
+tmp-test-files
+
+# Local operational scratch files
+jobs_info.json
+run_info.json
+run_result.json
+poll.log
+monitor_workflow*.sh
+poll_*.sh
 
 # OS
 .DS_Store

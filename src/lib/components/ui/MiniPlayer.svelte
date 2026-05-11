@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	import { podcastSettings } from '$lib/stores/settings.svelte';
 	import {
 		sleepTimer,
 		SLEEP_TIMER_PRESETS,
@@ -12,10 +13,12 @@
 	interface Props {
 		/** The currently selected tab. */
 		activeTab: string;
+		/** Whether the shared controls are rendered above or below content. */
+		position?: 'top' | 'bottom';
 		/** Clicking the bar body navigates back to the owning tab */
 		onNavigateTo?: (tab: string) => void;
 	}
-	let { activeTab, onNavigateTo }: Props = $props();
+	let { activeTab, position = 'bottom', onNavigateTo }: Props = $props();
 	let showSleepTimerOptions = $state(false);
 
 	const ownerTab = $derived.by(() => {
@@ -41,6 +44,8 @@
 	const canSeek = $derived(mediaEngine.source === 'music' || mediaEngine.source === 'podcast');
 	const canSkipPrevious = $derived(mediaEngine._onPrev !== null);
 	const canSkipNext = $derived(mediaEngine._onNext !== null);
+	const showPodcastSpeedPreset = $derived(mediaEngine.source === 'podcast');
+	const podcastOneAndHalfActive = $derived(showPodcastSpeedPreset && podcastSettings.playbackSpeed === 1.5);
 	const sleepTimerLabel = $derived(
 		sleepTimer.isActive ? formatSleepTimerRemaining(sleepTimer.remainingMs) : 'Off'
 	);
@@ -94,76 +99,86 @@
 		clearSleepTimer();
 		showSleepTimerOptions = false;
 	}
+
+	function setPodcastMiniPlayerSpeed() {
+		podcastSettings.playbackSpeed = podcastSettings.playbackSpeed === 1.5 ? 1.0 : 1.5;
+	}
 </script>
 
 {#if visible}
 	<div
-		class="mini-player-root border-t bg-background/95 backdrop-blur-sm shrink-0"
+		class="mini-player-root bg-background/95 backdrop-blur-sm shrink-0 {position === 'top' ? 'border-b' : 'border-t'}"
 		role="region"
 		aria-label="Mini player — {mediaEngine.item?.title}"
 	>
-		<div class="mini-player-main flex items-center gap-3 px-3 py-3">
-			<!-- Artwork -->
-			{#if mediaEngine.item?.artworkUrl}
-				<img
-					src={mediaEngine.item.artworkUrl}
-					alt=""
-					class="w-11 h-11 rounded-xl object-cover shrink-0"
-				/>
-			{:else}
-				<div class="w-11 h-11 rounded-xl bg-muted shrink-0"></div>
-			{/if}
-
+		<div class="mini-player-main px-3 pt-3 pb-2 space-y-2.5">
 			<!-- Track info — tapping navigates back to the player -->
 			<button
-				class="flex-1 min-w-0 text-left"
+				class="w-full min-w-0 text-left"
 				onclick={() => ownerTab && onNavigateTo?.(ownerTab)}
 				aria-label="Return to {ownerTab} player"
 			>
-				<p class="mini-player-info-title text-sm font-semibold truncate">{mediaEngine.item?.title}</p>
-				<p class="mini-player-info-subtitle text-xs text-muted-foreground truncate">{mediaEngine.item?.subtitle}</p>
+				<p class="mini-player-info-title text-sm font-semibold leading-tight truncate">{mediaEngine.item?.title}</p>
+				<p class="mini-player-info-subtitle text-xs text-muted-foreground leading-tight truncate mt-0.5">{mediaEngine.item?.subtitle}</p>
 			</button>
 
-			<div class="flex items-center gap-1.5 shrink-0">
-				<button
-					class="mini-player-action mini-player-sleep w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-					onclick={toggleSleepTimerOptions}
-					aria-label="Sleep timer"
-					title={sleepTimer.isActive ? `Sleep timer ${sleepTimerLabel}` : 'Set sleep timer'}
-				>
-					<Moon class="w-5 h-5 {sleepTimer.isActive ? 'text-primary' : ''}" />
-				</button>
-
-				{#if canSkipPrevious}
+			<div class="relative min-h-[3.75rem]">
+				<div class="absolute left-0 top-1/2 -translate-y-1/2">
 					<button
-						class="mini-player-action w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-						onclick={skipPrevious}
-						aria-label="Previous"
+						class="mini-player-action mini-player-sleep w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+						onclick={toggleSleepTimerOptions}
+						aria-label="Sleep timer"
+						title={sleepTimer.isActive ? `Sleep timer ${sleepTimerLabel}` : 'Set sleep timer'}
 					>
-						<SkipBack class="w-5 h-5" />
+						<Moon class="w-5 h-5 {sleepTimer.isActive ? 'text-primary' : ''}" />
 					</button>
-				{/if}
+				</div>
 
-				<button
-					class="mini-player-action mini-player-primary w-14 h-14 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
-					onclick={togglePlayback}
-					aria-label={mediaEngine.isPlaying ? 'Pause' : 'Play'}
-				>
-					{#if mediaEngine.isPlaying}
-						<Pause class="w-7 h-7" />
-					{:else}
-						<Play class="w-7 h-7 ml-1" />
+				<div class="flex items-center justify-center gap-4">
+					{#if canSkipPrevious}
+						<button
+							class="mini-player-action w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+							onclick={skipPrevious}
+							aria-label="Previous"
+						>
+							<SkipBack class="w-5 h-5" />
+						</button>
 					{/if}
-				</button>
 
-				{#if canSkipNext}
 					<button
-						class="mini-player-action w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-						onclick={skipNext}
-						aria-label="Next"
+						class="mini-player-action mini-player-primary w-14 h-14 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
+						onclick={togglePlayback}
+						aria-label={mediaEngine.isPlaying ? 'Pause' : 'Play'}
 					>
-						<SkipForward class="w-5 h-5" />
+						{#if mediaEngine.isPlaying}
+							<Pause class="w-7 h-7" />
+						{:else}
+							<Play class="w-7 h-7 ml-1" />
+						{/if}
 					</button>
+
+					{#if canSkipNext}
+						<button
+							class="mini-player-action w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+							onclick={skipNext}
+							aria-label="Next"
+						>
+							<SkipForward class="w-5 h-5" />
+						</button>
+					{/if}
+				</div>
+
+				{#if showPodcastSpeedPreset}
+					<div class="absolute right-0 top-1/2 -translate-y-1/2">
+						<button
+							class="mini-player-action h-11 min-w-[3.5rem] px-3 inline-flex items-center justify-center rounded-full border text-sm font-semibold transition-colors {podcastOneAndHalfActive ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'}"
+							onclick={setPodcastMiniPlayerSpeed}
+							aria-label="Play podcast at 1.5x speed"
+							aria-pressed={podcastOneAndHalfActive}
+						>
+							1.5x
+						</button>
+					</div>
 				{/if}
 			</div>
 		</div>

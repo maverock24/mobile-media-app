@@ -28,7 +28,7 @@
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
-		Volume2, VolumeX, Heart, FolderOpen, Music2,
+		Volume2, VolumeX, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
 		Cloud, RefreshCw, LogOut, Search, Star
 	} from 'lucide-svelte';
@@ -39,6 +39,8 @@
 		cleanup?: () => void;
 		source: StoredAudioFile;
 	}
+
+	type FavoriteTrack = (typeof musicSettings.favoriteTracks)[number];
 
 	type StoredAudioFile =
 		| { source: 'web'; name: string; relativePath: string; file: File }
@@ -325,11 +327,11 @@
 	let isPlaying      = $state(false);
 	let isBuffering    = $state(false);
 	let isChangingTrack = $state(false); // prevents concurrent skip/select calls
-	let isLiked        = $state(false);
 	let isLoading        = $state(false);
 	let loadingFolderPath = $state<string | null>(null); // per-folder spinner key
 	let queueSessionId = 0;
 	let showQueue   = $state(false);   // true → browse / folder view
+	let showFavoriteTracks = $state(false);
 
 	// ── Swipe right in full player → go back to browse list ──────
 	let _playerSwipeStartX = 0;
@@ -392,7 +394,20 @@
 			)
 	);
 	const selectedBrowseCount = $derived(selectedBrowseFileKeys.length);
+	const filteredFavoriteTracks = $derived.by(() => {
+		const query = fileSearchQuery.trim().toLowerCase();
+		const favorites = musicSettings.favoriteTracks.map((favorite) => ({
+			favorite,
+			file: resolveFavoriteTrackFile(favorite),
+		}));
 
+		if (!query) return favorites;
+
+		return favorites.filter(({ favorite }) => {
+			const haystack = `${favorite.title} ${favorite.artist} ${favorite.name}`.toLowerCase();
+			return haystack.includes(query);
+		});
+	});
 	// ── Drive folder picker dialog state ──
 	let showFolderPicker      = $state(false);
 	let folderPickerFolders   = $state<GoogleDriveFolder[]>([]);
@@ -413,6 +428,10 @@
 
 	// ── derived ──
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
+	const currentTrackIsFavorite = $derived(currentTrack ? isFavoriteTrack(currentTrack.source) : false);
+	const currentMusicTrackKey = $derived(
+		musicSettings.lastTrackKey || (currentTrack ? getStoredFileKey(currentTrack.source) : '')
+	);
 
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
 	const currentLibraryLabel = $derived(
@@ -732,6 +751,105 @@
 		return file.relativePath && file.relativePath.length > 0 ? file.relativePath : file.name;
 	}
 
+	function createFavoriteTrack(file: StoredAudioFile): FavoriteTrack {
+		const parsed = parseFilename(file.name);
+		const baseFavorite = {
+			key: getStoredFileKey(file),
+			name: file.name,
+			title: parsed.title,
+			artist: parsed.artist,
+			relativePath: getRelativePath(file),
+			source: file.source,
+		};
+
+		if (file.source === 'native') {
+			return {
+				...baseFavorite,
+				path: file.path,
+				mimeType: file.mimeType,
+				modifiedAt: file.modifiedAt,
+			};
+		}
+
+		if (file.source === 'drive') {
+			return {
+				...baseFavorite,
+				fileId: file.fileId,
+				mimeType: file.mimeType,
+				modifiedAt: file.modifiedAt,
+				sizeBytes: file.sizeBytes,
+				webViewLink: file.webViewLink,
+			};
+		}
+
+		return baseFavorite;
+	}
+
+	function resolveFavoriteTrackFile(favorite: FavoriteTrack): StoredAudioFile | null {
+		const loadedFile = allFiles.find((file) => getStoredFileKey(file) === favorite.key)
+			?? tracks.find((track) => getStoredFileKey(track.source) === favorite.key)?.source;
+		if (loadedFile) return loadedFile;
+
+		if (favorite.source === 'native' && favorite.path) {
+			return {
+				source: 'native',
+				name: favorite.name,
+				relativePath: favorite.relativePath,
+				path: favorite.path,
+				mimeType: favorite.mimeType,
+				modifiedAt: favorite.modifiedAt,
+			};
+		}
+
+		if (favorite.source === 'drive' && favorite.fileId) {
+			return {
+				source: 'drive',
+				name: favorite.name,
+				relativePath: favorite.relativePath,
+				fileId: favorite.fileId,
+				mimeType: favorite.mimeType,
+				modifiedAt: favorite.modifiedAt,
+				sizeBytes: favorite.sizeBytes,
+				webViewLink: favorite.webViewLink,
+			};
+		}
+
+		return null;
+	}
+
+	function isFavoriteTrack(file: StoredAudioFile): boolean {
+		const key = getStoredFileKey(file);
+		return musicSettings.favoriteTracks.some((favorite) => favorite.key === key);
+	}
+
+	function toggleFavoriteTrack(file: StoredAudioFile): void {
+		const favorite = createFavoriteTrack(file);
+		const exists = musicSettings.favoriteTracks.some((entry) => entry.key === favorite.key);
+		musicSettings.favoriteTracks = exists
+			? musicSettings.favoriteTracks.filter((entry) => entry.key !== favorite.key)
+			: [...musicSettings.favoriteTracks, favorite];
+	}
+
+	function removeFavoriteTrack(key: string): void {
+		musicSettings.favoriteTracks = musicSettings.favoriteTracks.filter((favorite) => favorite.key !== key);
+	}
+
+	function getResolvedFavoriteTrackFiles(): StoredAudioFile[] {
+		const seen = new Set<string>();
+		const files: StoredAudioFile[] = [];
+
+		for (const favorite of musicSettings.favoriteTracks) {
+			const file = resolveFavoriteTrackFile(favorite);
+			if (!file) continue;
+			const key = getStoredFileKey(file);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			files.push(file);
+		}
+
+		return files;
+	}
+
 	function clearBrowseLongPressTimer() {
 		if (browseLongPressTimer !== null) {
 			clearTimeout(browseLongPressTimer);
@@ -752,6 +870,35 @@
 
 	function clearBrowseSelection() {
 		selectedBrowseFileKeys = [];
+	}
+
+	async function playFavoriteTrack(favorite: FavoriteTrack) {
+		if (isChangingTrack) return;
+		const resolvedTrack = resolveFavoriteTrackFile(favorite);
+		if (!resolvedTrack) {
+			addToast({ message: 'This favorite track is not available in the current library.', type: 'warning' });
+			return;
+		}
+
+		initAudioContext();
+		isChangingTrack = true;
+		try {
+			const files = getResolvedFavoriteTrackFiles();
+			if (files.length === 0) {
+				addToast({ message: 'No favorite tracks are currently available.', type: 'warning' });
+				return;
+			}
+
+			loadTracks(files, 'Favorite Tracks');
+			const sortedFiles = sortFiles(files);
+			const nextIndex = sortedFiles.findIndex((file) => getStoredFileKey(file) === favorite.key);
+			setCurrentTrack(Math.max(0, nextIndex));
+			currentTime = 0;
+			duration = 0;
+			await startAudioAt(musicSettings.lastTrackIndex);
+		} finally {
+			isChangingTrack = false;
+		}
 	}
 
 	function getCurrentBrowseFileEntries(): (BrowseEntry & { kind: 'file' })[] {
@@ -900,7 +1047,7 @@
 			}
 
 			if (nativeTreeUri) {
-				return scanNativeAudioFiles([], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, async (mappedBatch) => {
+				return scanNativeAudioFiles([], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {}, async (mappedBatch: StoredAudioFile[]) => {
 					if (scanPromise && libraryScanPromise === scanPromise) {
 						allFiles = [...allFiles, ...mappedBatch];
 						browseVersion += 1;
@@ -1222,6 +1369,7 @@
 	}
 
 	async function switchToFavorite(fav: (typeof musicSettings.favoriteFolders)[0]) {
+		showFavoriteTracks = false;
 		switchingToFavId = fav.id;
 		try {
 		if (fav.source === 'drive') {
@@ -2126,8 +2274,15 @@
 		}
 	}
 
-	function navigateInto(name: string) { browsePath = [...browsePath, name]; }
+	function navigateInto(name: string) {
+		showFavoriteTracks = false;
+		browsePath = [...browsePath, name];
+	}
 	function navigateUp() {
+		if (showFavoriteTracks) {
+			showFavoriteTracks = false;
+			return;
+		}
 		if (browsePath.length > 0) browsePath = browsePath.slice(0, -1);
 		else showQueue = false;
 	}
@@ -2443,8 +2598,18 @@
 
 		<!-- Header -->
 		<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0">
-			<Button variant="ghost" size="icon" class="shrink-0" onclick={navigateUp}>
-				<ChevronLeft class="w-5 h-5" />
+			<Button
+				variant="ghost"
+				size="icon"
+				class="w-11 h-11 shrink-0"
+				onclick={navigateUp}
+				aria-label={showFavoriteTracks
+					? 'Back from favorite tracks'
+					: browsePath.length > 0
+						? 'Back to parent folder'
+						: 'Return to player'}
+			>
+				<ChevronLeft class="w-6 h-6" />
 			</Button>
 
 			<!-- Breadcrumb -->
@@ -2461,22 +2626,21 @@
 				{/each}
 			</div>
 
-			<!-- Play All current path + Change folder -->
+			<!-- Favorites toggle + Change folder -->
 			<div class="flex items-center gap-1 shrink-0">
-				<Button size="sm" variant="default" class="gap-1.5 text-sm h-11 px-4"
-					onclick={playCurrentFolder} disabled={isLoading}>
-					{#if isLoading}
-						<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-					{:else}
-						<Play class="w-5 h-5 ml-0.5" />
-					{/if}
-					All
+				<Button
+					variant="ghost"
+					size="icon"
+					class={`h-10 w-10 ${showFavoriteTracks ? 'text-yellow-400' : 'text-muted-foreground'}`}
+					onclick={() => {
+						showFavoriteTracks = !showFavoriteTracks;
+						clearBrowseSelection();
+					}}
+					aria-label={showFavoriteTracks ? 'Hide favorite tracks' : 'Show favorite tracks'}
+					title={showFavoriteTracks ? 'Hide favorite tracks' : 'Show favorite tracks'}
+				>
+					<Star class="w-5 h-5" fill={showFavoriteTracks ? 'currentColor' : 'none'} />
 				</Button>
-				{#if currentFolderAsFavorite()}
-					<Button variant="ghost" size="icon" class={`h-10 w-10 ${isCurrentFolderFavorited() ? 'text-yellow-400' : ''}`} onclick={toggleCurrentFolderFavorite} aria-label={isCurrentFolderFavorited() ? 'Remove from favorites' : 'Add to favorites'} title={isCurrentFolderFavorited() ? 'Remove from favorites' : 'Add to favorites'}>
-						<Star class="w-5 h-5" fill={isCurrentFolderFavorited() ? 'currentColor' : 'none'} />
-					</Button>
-				{/if}
 				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openFolder} aria-label="Open local folder" title="Open local folder">
 					<FolderOpen class="w-5 h-5" />
 				</Button>
@@ -2599,13 +2763,13 @@
 
 		<!-- Entry list -->
 		<div class="flex-1 overflow-y-auto min-h-0">
-			{#if browseEntries.length > 0}
+			{#if showFavoriteTracks || browseEntries.length > 0}
 				<div class="px-4 pt-3 pb-1">
 					<div class="relative">
 						<Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
 						<input
 							type="search"
-							placeholder="Filter files…"
+							placeholder={showFavoriteTracks ? 'Filter favorite tracks…' : 'Filter files…'}
 							bind:value={fileSearchQuery}
 							class="w-full pl-9 pr-3 py-2 rounded-lg border bg-muted/40 text-sm outline-none focus:ring-2 focus:ring-primary/50"
 							aria-label="Filter files"
@@ -2613,7 +2777,7 @@
 					</div>
 				</div>
 			{/if}
-			{#if selectedBrowseCount > 0}
+			{#if selectedBrowseCount > 0 && !showFavoriteTracks}
 				<div class="px-4 pb-2">
 					<div class="flex items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/10 px-3 py-2">
 						<div class="min-w-0">
@@ -2631,7 +2795,62 @@
 					</div>
 				</div>
 			{/if}
-			{#if browseLoading}
+			{#if showFavoriteTracks}
+				{#if filteredFavoriteTracks.length === 0}
+					<div class="flex flex-col items-center justify-center h-40 gap-2 text-muted-foreground px-6 text-center">
+						<Star class="w-10 h-10 opacity-30" />
+						<p class="text-sm">
+							{#if fileSearchQuery.trim()}
+								No favorite tracks match “{fileSearchQuery}”
+							{:else}
+								No favorite tracks yet
+							{/if}
+						</p>
+						{#if !fileSearchQuery.trim()}
+							<p class="text-xs">Tap the star on any track to add it here.</p>
+						{/if}
+					</div>
+				{:else}
+					{#each filteredFavoriteTracks as entry}
+						{@const isCurrentTrack = currentMusicTrackKey === entry.favorite.key}
+						<div class="flex items-center gap-2 px-4 py-2 border-b hover:bg-accent transition-colors">
+							<button
+								class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {entry.file ? (isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/30 active:bg-primary/15' : 'active:bg-accent/80') : 'opacity-60'}"
+								onclick={() => playFavoriteTrack(entry.favorite)}
+								disabled={!entry.file}
+								aria-label={entry.file ? `Play ${entry.favorite.title}` : `${entry.favorite.title} is unavailable`}
+								aria-current={isCurrentTrack ? 'true' : undefined}
+							>
+								<div class="flex-1 min-w-0">
+									<p class="font-medium text-sm truncate">{entry.favorite.title}</p>
+									<p class="text-xs text-muted-foreground truncate">
+										{entry.favorite.artist}
+										{#if !entry.file}
+											· unavailable in current library
+										{/if}
+									</p>
+								</div>
+								{#if isCurrentTrack}
+									<div class="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary shrink-0">{mediaEngine.isPlaying ? 'Playing' : 'Current'}</div>
+								{/if}
+							</button>
+							<Button
+								variant="ghost"
+								size="icon"
+								class="h-10 w-10 shrink-0 text-yellow-400"
+								onclick={(event) => {
+									event.stopPropagation();
+									removeFavoriteTrack(entry.favorite.key);
+								}}
+								aria-label={`Remove ${entry.favorite.title} from favorite tracks`}
+								title="Remove from favorite tracks"
+							>
+								<Star class="w-5 h-5" fill="currentColor" />
+							</Button>
+						</div>
+					{/each}
+				{/if}
+			{:else if browseLoading}
 				<div class="flex items-center justify-center h-32">
 					<div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
 				</div>
@@ -2679,41 +2898,57 @@
 					{:else}
 					<!-- File row — click anywhere to play -->
 					{@const isSelected = isBrowseFileSelected(entry.file)}
-					<button
-						class="tap-feedback w-full flex items-center gap-3 px-4 py-3 border-b transition-colors text-left {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35 active:bg-primary/18' : 'hover:bg-accent active:bg-accent/80'}"
-						onclick={async () => {
-							const fileKey = getStoredFileKey(entry.file);
-							if (longPressHandledFileKey === fileKey) {
-								longPressHandledFileKey = null;
-								return;
-							}
+					{@const isCurrentTrack = currentMusicTrackKey === getStoredFileKey(entry.file)}
+					<div class="flex items-center gap-2 px-4 py-2 border-b transition-colors {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/8 ring-1 ring-inset ring-primary/25' : 'hover:bg-accent'}">
+						<button
+							class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {isSelected || isCurrentTrack ? 'active:bg-primary/18' : 'active:bg-accent/80'}"
+							onclick={async () => {
+								const fileKey = getStoredFileKey(entry.file);
+								if (longPressHandledFileKey === fileKey) {
+									longPressHandledFileKey = null;
+									return;
+								}
 
-							if (selectedBrowseCount > 0) {
-								toggleBrowseFileSelection(entry.file);
-								return;
-							}
+								if (selectedBrowseCount > 0) {
+									toggleBrowseFileSelection(entry.file);
+									return;
+								}
 
-							await playBrowseFile(entry);
-						}}
-						onpointerdown={(event) => handleBrowseFilePressStart(entry, event)}
-						onpointerup={handleBrowseFilePressEnd}
-						onpointerleave={handleBrowseFilePressEnd}
-						onpointercancel={handleBrowseFilePressEnd}
-						oncontextmenu={(event) => event.preventDefault()}
-						aria-label="Play {entry.name}"
-						aria-pressed={isSelected}
-					>
-						<div class="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 {isSelected ? 'bg-primary/20 text-primary' : 'bg-muted/40'}">
-							<Music2 class="w-4 h-4 {isSelected ? 'text-primary' : 'text-muted-foreground'}" />
-						</div>
-						<div class="flex-1 min-w-0">
-							<p class="font-medium text-sm truncate">{parseFilename(entry.name).title}</p>
-							<p class="text-xs text-muted-foreground truncate">{parseFilename(entry.name).artist}</p>
-						</div>
-						{#if isSelected}
-							<div class="text-xs font-semibold text-primary shrink-0">Loop</div>
-						{/if}
-					</button>
+								await playBrowseFile(entry);
+							}}
+							onpointerdown={(event) => handleBrowseFilePressStart(entry, event)}
+							onpointerup={handleBrowseFilePressEnd}
+							onpointerleave={handleBrowseFilePressEnd}
+							onpointercancel={handleBrowseFilePressEnd}
+							oncontextmenu={(event) => event.preventDefault()}
+							aria-label="Play {entry.name}"
+							aria-pressed={isSelected}
+							aria-current={isCurrentTrack ? 'true' : undefined}
+						>
+							<div class="flex-1 min-w-0">
+								<p class="font-medium text-sm truncate">{parseFilename(entry.name).title}</p>
+								<p class="text-xs text-muted-foreground truncate">{parseFilename(entry.name).artist}</p>
+							</div>
+							{#if isSelected}
+								<div class="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary shrink-0">Loop</div>
+							{:else if isCurrentTrack}
+								<div class="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary shrink-0">{mediaEngine.isPlaying ? 'Playing' : 'Current'}</div>
+							{/if}
+						</button>
+						<Button
+							variant="ghost"
+							size="icon"
+							class={`h-10 w-10 shrink-0 ${isFavoriteTrack(entry.file) ? 'text-yellow-400' : 'text-muted-foreground'}`}
+							onclick={(event) => {
+								event.stopPropagation();
+								toggleFavoriteTrack(entry.file);
+							}}
+							aria-label={`${isFavoriteTrack(entry.file) ? 'Remove' : 'Add'} ${parseFilename(entry.name).title} ${isFavoriteTrack(entry.file) ? 'from' : 'to'} favorite tracks`}
+							title={isFavoriteTrack(entry.file) ? 'Remove from favorite tracks' : 'Add to favorite tracks'}
+						>
+							<Star class="w-5 h-5" fill={isFavoriteTrack(entry.file) ? 'currentColor' : 'none'} />
+						</Button>
+					</div>
 					{/if}
 				{/each}
 			{/if}
@@ -2767,10 +3002,11 @@
 				<p class="text-muted-foreground text-sm truncate">{currentTrack.artist}</p>
 			</div>
 			<Button variant="ghost" size="icon"
-				onclick={() => (isLiked = !isLiked)}
-				class="{isLiked ? 'text-red-500' : 'text-muted-foreground'} ml-2 shrink-0"
+				onclick={() => currentTrack && toggleFavoriteTrack(currentTrack.source)}
+				class="{currentTrackIsFavorite ? 'text-yellow-400' : 'text-muted-foreground'} ml-2 shrink-0"
+				aria-label={currentTrackIsFavorite ? 'Remove current track from favorite tracks' : 'Add current track to favorite tracks'}
 			>
-				<Heart class="w-6 h-6" fill={isLiked ? 'currentColor' : 'none'} />
+				<Star class="w-6 h-6" fill={currentTrackIsFavorite ? 'currentColor' : 'none'} />
 			</Button>
 		</div>
 

@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.support.v4.media.MediaBrowserCompat;
@@ -33,6 +34,11 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 		super.onCreate();
 
 		mediaSession = new MediaSessionCompat(this, "MediaHubSession");
+		mediaSession.setFlags(
+			MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS
+				| MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+		);
+		mediaSession.setPlaybackToLocal(AudioManager.STREAM_MUSIC);
 		setSessionToken(mediaSession.getSessionToken());
 
 		mediaSession.setCallback(new MediaSessionCompat.Callback() {

@@ -46,9 +46,7 @@ test.describe('MP3 Player view', () => {
 	 * in the player view, not in the browse/queue view.
 	 */
 	async function switchToPlayerView(page: import('@playwright/test').Page) {
-		// The mini-player track-info button contains a w-10 h-10 rounded-xl album art div.
-		// Clicking it sets showQueue = false, revealing the full player + toolbar.
-		await page.locator('button:has(div.w-10.h-10.rounded-xl)').first().click({ timeout: 3000 });
+		await page.getByRole('button', { name: /Return to player/i }).click({ timeout: 3000 });
 		await page.waitForTimeout(200);
 	}
 
@@ -198,6 +196,46 @@ test.describe('MP3 Player view', () => {
 		expect(persistedState.positions.positions ?? {}).toEqual({});
 	});
 
+	test('adds tracks to favorites and removes them from the favorites list', async ({ page }) => {
+		const [fileChooser] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fileChooser.setFiles(tmpDir);
+
+		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 5000 });
+		await page.getByRole('button', { name: /Add .*Track One.*favorite tracks/i }).click();
+		await page.getByRole('button', { name: /Show favorite tracks/i }).click();
+
+		await expect(page.getByText('Track One').first()).toBeVisible();
+		await expect(page.getByText('Track Two').first()).not.toBeVisible();
+
+		await page.getByRole('button', { name: /Remove .*Track One.*favorite tracks/i }).click();
+		await expect(page.getByText('No favorite tracks yet')).toBeVisible();
+	});
+
+	test('marks the currently active track in the MP3 browse list', async ({ page }) => {
+		const [fileChooser] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fileChooser.setFiles(tmpDir);
+
+		const trackButton = page.getByRole('button', { name: /Play 01 - Artist - Track One\.mp3/i }).first();
+		await trackButton.click({ timeout: 5000 });
+
+		const currentTrackButton = page.locator('main button[aria-current="true"]');
+		await expect(currentTrackButton).toHaveCount(1);
+		await expect(currentTrackButton.first()).toContainText(/Track (One|Two|Three)/i);
+		await expect(currentTrackButton.first()).toContainText(/Playing|Current/);
+	});
+
 	// ── Controls ───────────────────────────────────────────────────────────
 	test('bottom toolbar shows Browse, speed, and EQ buttons', async ({ page }) => {
 		// Load files first so we're in player view
@@ -272,7 +310,7 @@ test.describe('MP3 Player view', () => {
 
 		const miniPlayer = page.getByRole('region', { name: /Mini player/i });
 		await expect(miniPlayer).toBeVisible();
-		await miniPlayer.getByRole('button', { name: /Play|Pause/i }).click();
+		await miniPlayer.locator('button.mini-player-primary').click();
 
 		await expect(page.getByRole('tab', { name: 'Settings', exact: true })).toHaveAttribute('aria-selected', 'true');
 	});

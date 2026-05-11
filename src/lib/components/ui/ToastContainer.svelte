@@ -11,16 +11,15 @@
 	};
 </script>
 
-{#if toasts.length > 0}
 	<div
-		class="fixed bottom-20 left-1/2 z-50 flex w-full max-w-sm -translate-x-1/2 flex-col gap-2 px-4"
+		class="pointer-events-none fixed bottom-20 left-1/2 z-50 flex w-full max-w-sm -translate-x-1/2 flex-col gap-2 px-4"
 		aria-live="polite"
 		aria-atomic="false"
 	>
 		{#each toasts as toast (toast.id)}
 			<div
 				class={cn(
-					'flex items-start gap-2 rounded-lg px-4 py-3 shadow-lg',
+					'pointer-events-auto flex items-start gap-2 rounded-lg px-4 py-3 shadow-lg',
 					typeStyles[toast.type] ?? typeStyles.error
 				)}
 				role="alert"
@@ -50,4 +49,3 @@
 			</div>
 		{/each}
 	</div>
-{/if}

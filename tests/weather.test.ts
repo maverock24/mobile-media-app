@@ -33,7 +33,8 @@ function makeMockForecast() {
 	const daily_max: number[] = [];
 	const daily_min: number[] = [];
 	const daily_code: number[] = [];
-	const base = new Date('2026-03-15');
+	const base = new Date();
+	base.setHours(0, 0, 0, 0);
 	for (let i = 0; i < 28; i++) {
 		const d = new Date(base);
 		d.setDate(base.getDate() + i);
@@ -48,8 +49,8 @@ function makeMockForecast() {
 	const hourly_code: number[] = [];
 	const hourly_visibility: number[] = [];
 	for (let h = 0; h < 96; h++) {
-		const dt = new Date('2026-03-15T00:00:00');
-		dt.setHours(h);
+		const dt = new Date(base);
+		dt.setHours(base.getHours() + h);
 		hourly_time.push(dt.toISOString().slice(0, 13));
 		hourly_temp.push(15 + Math.sin(h / 6));
 		hourly_code.push(0);

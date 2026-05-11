@@ -43,8 +43,8 @@ test.describe('Tab navigation', () => {
 	test('switches to Settings tab', async ({ page }) => {
 		await goToTab(page, 'Settings');
 		await expectActiveTab(page, 'Settings');
-		await expect(page.getByText('Settings').first()).toBeVisible();
-		await expect(page.getByText('Customize your experience')).toBeVisible();
+		await expect(page.getByRole('button', { name: /^Appearance/ })).toBeVisible();
+		await expect(page.getByRole('button', { name: /^Data & Storage/ })).toBeVisible();
 	});
 
 	test('restores the saved selected view on load', async ({ page }) => {
@@ -57,8 +57,8 @@ test.describe('Tab navigation', () => {
 		await waitForHydration(page);
 
 		await expectActiveTab(page, 'Settings');
-		await expect(page.getByText('Settings').first()).toBeVisible();
-		await expect(page.getByText('Customize your experience')).toBeVisible();
+		await expect(page.getByRole('button', { name: /^Appearance/ })).toBeVisible();
+		await expect(page.getByRole('button', { name: /^Data & Storage/ })).toBeVisible();
 	});
 
 	test('Music and Podcast views stay mounted when switching tabs', async ({ page }) => {

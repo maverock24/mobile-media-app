@@ -10,160 +10,122 @@ If you're seeing this, you've probably already done this step. Congrats!
 # create a new project
 npx sv create my-app
 ```
+# Mobile Media App
 
-To recreate this project with the same configuration:
+Mobile Media App is a SvelteKit + Capacitor media hub that combines local MP3 playback, podcast playback, radio streaming, weather, Google Drive-backed music libraries, and Android packaging in a single repository.
+
+## What This Repo Contains
+
+- `src/`: application code, shared UI, stores, native bridges, and routes
+- `tests/`: Playwright end-to-end coverage
+- `android/`: Capacitor Android project and native plugins
+- `static/` and `public/`: static assets and deploy-time resources
+- `docs/research/`: archived research notes and exploratory essays
+- `.github/workflows/`: CI, Android build, Android release, and deployment automation
+
+The root is intentionally reserved for entry-point project docs and core configuration such as `README.md`, `ROADMAP.md`, `01_PRD.md`, `PROGRESS.md`, `guardrails.md`, `package.json`, and deployment config files.
+
+## Prerequisites
+
+- Node.js 22
+- pnpm 10
+- Java 21 for Android builds
+- Android Studio for native Android work
+- Optional: a Google Cloud OAuth client if you want Google Drive playback locally
+
+## Setup
 
 ```sh
-# recreate this project
-pnpm dlx sv@0.12.7 create --template minimal --types ts --install pnpm mobile-media-app
+pnpm install
+pnpm dev
 ```
 
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Google Drive MP3 playback
-
-The music view can now sign in with Google and load MP3 files from the signed-in user's Google Drive.
-
-Setup:
-
-1. Create an OAuth client for a web application in Google Cloud.
-2. Enable the Google Drive API for that project.
-3. Add your local and deployed origins to the OAuth client.
-4. Set `PUBLIC_GOOGLE_CLIENT_ID` before running or building the app.
-
-Example:
+If you want Google Drive MP3 playback locally, set `PUBLIC_GOOGLE_CLIENT_ID` before starting the app:
 
 ```sh
 PUBLIC_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com pnpm dev
 ```
 
-Typical authorized JavaScript origins:
+Typical Google OAuth origins:
 
 - `http://localhost:5173`
-- Your production Netlify URL
-- Any custom domain serving this app
+- your Netlify production URL
+- any custom domain serving this app
 
-The app requests the readonly Drive scope and downloads MP3 blobs directly in the browser for playback.
-
-## Building
-
-To create a production version of your app:
+## Common Commands
 
 ```sh
-npm run build
+pnpm dev            # local development server
+pnpm build          # production web build
+pnpm preview        # preview the web build
+pnpm check          # Svelte + TypeScript validation
+pnpm test           # Playwright end-to-end tests
+pnpm validate       # typecheck + end-to-end tests
+pnpm build:mobile   # mobile-oriented static build
+pnpm cap:sync:android
+pnpm cap:open:android
 ```
 
-You can preview the production build with `npm run preview`.
+## Repository Conventions
 
-## Netlify deployment
+- Source code belongs in `src/`.
+- Tests belong in `tests/`.
+- Research and exploratory notes belong in `docs/research/`.
+- Generated output belongs in ignored directories such as `build/`, `dist-mobile/`, `test-results/`, and `playwright-report/`.
+- Local-only helper scripts, logs, and run metadata must stay out of git.
+- Keep commits small and single-purpose.
+- Use Conventional Commit style for new commits when possible, for example `feat:`, `fix:`, `docs:`, `chore:`.
 
-This project is configured for Netlify with `@sveltejs/adapter-netlify`.
+## Quality Checks
 
-Build locally:
+The repo now exposes a single validation entry point:
 
 ```sh
-pnpm build
+pnpm validate
 ```
 
-Deploy on Netlify:
+GitHub Actions also runs repository quality checks on pushes and pull requests via `.github/workflows/quality.yml`.
 
-```sh
-Build command: pnpm build
-Publish directory: build
-```
+## Netlify Deployment
 
-The repo includes a root `netlify.toml`, so Netlify should pick up the correct build settings automatically.
+This project uses `@sveltejs/adapter-netlify` for the web deployment path.
 
-## Android app with Capacitor
+- Build command: `pnpm build`
+- Publish directory: `build`
+- Config file: `netlify.toml`
 
-This project now includes a Capacitor setup for Android while keeping the existing Netlify web deployment path.
+## Android Packaging
 
-Build the mobile web assets:
+Capacitor Android support lives in `android/`.
 
 ```sh
 pnpm build:mobile
-```
-
-Sync the latest web bundle into the Android project:
-
-```sh
 pnpm cap:sync:android
-```
-
-Open the generated Android project in Android Studio:
-
-```sh
 pnpm cap:open:android
 ```
 
 Notes:
 
-- The Capacitor config is in `capacitor.config.ts`.
-- The Android project lives in the `android/` folder.
-- Mobile builds use a dedicated static SvelteKit output in `dist-mobile/`.
-- The normal `pnpm build` command still targets the Netlify deployment.
+- mobile builds output to `dist-mobile/`
+- web builds output to `build/`
+- CI uses Java 21 and Gradle to produce APKs
 
-## Netlify-hosted APK updates
+## CI And Releases
 
-The production Netlify deployment can also host the latest Android APK so the web app can offer installs from the Settings view.
+- `.github/workflows/quality.yml`: typecheck + Playwright validation
+- `.github/workflows/android-build.yml`: manual debug APK artifact build
+- `.github/workflows/android-release.yml`: tagged Android release build
+- `.github/workflows/netlify-deploy.yml`: Netlify deployment and Android asset publishing
 
-How it works:
+## Documentation
 
-- The `Publish Android APK Assets` GitHub Actions workflow builds an Android APK on each push to `main`.
-- The workflow commits `static/releases/android/latest.apk` and `static/releases/android/latest.json` back into the repository.
-- Before committing, the workflow deletes any older APK or manifest files from `static/releases/android`, so only the latest published APK remains in the repo tree.
-- Netlify picks up that GitHub commit through its existing repository integration, so GitHub does not deploy to Netlify directly.
-- The Settings screen reads that manifest and shows a `Download Latest Android APK` action when a build is available.
+- `ROADMAP.md`: high-level project direction
+- `01_PRD.md`: detailed implementation requirements used by the autonomous agent workflow
+- `PROGRESS.md`: implementation ledger for the autonomous workflow
+- `guardrails.md`: coding constraints and repo-specific implementation rules
+- `docs/research/`: exploratory notes and research artifacts
 
-Recommended GitHub secrets for repeatable installs and upgrades:
+## Contributing
 
-- `ANDROID_KEYSTORE_BASE64`
-- `ANDROID_KEYSTORE_PASSWORD`
+See `CONTRIBUTING.md` for branch, commit, validation, and review expectations.
 - `ANDROID_KEY_ALIAS`
-- `ANDROID_KEY_PASSWORD`
-
-Repository settings required for the workflow:
-
-- GitHub Actions must be allowed to push commits back to `main`.
-- If branch protection blocks bot pushes, allow `github-actions[bot]` or route this workflow through a release branch instead.
-
-Why the Android signing secrets matter:
-
-- Without a stable signing key, CI can only publish debug-signed APKs.
-- Debug APKs are fine for fresh installs, but they are not reliable for upgrading an already installed app across separate CI runners.
-- With the signing secrets configured, the workflows produce a consistently signed release APK and increment `versionCode` from the GitHub Actions run number.
-
-Operational note:
-
-- This approach keeps only the latest APK file in the repository tree so Netlify serves a single current installer.
-- Git history will still contain prior APK versions from older commits unless you later rewrite history.
-
-## GitHub Actions Android artifacts
-
-The repo includes GitHub Actions workflows for both manual Android artifacts and tagged GitHub releases.
-
-How to use it:
-
-Run the `Android Build` workflow manually from the GitHub Actions tab to produce an artifact without deploying.
-
-After the workflow finishes, download the `media-hub-android-debug-apk` artifact from the workflow run page. The uploaded file is the debug APK produced from:
-
-```text
-android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-Notes:
-
-- The `Android Release` workflow builds a signed release APK when you push a `v*` tag and the Android signing secrets are configured.
-- For Play Store submission, add a separate signed release workflow that builds an AAB with signing credentials stored in GitHub secrets.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

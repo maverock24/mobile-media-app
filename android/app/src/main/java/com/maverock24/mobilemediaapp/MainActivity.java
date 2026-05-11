@@ -1,5 +1,6 @@
 package com.maverock24.mobilemediaapp;
 
+import android.media.AudioManager;
 import android.os.Bundle;
 
 import com.getcapacitor.BridgeActivity;
@@ -10,5 +11,6 @@ public class MainActivity extends BridgeActivity {
 		registerPlugin(DirectoryReaderPlugin.class);
 		registerPlugin(MediaControlsPlugin.class);
 		super.onCreate(savedInstanceState);
+		setVolumeControlStream(AudioManager.STREAM_MUSIC);
 	}
 }

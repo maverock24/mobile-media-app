@@ -1,4 +1,4 @@
-import { json, type RequestHandler, type ResponseInit } from '@sveltejs/kit';
+import { json, type RequestHandler } from '@sveltejs/kit';
 
 const DEFAULT_CACHE_CONTROL = 'public, max-age=300';
 

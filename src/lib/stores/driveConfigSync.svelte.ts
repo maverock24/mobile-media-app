@@ -51,6 +51,10 @@ class DriveConfigSync {
 		return this.accessToken.length > 0 && Date.now() < this.expiresAt - 60_000;
 	}
 
+	get hasSession() {
+		return this.accessToken.length > 0 || this.expiresAt > 0;
+	}
+
 	// ─── Auth ──────────────────────────────────────────────────────────────────
 
 	/** Request an appdata-scoped token (may prompt the user). */
@@ -245,6 +249,10 @@ class DriveConfigSync {
 	/** Upload the current local state to Drive. Queues if offline. */
 	async save(): Promise<void> {
 		if (!this.isConnected) {
+			if (!this.hasSession) {
+				this.pendingSave = false;
+				return;
+			}
 			// Try silent refresh first
 			const refreshed = await this.silentRefresh();
 			if (!refreshed) {
@@ -322,6 +330,9 @@ class DriveConfigSync {
 
 	/** Schedule a debounced save (3 s after last call). */
 	scheduleSave() {
+		if (!this.hasSession) {
+			return;
+		}
 		if (this.saveTimer) clearTimeout(this.saveTimer);
 		this.saveTimer = setTimeout(() => {
 			this.saveTimer = null;

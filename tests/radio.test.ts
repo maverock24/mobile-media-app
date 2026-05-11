@@ -71,6 +71,19 @@ async function goToRadio(page: Page) {
 	await goToTab(page, 'Radio');
 }
 
+async function openRadioSearch(page: Page) {
+	await page.getByRole('button', { name: /Search/i }).first().click();
+	const form = page.locator('form').filter({ has: page.getByPlaceholder(/Search radio stations/i) }).first();
+	await expect(form.getByPlaceholder(/Search radio stations/i)).toBeVisible();
+	return form;
+}
+
+async function openRadioFavorites(page: Page) {
+	const favoritesTab = page.getByRole('button', { name: /^Favorites/ }).first();
+	await favoritesTab.click();
+	return favoritesTab;
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 test.describe('Radio view', () => {
 	// ── Structure ────────────────────────────────────────────────────────────
@@ -88,23 +101,22 @@ test.describe('Radio view', () => {
 
 	test('Search tab shows search input and button', async ({ page }) => {
 		await goToRadio(page);
-		await page.getByRole('button', { name: /Search/i }).click();
-		await expect(page.getByPlaceholder(/Search radio stations/i)).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeVisible();
+		const form = await openRadioSearch(page);
+		await expect(form.getByRole('button', { name: 'Search', exact: true })).toBeVisible();
 	});
 
 	test('Search button is disabled when query is empty', async ({ page }) => {
 		await goToRadio(page);
-		await page.getByRole('button', { name: /Search/i }).click();
-		await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeDisabled();
+		const form = await openRadioSearch(page);
+		await expect(form.getByRole('button', { name: 'Search', exact: true })).toBeDisabled();
 	});
 
 	// ── Searching ────────────────────────────────────────────────────────────
 	test('searching for a station shows results', async ({ page }) => {
 		await goToRadio(page);
-		await page.getByRole('button', { name: /Search/i }).click();
-		await page.getByPlaceholder(/Search radio stations/i).fill('jazz');
-		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const form = await openRadioSearch(page);
+		await form.getByPlaceholder(/Search radio stations/i).fill('jazz');
+		await form.getByRole('button', { name: 'Search', exact: true }).click();
 
 		await expect(page.getByText('Test Jazz FM')).toBeVisible();
 		await expect(page.getByText('Test Classical Radio')).toBeVisible();
@@ -112,9 +124,9 @@ test.describe('Radio view', () => {
 
 	test('station metadata is displayed in results', async ({ page }) => {
 		await goToRadio(page);
-		await page.getByRole('button', { name: /Search/i }).click();
-		await page.getByPlaceholder(/Search radio stations/i).fill('jazz');
-		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const form = await openRadioSearch(page);
+		await form.getByPlaceholder(/Search radio stations/i).fill('jazz');
+		await form.getByRole('button', { name: 'Search', exact: true }).click();
 
 		// Meta line for Jazz FM: "US · MP3 · 128kbps"
 		await expect(page.getByText(/US.*MP3.*128kbps/i)).toBeVisible();
@@ -131,9 +143,9 @@ test.describe('Radio view', () => {
 		);
 		await page.goto('/');
 		await goToTab(page, 'Radio');
-		await page.getByRole('button', { name: /Search/i }).click();
-		await page.getByPlaceholder(/Search radio stations/i).fill('insecure');
-		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const form = await openRadioSearch(page);
+		await form.getByPlaceholder(/Search radio stations/i).fill('insecure');
+		await form.getByRole('button', { name: 'Search', exact: true }).click();
 
 		await expect(page.getByText(/No secure.*HTTPS.*stream/i)).toBeVisible();
 		await expect(page.getByText('Insecure Station')).not.toBeVisible();
@@ -145,9 +157,9 @@ test.describe('Radio view', () => {
 		);
 		await page.goto('/');
 		await goToTab(page, 'Radio');
-		await page.getByRole('button', { name: /Search/i }).click();
-		await page.getByPlaceholder(/Search radio stations/i).fill('jazz');
-		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const form = await openRadioSearch(page);
+		await form.getByPlaceholder(/Search radio stations/i).fill('jazz');
+		await form.getByRole('button', { name: 'Search', exact: true }).click();
 
 		await expect(page.getByText(/Upstream error|unavailable|Try again/i)).toBeVisible();
 	});
@@ -155,37 +167,37 @@ test.describe('Radio view', () => {
 	// ── Favorites ────────────────────────────────────────────────────────────
 	test('searching a station adds it to favorites', async ({ page }) => {
 		await goToRadio(page);
-		await page.getByRole('button', { name: /Search/i }).click();
-		await page.getByPlaceholder(/Search radio stations/i).fill('jazz');
-		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const form = await openRadioSearch(page);
+		await form.getByPlaceholder(/Search radio stations/i).fill('jazz');
+		await form.getByRole('button', { name: 'Search', exact: true }).click();
 		await expect(page.getByText('Test Jazz FM')).toBeVisible();
 
 		// Click the star next to the first result
 		await page.getByRole('button', { name: 'Add to favorites' }).first().click();
 
 		// Switch to Favorites tab and verify the station appears
-		await page.getByRole('button', { name: /Favorites/i }).click();
+		await openRadioFavorites(page);
 		await expect(page.getByText('Test Jazz FM')).toBeVisible();
 	});
 
 	test('favorites count badge updates when a station is starred', async ({ page }) => {
 		await goToRadio(page);
-		await page.getByRole('button', { name: /Search/i }).click();
-		await page.getByPlaceholder(/Search radio stations/i).fill('jazz');
-		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const form = await openRadioSearch(page);
+		await form.getByPlaceholder(/Search radio stations/i).fill('jazz');
+		await form.getByRole('button', { name: 'Search', exact: true }).click();
 		await expect(page.getByText('Test Jazz FM')).toBeVisible();
 
 		await page.getByRole('button', { name: 'Add to favorites' }).first().click();
 
 		// Favorites tab should now show a badge with count 1
-		await expect(page.getByRole('button', { name: /Favorites/i })).toContainText('1');
+		await expect(page.getByRole('button', { name: /^Favorites/ }).first()).toContainText('1');
 	});
 
 	test('starring multiple stations adds all to favorites', async ({ page }) => {
 		await goToRadio(page);
-		await page.getByRole('button', { name: /Search/i }).click();
-		await page.getByPlaceholder(/Search radio stations/i).fill('jazz');
-		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const form = await openRadioSearch(page);
+		await form.getByPlaceholder(/Search radio stations/i).fill('jazz');
+		await form.getByRole('button', { name: 'Search', exact: true }).click();
 		await expect(page.getByText('Test Jazz FM')).toBeVisible();
 
 		// Star both results
@@ -193,10 +205,10 @@ test.describe('Radio view', () => {
 		await starButtons.nth(0).click();
 		await starButtons.nth(0).click(); // second result (first is now "Remove")
 
-		await page.getByRole('button', { name: /Favorites/i }).click();
+		const favoritesTab = await openRadioFavorites(page);
 		await expect(page.getByText('Test Jazz FM')).toBeVisible();
 		await expect(page.getByText('Test Classical Radio')).toBeVisible();
-		await expect(page.getByRole('button', { name: /Favorites/i })).toContainText('2');
+		await expect(favoritesTab).toContainText('2');
 	});
 
 	test('removing a station from favorites via Favorites tab works', async ({ page }) => {
@@ -231,9 +243,9 @@ test.describe('Radio view', () => {
 
 	test('favorites persist across page reload', async ({ page }) => {
 		await goToRadio(page);
-		await page.getByRole('button', { name: /Search/i }).click();
-		await page.getByPlaceholder(/Search radio stations/i).fill('jazz');
-		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const form = await openRadioSearch(page);
+		await form.getByPlaceholder(/Search radio stations/i).fill('jazz');
+		await form.getByRole('button', { name: 'Search', exact: true }).click();
 		await expect(page.getByText('Test Jazz FM')).toBeVisible();
 		await page.getByRole('button', { name: 'Add to favorites' }).first().click();
 
@@ -247,9 +259,9 @@ test.describe('Radio view', () => {
 
 	test('star icon is filled/highlighted for favorited stations in search results', async ({ page }) => {
 		await goToRadio(page);
-		await page.getByRole('button', { name: /Search/i }).click();
-		await page.getByPlaceholder(/Search radio stations/i).fill('jazz');
-		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const form = await openRadioSearch(page);
+		await form.getByPlaceholder(/Search radio stations/i).fill('jazz');
+		await form.getByRole('button', { name: 'Search', exact: true }).click();
 		await expect(page.getByText('Test Jazz FM')).toBeVisible();
 
 		await page.getByRole('button', { name: 'Add to favorites' }).first().click();

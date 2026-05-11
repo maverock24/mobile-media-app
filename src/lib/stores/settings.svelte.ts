@@ -46,6 +46,20 @@ export const musicSettings = persisted('music-settings', {
 	rewindOnPrev: true,    // restart track if >3s in, on prev press
 	sortOrder: 'filename' as 'filename' | 'title' | 'artist',
 	favoriteFolders: [] as Array<{ id: string; name: string; source: 'device' | 'drive'; treeUri?: string }>,
+	favoriteTracks: [] as Array<{
+		key: string;
+		name: string;
+		title: string;
+		artist: string;
+		relativePath: string;
+		source: 'web' | 'native' | 'drive';
+		path?: string;
+		fileId?: string;
+		mimeType?: string;
+		modifiedAt?: number;
+		sizeBytes?: number;
+		webViewLink?: string;
+	}>,
 	browsePath: [] as string[],
 });
 
