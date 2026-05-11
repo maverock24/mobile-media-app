@@ -320,7 +320,20 @@
 	});
 
 	// ── Derived ─────────────────────────────────────────────────
-	const subscribedPodcasts = $derived(podcastData.podcasts.filter(p => p.subscribed));
+	// Sort subscribed podcasts by newest unplayed episode — podcasts with fresh
+	// unheard content bubble to the top. Fully-played / unloaded podcasts sink.
+	const subscribedPodcasts = $derived(
+		podcastData.podcasts.filter(p => p.subscribed).sort((a, b) => {
+			const latestUnplayed = (pod: Podcast): number => {
+				if (!pod.episodesLoaded || pod.episodes.length === 0) return 0;
+				const timestamps = pod.episodes
+					.filter(e => !e.played && e.publishedAt)
+					.map(e => new Date(e.publishedAt).getTime() || 0);
+				return timestamps.length > 0 ? Math.max(...timestamps) : 0;
+			};
+			return latestUnplayed(b) - latestUnplayed(a);
+		})
+	);
 
 	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
