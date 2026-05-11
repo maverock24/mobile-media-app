@@ -18,6 +18,7 @@
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { Music, Mic2, Radio, Cloud, Settings2, User } from 'lucide-svelte';
+	import { checkForAndroidUpdate } from '$lib/utils/androidUpdate';
 
 	type Tab = 'music' | 'podcasts' | 'radio' | 'login' | 'weather' | 'settings';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
@@ -45,6 +46,7 @@
 	onMount(() => {
 		activeTab = readSavedTab();
 		initSleepTimer();
+		void checkForAndroidUpdate();
 
 		if (runtimeDiagnostics.lastRuntimeError && typeof sessionStorage !== 'undefined' && !sessionStorage.getItem(RUNTIME_ERROR_NOTICE_KEY)) {
 			addToast({
