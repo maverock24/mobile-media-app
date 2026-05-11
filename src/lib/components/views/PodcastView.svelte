@@ -62,6 +62,8 @@
 	let isRefreshingAll    = $state(false); // pull-to-refresh: background refresh of all subscribed
 	let pullDistance       = $state(0);     // pull-to-refresh: current drag distance (px)
 	let listScrollEl       = $state<HTMLElement | null>(null);
+	let episodeScrollEl    = $state<HTMLElement | null>(null);
+	let episodePullDist    = $state(0);
 	let episodesError      = $state<string | null>(null);
 	let hasRestoredSelectedPodcast = false;
 	const podcastApiBaseUrl = (() => {
@@ -267,6 +269,46 @@
 			if (triggered) void refreshAllSubscribed();
 		}
 
+		el.addEventListener('touchstart', onTouchStart, { passive: true });
+		el.addEventListener('touchmove',  onTouchMove,  { passive: false });
+		el.addEventListener('touchend',   onTouchEnd,   { passive: true });
+		return () => {
+			el.removeEventListener('touchstart', onTouchStart);
+			el.removeEventListener('touchmove',  onTouchMove);
+			el.removeEventListener('touchend',   onTouchEnd);
+		};
+	});
+
+	// ── Pull-to-refresh for the episode list ────────────────────
+	$effect(() => {
+		const el = episodeScrollEl;
+		if (!el) return;
+		let _startY = 0;
+		let _active = false;
+		function onTouchStart(e: TouchEvent) {
+			if ((el as HTMLElement).scrollTop === 0) {
+				_active = true;
+				_startY = e.touches[0].clientY;
+			}
+		}
+		function onTouchMove(e: TouchEvent) {
+			if (!_active) return;
+			const dy = e.touches[0].clientY - _startY;
+			if (dy > 0) {
+				episodePullDist = Math.min(dy * 0.45, PULL_THRESHOLD + 20);
+				e.preventDefault();
+			} else {
+				_active = false;
+				episodePullDist = 0;
+			}
+		}
+		function onTouchEnd() {
+			if (!_active) return;
+			const triggered = episodePullDist >= PULL_THRESHOLD;
+			_active = false;
+			episodePullDist = 0;
+			if (triggered && selectedPodcast) void loadEpisodes(selectedPodcast, true);
+		}
 		el.addEventListener('touchstart', onTouchStart, { passive: true });
 		el.addEventListener('touchmove',  onTouchMove,  { passive: false });
 		el.addEventListener('touchend',   onTouchEnd,   { passive: true });
@@ -858,7 +900,25 @@
 		</div>
 
 		<!-- Episode list body -->
-		<div class="flex-1 overflow-y-auto">
+		<div class="flex-1 overflow-y-auto" bind:this={episodeScrollEl}>
+			<!-- Pull-to-refresh indicator -->
+			{#if episodesRefreshing || episodePullDist > 0}
+				<div
+					class="flex items-center justify-center gap-2 overflow-hidden"
+					style:height="{episodesRefreshing ? 44 : Math.round((episodePullDist / PULL_THRESHOLD) * 44)}px"
+					style:opacity="{episodesRefreshing ? 1 : Math.min(episodePullDist / PULL_THRESHOLD, 1)}"
+				>
+					<span
+						class="inline-flex {episodesRefreshing ? 'animate-spin text-primary' : 'text-muted-foreground'}"
+						style:transform={episodesRefreshing ? '' : `rotate(${Math.round((episodePullDist / PULL_THRESHOLD) * 180)}deg)`}
+					>
+						<RefreshCw class="w-4 h-4" />
+					</span>
+					{#if episodesRefreshing}
+						<span class="text-xs text-muted-foreground">Refreshing episodes…</span>
+					{/if}
+				</div>
+			{/if}
 			{#if episodesLoading}
 				<div class="flex flex-col items-center justify-center h-40 gap-3">
 					<div class="w-8 h-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin"></div>
