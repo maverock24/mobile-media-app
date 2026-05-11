@@ -2812,7 +2812,7 @@
 					</div>
 				{:else}
 					{#each filteredFavoriteTracks as entry}
-						{@const isCurrentTrack = currentMusicTrackKey === entry.favorite.key}
+						{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === entry.favorite.key}
 						<div class="flex items-center gap-2 px-4 py-2 border-b hover:bg-accent transition-colors">
 							<button
 								class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {entry.file ? (isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/30 active:bg-primary/15' : 'active:bg-accent/80') : 'opacity-60'}"
@@ -2898,7 +2898,7 @@
 					{:else}
 					<!-- File row — click anywhere to play -->
 					{@const isSelected = isBrowseFileSelected(entry.file)}
-					{@const isCurrentTrack = currentMusicTrackKey === getStoredFileKey(entry.file)}
+					{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === getStoredFileKey(entry.file)}
 					<div class="flex items-center gap-2 px-4 py-2 border-b transition-colors {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/8 ring-1 ring-inset ring-primary/25' : 'hover:bg-accent'}">
 						<button
 							class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {isSelected || isCurrentTrack ? 'active:bg-primary/18' : 'active:bg-accent/80'}"
