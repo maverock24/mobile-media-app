@@ -1,5 +1,14 @@
 # PRD: Audio Playback Reliability & Simplification
 
+> Historical planning document. This PRD reflects the original audio-reliability campaign proposal, not every architectural decision that shipped.
+>
+> Current source of truth:
+> - live implementation under `src/`
+> - `.github/copilot-instructions.md`
+> - `guardrails.md`
+>
+> Important drift note: the shared `audioService` approach proposed below was not adopted. The shipped code continues to use `mediaEngine` plus view-owned audio elements.
+
 ## Executive Summary
 
 The Media Hub app suffers from two classes of critical playback failures: **podcast episodes failing to play** and **MP3 file playback instability**. Root cause analysis reveals 28 distinct bugs spanning silent error handling, race conditions in async audio operations, Google Drive token expiration mid-stream, concurrent state mutations, and memory leaks from unmanaged blob URLs.

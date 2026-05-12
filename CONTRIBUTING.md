@@ -48,3 +48,12 @@ If you touched Android-only code, also validate the Android build path locally w
 - remove dead code instead of commenting it out
 - add comments only where logic is genuinely non-obvious
 - update docs when commands, workflow, or structure change
+
+## AI Context Upkeep
+
+- If you change architecture, playback flow, persistence patterns, validation commands, or folder conventions, update the matching AI guidance in the same PR.
+- Start with `.github/copilot-instructions.md` for repo-wide rules.
+- Update the relevant scoped file in `.github/instructions/` when the change is specific to Svelte components, stores, or Playwright tests.
+- Keep `guardrails.md` aligned with the code if it is still being used as an active planning document.
+- Treat `01_PRD.md` and `PROGRESS.md` as campaign artifacts unless the current work is explicitly using them.
+- The repo ships `.mcp.json` with the official Svelte MCP server. Keep secret-bearing or user-specific MCP servers out of git.

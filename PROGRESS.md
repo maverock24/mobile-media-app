@@ -1,5 +1,14 @@
 # Autonomous Execution Ledger
 
+> Historical execution ledger for the completed audio-reliability campaign.
+>
+> This file is useful as an audit log of what was attempted, accepted, rejected, or deferred. It is not the primary source of truth for current architecture.
+>
+> Current source of truth:
+> - live implementation under `src/`
+> - `.github/copilot-instructions.md`
+> - `guardrails.md`
+
 ## Phase 1: Foundation — Shared Audio Service & Error Toast System
 
 - [x] TASK-1.1: ~~Create audioService~~ → Pivoted: mediaEngine already owns audio slots, crossfade, queue, EQ. Enhanced mediaEngine with toast error support instead. — a shared audio service with a single `<audio>` HTMLElement, reactive Svelte 5 `$state` for `isPlaying`, `isBuffering`, `currentTime`, `duration`, `error`, `source`, `currentItem`. Implement `load()`, `play()`, `pause()`, `seek()`, `stop()`, `setPlaybackRate()`, `getAudioElement()`, `destroy()`. Include URL revocation tracking (auto-revokes previous blob URLs on `load()`). Include proper `loadedmetadata` gating for seek operations.

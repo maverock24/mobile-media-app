@@ -1,14 +1,22 @@
 # Media Hub — Comprehensive Implementation Plan
 
+> Historical roadmap. This document captures an earlier expansion plan and does not describe the current repository architecture in full.
+>
+> Current source of truth:
+> - live implementation under `src/`
+> - `.github/copilot-instructions.md`
+> - `guardrails.md`
+> - `README.md` and `CONTRIBUTING.md` for workflow expectations
+
 This roadmap is aligned to the current state of the application rather than the intended end state. Today, the app already has working Music, Podcasts, Weather, Settings, and Drive/Login views, with tab persistence in the root shell, view-level audio ownership for Music and Podcasts, Playwright coverage for the existing flows, and partially scaffolded Essays work that is not yet integrated.
 
 The goal of this plan is to move from the current architecture to a more maintainable media app without breaking the working playback and navigation behaviors already present.
 
 ## Current Baseline
 
-### 8
+### Draft Baseline Snapshot
 *   `src/routes/+page.svelte` mounts Music and Podcasts permanently and hides them with CSS so playback survives tab switches.
-*   `src/lib/stores/activeAudio.svelte.ts` only coordinates exclusivity by stopping the other audio source; it is not yet a full playback engine.
+*   This roadmap was drafted during an earlier playback-architecture phase. Current playback coordination is centered on `mediaEngine`, and some details below may reflect the older plan rather than the shipped implementation.
 *   `Mp3PlayerView.svelte`, `PodcastView.svelte`, `WeatherView.svelte`, `SettingsView.svelte`, and `LoginView.svelte` are implemented and already part of the tab shell.
 *   `EssayCard.svelte`, `EssayListView.svelte`, `EssayPlayerView.svelte`, `AudioPlayer.svelte`, and `PlayerControls.svelte` are currently stubs.
 *   `src/routes/essays/+page.svelte` is also a stub.

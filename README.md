@@ -1,15 +1,3 @@
-# sv
-
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
-
-## Creating a project
-
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
-```
 # Mobile Media App
 
 Mobile Media App is a SvelteKit + Capacitor media hub that combines local MP3 playback, podcast playback, radio streaming, weather, Google Drive-backed music libraries, and Android packaging in a single repository.
@@ -120,12 +108,23 @@ Notes:
 ## Documentation
 
 - `ROADMAP.md`: high-level project direction
-- `01_PRD.md`: detailed implementation requirements used by the autonomous agent workflow
-- `PROGRESS.md`: implementation ledger for the autonomous workflow
-- `guardrails.md`: coding constraints and repo-specific implementation rules
+- `01_PRD.md`: historical planning document from the audio-reliability campaign
+- `PROGRESS.md`: historical execution ledger for the audio-reliability campaign
+- `guardrails.md`: current repo-specific implementation rules and architectural boundaries
 - `docs/research/`: exploratory notes and research artifacts
+
+## AI Context
+
+- `.github/copilot-instructions.md`: always-on project briefing for GitHub Copilot
+- `.github/instructions/*.instructions.md`: scoped guidance for Svelte components, rune-based stores, and Playwright tests
+- `.github/instructions/ai-governance.instructions.md`: scoped guidance for editing the repo's own Copilot, agent, and PR-governance files
+- `.github/agents/`: longer planning and research workflows for larger tasks
+- `.mcp.json`: project-scoped MCP configuration for current Svelte documentation lookup
+- For routine maintenance, prefer the live code in `src/` as the source of truth
+- If architecture changes, update the relevant instruction file in the same PR so the AI context stays current
+- If `01_PRD.md`, `PROGRESS.md`, or `guardrails.md` drift from the implementation, either reconcile them or treat them as historical planning docs until updated
+- The repo MCP config currently enables the official Svelte MCP server; user-specific or secret-bearing MCP servers should stay in personal editor configuration rather than in the repo
 
 ## Contributing
 
 See `CONTRIBUTING.md` for branch, commit, validation, and review expectations.
-- `ANDROID_KEY_ALIAS`
