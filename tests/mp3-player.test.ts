@@ -5,7 +5,7 @@
  * via Playwright file chooser + fake MP3 buffers.
  */
 import { test, expect } from '@playwright/test';
-import { goToTab } from './helpers';
+import { dispatchHorizontalSwipe, goToTab } from './helpers';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -33,6 +33,9 @@ test.describe('MP3 Player view', () => {
 		createMinimalMp3('01 - Artist - Track One.mp3', tmpDir);
 		createMinimalMp3('02 - Artist - Track Two.mp3', tmpDir);
 		createMinimalMp3('03 - Artist - Track Three.mp3', tmpDir);
+		const nestedDir = path.join(tmpDir, 'Subfolder');
+		fs.mkdirSync(nestedDir);
+		createMinimalMp3('04 - Artist - Nested Track.mp3', nestedDir);
 	});
 
 	test.afterAll(() => {
@@ -97,6 +100,30 @@ test.describe('MP3 Player view', () => {
 
 		// Browse view should appear
 		await expect(page.getByText(/Track One|Track Two|Track Three/i).first()).toBeVisible({ timeout: 5000 });
+	});
+
+	test('right swipe in a subfolder returns to the parent folder', async ({ page }) => {
+		const [fileChooser] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) {
+					input.style.display = 'block';
+					input.style.opacity = '1';
+					input.click();
+				}
+			}),
+		]);
+		await fileChooser.setFiles(tmpDir);
+
+		await page.getByRole('button', { name: /Browse Subfolder/i }).click({ timeout: 5000 });
+		const nestedTrack = page.getByRole('button', { name: /Play 04 - Artist - Nested Track\.mp3/i }).first();
+		await expect(nestedTrack).toBeVisible({ timeout: 5000 });
+
+		await dispatchHorizontalSwipe(nestedTrack, { startX: 36, endX: 156 });
+
+		await expect(page.getByRole('button', { name: /Browse Subfolder/i })).toBeVisible({ timeout: 5000 });
+		await expect(nestedTrack).not.toBeVisible();
 	});
 
 	test('shows track list after loading files', async ({ page }) => {

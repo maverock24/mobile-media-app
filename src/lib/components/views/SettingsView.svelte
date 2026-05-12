@@ -280,6 +280,7 @@
 		appSettings.hapticFeedback = true;
 		appSettings.driveMode = false;
 		appSettings.mediaControlsPosition = 'bottom';
+		appSettings.listTileTone = 'default';
 		// music
 		musicSettings.volume = 80;
 		musicSettings.isMuted = false;
@@ -329,7 +330,7 @@
 				</div>
 				<div class="flex-1 min-w-0">
 					<p class="font-semibold">Appearance</p>
-					<p class="text-xs text-muted-foreground capitalize">{appSettings.theme} theme · {appSettings.fontSize} text · controls {appSettings.mediaControlsPosition}{appSettings.driveMode ? ' · drive mode on' : ''}</p>
+					<p class="text-xs text-muted-foreground capitalize">{appSettings.theme} theme · {appSettings.fontSize} text · controls {appSettings.mediaControlsPosition} · tiles {appSettings.listTileTone}{appSettings.driveMode ? ' · drive mode on' : ''}</p>
 				</div>
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'app' ? 'rotate-90' : ''}" />
 			</button>
@@ -423,6 +424,23 @@
 									<button
 										class="flex-1 py-2 rounded-lg text-sm border transition-colors {appSettings.mediaControlsPosition === option.id ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
 										onclick={() => (appSettings.mediaControlsPosition = option.id as typeof appSettings.mediaControlsPosition)}
+									>
+										{option.label}
+									</button>
+								{/each}
+							</div>
+						</div>
+						<div class="rounded-xl border border-border/50 bg-background/40 px-3 py-3">
+							<p class="text-sm font-medium mb-1">List Tile Brightness</p>
+							<p class="text-xs text-muted-foreground mb-3">Make the music, podcast, and radio list rows a little lighter.</p>
+							<div class="flex gap-2">
+								{#each [
+									{ id: 'default', label: 'Default' },
+									{ id: 'lighter', label: 'Lighter' }
+								] as option}
+									<button
+										class="flex-1 py-2 rounded-lg text-sm border transition-colors {appSettings.listTileTone === option.id ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
+										onclick={() => (appSettings.listTileTone = option.id as typeof appSettings.listTileTone)}
 									>
 										{option.label}
 									</button>

@@ -2,7 +2,7 @@
  * Navigation tests — bottom tab bar, view visibility, persistence across switches.
  */
 import { test, expect } from '@playwright/test';
-import { goToTab, expectActiveTab, waitForHydration } from './helpers';
+import { dispatchHorizontalSwipe, goToTab, expectActiveTab, waitForHydration } from './helpers';
 
 test.describe('Tab navigation', () => {
 	test.beforeEach(async ({ page }) => {
@@ -81,6 +81,17 @@ test.describe('Tab navigation', () => {
 			await expect(btn).toBeVisible();
 			await expect(btn).toBeEnabled();
 		}
+	});
+
+	test('horizontal swipes still switch between root tabs', async ({ page }) => {
+		await goToTab(page, 'Podcasts');
+		const main = page.locator('main');
+
+		await dispatchHorizontalSwipe(main, { startX: 40, endX: 150 });
+		await expectActiveTab(page, 'Music');
+
+		await dispatchHorizontalSwipe(main, { startX: 150, endX: 40 });
+		await expectActiveTab(page, 'Podcasts');
 	});
 
 	test('unknown saved tab value falls back to default Music tab', async ({ page }) => {

@@ -76,6 +76,7 @@ export interface DriveConfigAppSettings {
 	hapticFeedback: boolean;
 	driveMode?: boolean;
 	mediaControlsPosition?: 'top' | 'bottom';
+	listTileTone?: 'default' | 'lighter';
 }
 
 export interface DriveConfigWeatherSettings {

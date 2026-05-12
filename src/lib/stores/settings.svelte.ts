@@ -11,6 +11,7 @@ export const appSettings = persisted('app-settings', {
 	hapticFeedback: true,
 	driveMode: false,
 	mediaControlsPosition: 'bottom' as 'top' | 'bottom',
+	listTileTone: 'default' as 'default' | 'lighter',
 });
 
 // ─────────────────────────────────────────────────────────────

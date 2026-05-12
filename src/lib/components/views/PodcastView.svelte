@@ -5,7 +5,7 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
 	import Badge from '$lib/components/ui/Badge.svelte';
-	import { podcastSettings, podcastData } from '$lib/stores/settings.svelte';
+	import { appSettings, podcastSettings, podcastData } from '$lib/stores/settings.svelte';
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
@@ -66,6 +66,7 @@
 	let episodePullDist    = $state(0);
 	let episodesError      = $state<string | null>(null);
 	let hasRestoredSelectedPodcast = false;
+	const lighterListTiles = $derived(appSettings.listTileTone === 'lighter');
 	const podcastApiBaseUrl = (() => {
 		const configuredBaseUrl = env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
 		if (configuredBaseUrl) return configuredBaseUrl;
@@ -283,9 +284,11 @@
 	$effect(() => {
 		const el = episodeScrollEl;
 		if (!el) return;
+		let _startX = 0;
 		let _startY = 0;
 		let _active = false;
 		function onTouchStart(e: TouchEvent) {
+			_startX = e.touches[0].clientX;
 			if ((el as HTMLElement).scrollTop === 0) {
 				_active = true;
 				_startY = e.touches[0].clientY;
@@ -302,7 +305,17 @@
 				episodePullDist = 0;
 			}
 		}
-		function onTouchEnd() {
+		function onTouchEnd(e: TouchEvent) {
+			const dx = e.changedTouches[0].clientX - _startX;
+			const dy = e.changedTouches[0].clientY - _startY;
+			if (selectedPodcast && dx > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+				e.stopPropagation();
+				selectedPodcast = null;
+				episodesError = null;
+				episodePullDist = 0;
+				_active = false;
+				return;
+			}
 			if (!_active) return;
 			const triggered = episodePullDist >= PULL_THRESHOLD;
 			_active = false;
@@ -954,7 +967,7 @@
 			{:else}
 				{#each selectedPodcast.episodes as episode}
 					<div
-						class="tap-feedback p-4 border-b hover:bg-accent/40 active:bg-accent/60 transition-colors cursor-pointer"
+						class="tap-feedback p-4 border-b transition-colors cursor-pointer {lighterListTiles ? 'bg-card/45 hover:bg-card/70 active:bg-card/80' : 'hover:bg-accent/40 active:bg-accent/60'}"
 						role="button"
 						tabindex="0"
 						onclick={() => selectedPodcast && activateEpisode(selectedPodcast, episode)}
@@ -1077,7 +1090,7 @@
 				<!-- ── Subscribed List ── -->
 				{#each subscribedPodcasts as podcast}
 					{@const artGradient = artworkFallback(podcast)}
-					<div class="tap-feedback flex items-center gap-3 p-4 border-b hover:bg-accent/40 active:bg-accent/60 transition-colors cursor-pointer"
+					<div class="tap-feedback flex items-center gap-3 p-4 border-b transition-colors cursor-pointer {lighterListTiles ? 'bg-card/45 hover:bg-card/70 active:bg-card/80' : 'hover:bg-accent/40 active:bg-accent/60'}"
 						role="button" tabindex="0"
 						onclick={() => openPodcast(podcast)}
 						onkeydown={(e) => e.key === 'Enter' && openPodcast(podcast)}
@@ -1132,7 +1145,7 @@
 					{#each searchResults as item}
 						{@const subscribed = isSubscribed(item.trackId)}
 						{@const localPodcast = podcastData.podcasts.find(p => p.itunesId === item.trackId)}
-						<div class="tap-feedback flex items-center gap-3 p-4 border-b hover:bg-accent/40 active:bg-accent/60 transition-colors cursor-pointer"
+						<div class="tap-feedback flex items-center gap-3 p-4 border-b transition-colors cursor-pointer {lighterListTiles ? 'bg-card/45 hover:bg-card/70 active:bg-card/80' : 'hover:bg-accent/40 active:bg-accent/60'}"
 							role="button" tabindex="0"
 							onclick={() => localPodcast && openPodcast(localPodcast)}
 							onkeydown={(e) => e.key === 'Enter' && localPodcast && openPodcast(localPodcast)}

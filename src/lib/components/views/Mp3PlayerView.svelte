@@ -20,7 +20,7 @@
 		type GoogleDriveFolder,
 		type GoogleDriveUser
 	} from '$lib/google-drive';
-	import { musicSettings } from '$lib/stores/settings.svelte';
+	import { appSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	
@@ -78,6 +78,7 @@
 	const LAST_LIBRARY_CACHE_KEY = 'last-library';
 	const BACKGROUND_LIBRARY_SCAN_BATCH_SIZE = 120;
 	const FOLDER_PLAY_SCAN_BATCH_SIZE = 48;
+	const lighterListTiles = $derived(appSettings.listTileTone === 'lighter');
 	const FOLDER_PLAY_INITIAL_BATCH_SIZE = 1;
 	const FOLDER_PLAY_PRIME_COUNT = 1;
 	const FOLDER_PLAY_QUEUE_FLUSH_SIZE = 400;
@@ -353,6 +354,9 @@
 	let isRestoring = $state(true);  // true until IDB check finishes (prevents empty-state flash)
 	let preloadedTrackIndex = $state<number | null>(null);
 	let preloadRequestId = 0;
+	let browseGestureEl = $state<HTMLElement | null>(null);
+	let browseSwipeStartX = 0;
+	let browseSwipeStartY = 0;
 	// Prevents background folder scans from overwriting the track list after the user has
 	// explicitly selected a song via playBrowseFile / playCurrentFolder / playFolderPath.
 	let trackListLockedByUser = false;
@@ -2309,6 +2313,11 @@
 		showFavoriteTracks = false;
 		browsePath = [...browsePath, name];
 	}
+	function navigateToParentFolderFromSwipe() {
+		if (browsePath.length === 0) return;
+		showFavoriteTracks = false;
+		browsePath = browsePath.slice(0, -1);
+	}
 	function navigateUp() {
 		if (showFavoriteTracks) {
 			showFavoriteTracks = false;
@@ -2317,6 +2326,31 @@
 		if (browsePath.length > 0) browsePath = browsePath.slice(0, -1);
 		else showQueue = false;
 	}
+
+	function onBrowseTouchStart(e: TouchEvent) {
+		browseSwipeStartX = e.touches[0].clientX;
+		browseSwipeStartY = e.touches[0].clientY;
+	}
+
+	function onBrowseTouchEnd(e: TouchEvent) {
+		if (browsePath.length === 0) return;
+		const dx = e.changedTouches[0].clientX - browseSwipeStartX;
+		const dy = e.changedTouches[0].clientY - browseSwipeStartY;
+		if (dx <= 60 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
+		e.stopPropagation();
+		navigateToParentFolderFromSwipe();
+	}
+
+	$effect(() => {
+		const el = browseGestureEl;
+		if (!el) return;
+		el.addEventListener('touchstart', onBrowseTouchStart, { passive: true });
+		el.addEventListener('touchend', onBrowseTouchEnd, { passive: true });
+		return () => {
+			el.removeEventListener('touchstart', onBrowseTouchStart);
+			el.removeEventListener('touchend', onBrowseTouchEnd);
+		};
+	});
 
 	// ─────────────────────────────────────────────────────────────
 	// Playback controls
@@ -2625,7 +2659,7 @@
 
 	<!-- ════════════════════════════════ BROWSE VIEW ════════════════════════════════ -->
 	{:else if showQueue}
-	<div class="flex flex-col h-full">
+	<div class="flex flex-col h-full" bind:this={browseGestureEl}>
 
 		<!-- Header -->
 		<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0">
@@ -2855,9 +2889,9 @@
 				{:else}
 					{#each filteredFavoriteTracks as entry}
 						{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === entry.favorite.key}
-						<div class="flex items-center gap-2 px-4 py-2 border-b hover:bg-accent transition-colors">
+						<div class="flex items-center gap-2 px-4 py-2 border-b transition-colors {isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : lighterListTiles ? 'bg-card/45 hover:bg-card/70' : 'hover:bg-accent'}">
 							<button
-								class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {entry.file ? (isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/30 active:bg-primary/15' : 'active:bg-accent/80') : 'opacity-60'}"
+								class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {entry.file ? (isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/30 active:bg-primary/15' : lighterListTiles ? 'active:bg-card/80' : 'active:bg-accent/80') : 'opacity-60'}"
 								onclick={() => playFavoriteTrack(entry.favorite)}
 								disabled={!entry.file}
 								aria-label={entry.file ? `Play ${entry.favorite.title}` : `${entry.favorite.title} is unavailable`}
@@ -2911,11 +2945,11 @@
 					{#if entry.kind === 'folder'}
 					{@const folderKey = [...browsePath, entry.name].join('/')}
 					<!-- Folder row -->
-					<div class="flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
+					<div class="flex items-center gap-3 px-4 py-3 border-b transition-colors {lighterListTiles ? 'bg-card/45 hover:bg-card/70 active:bg-card/80' : 'hover:bg-accent'}">
 						<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
 							<Folder class="w-4.5 h-4.5 text-primary" />
 						</div>
-						<button class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left active:bg-accent/80" onclick={() => navigateInto(entry.name)}>
+						<button class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {lighterListTiles ? 'active:bg-card/80' : 'active:bg-accent/80'}" onclick={() => navigateInto(entry.name)}>
 							<p class="font-medium text-sm truncate">{entry.name}</p>
 							<p class="text-xs text-muted-foreground">{entry.count > 0 ? entry.count + ' MP3 file' + (entry.count !== 1 ? 's' : '') : 'folder'}</p>
 						</button>
@@ -2941,9 +2975,9 @@
 					<!-- File row — click anywhere to play -->
 					{@const isSelected = isBrowseFileSelected(entry.file)}
 					{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === getStoredFileKey(entry.file)}
-					<div class="flex items-center gap-2 px-4 py-2 border-b transition-colors {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/8 ring-1 ring-inset ring-primary/25' : 'hover:bg-accent'}">
+					<div class="flex items-center gap-2 px-4 py-2 border-b transition-colors {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : lighterListTiles ? 'bg-card/45 hover:bg-card/70' : 'hover:bg-accent'}">
 						<button
-							class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {isSelected || isCurrentTrack ? 'active:bg-primary/18' : 'active:bg-accent/80'}"
+							class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {isSelected || isCurrentTrack ? 'active:bg-primary/18' : lighterListTiles ? 'active:bg-card/80' : 'active:bg-accent/80'}"
 							onclick={async () => {
 								const fileKey = getStoredFileKey(entry.file);
 								if (longPressHandledFileKey === fileKey) {

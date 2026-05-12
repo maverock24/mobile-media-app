@@ -4,7 +4,7 @@
  * run offline and deterministically.
  */
 import { test, expect, type Page } from '@playwright/test';
-import { goToTab } from './helpers';
+import { dispatchHorizontalSwipe, expectActiveTab, goToTab } from './helpers';
 
 // ── Mock response factories ─────────────────────────────────────────────────
 const MOCK_ITUNES_RESULT = {
@@ -177,6 +177,22 @@ test.describe('Podcast view', () => {
 		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
 		await expect(page.getByText('Episode 2: Deep Dive')).toBeVisible();
 		await expect(page.getByText('Episode 3: Q&A')).toBeVisible();
+	});
+
+	test('right swipe in the episode list returns to subscribed podcasts', async ({ page }) => {
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+
+		const episodeRow = page
+			.locator('div.tap-feedback')
+			.filter({ has: page.getByText('Episode 1: Introduction', { exact: true }) })
+			.first();
+		await expect(episodeRow).toBeVisible({ timeout: 5000 });
+
+		await dispatchHorizontalSwipe(episodeRow, { startX: 36, endX: 156 });
+
+		await expect(page.getByRole('button', { name: /Subscribed \(1\)/i })).toBeVisible({ timeout: 5000 });
+		await expectActiveTab(page, 'Podcasts');
 	});
 
 	test('episode row shows duration and date', async ({ page }) => {

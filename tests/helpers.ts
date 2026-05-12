@@ -1,7 +1,7 @@
 /**
  * Shared helpers and selectors used across the test suite.
  */
-import { type Page, expect } from '@playwright/test';
+import { type Locator, type Page, expect } from '@playwright/test';
 
 export const BASE = 'http://127.0.0.1:4177';
 
@@ -46,4 +46,25 @@ export async function expectActiveTab(page: Page, label: string) {
 // ── Wait for network idle after navigation ──────────────────────────────────
 export async function navigationIdle(page: Page) {
 	await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
+}
+
+export async function dispatchHorizontalSwipe(target: Locator, options: { startX: number; endX: number; y?: number }) {
+	await target.evaluate((element, gesture) => {
+		const y = gesture.y ?? 160;
+		const fire = (type: 'touchstart' | 'touchend', clientX: number) => {
+			const event = new Event(type, { bubbles: true, cancelable: true });
+			Object.defineProperty(event, 'touches', {
+				configurable: true,
+				value: type === 'touchend' ? [] : [{ clientX, clientY: y }]
+			});
+			Object.defineProperty(event, 'changedTouches', {
+				configurable: true,
+				value: [{ clientX, clientY: y }]
+			});
+			element.dispatchEvent(event);
+		};
+
+		fire('touchstart', gesture.startX);
+		fire('touchend', gesture.endX);
+	}, options);
 }

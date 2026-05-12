@@ -108,6 +108,21 @@ test.describe('Settings view', () => {
 		await expect(page.getByRole('button', { name: 'Top', exact: true })).toHaveClass(/border-primary|text-primary/);
 	});
 
+	test('lighter list tiles can be enabled from Appearance settings', async ({ page }) => {
+		await page.getByRole('button', { name: /^Appearance/ }).click();
+		await expect(page.getByText('List Tile Brightness', { exact: true })).toBeVisible();
+		await page.getByRole('button', { name: 'Lighter', exact: true }).click();
+		await expect(page.getByRole('button', { name: 'Lighter', exact: true })).toHaveClass(/border-primary|text-primary/);
+
+		await page.getByRole('tab', { name: 'Radio', exact: true }).click();
+		await page.getByRole('button', { name: 'Search', exact: true }).first().click();
+
+		const tile = page.locator('li').filter({ hasText: 'BBC Radio 4' }).first();
+		await expect(tile).toBeVisible();
+		const backgroundColor = await tile.evaluate((node) => getComputedStyle(node).backgroundColor);
+		expect(backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+	});
+
 	test('Reduced Motion toggle is switchable', async ({ page }) => {
 		await page.getByRole('button', { name: /^Appearance/ }).click();
 		const toggle = page.getByRole('switch', { name: 'Reduced Motion' });

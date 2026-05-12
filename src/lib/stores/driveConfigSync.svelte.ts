@@ -217,6 +217,9 @@ class DriveConfigSync {
 				if (as.mediaControlsPosition !== undefined) {
 					appSettings.mediaControlsPosition = as.mediaControlsPosition as typeof appSettings.mediaControlsPosition;
 				}
+				if (as.listTileTone !== undefined) {
+					appSettings.listTileTone = as.listTileTone as typeof appSettings.listTileTone;
+				}
 			}
 
 			// Apply weather settings
@@ -302,6 +305,7 @@ class DriveConfigSync {
 					hapticFeedback: appSettings.hapticFeedback,
 					driveMode:      appSettings.driveMode,
 					mediaControlsPosition: appSettings.mediaControlsPosition,
+					listTileTone:   appSettings.listTileTone,
 				},
 				{
 					units:           weatherSettings.units,
