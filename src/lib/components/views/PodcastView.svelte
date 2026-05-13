@@ -127,6 +127,26 @@
 		}
 	}
 
+	function syncPersistedEpisodeState(podcastId: number, episode: Episode) {
+		const podcast = podcastData.podcasts.find((entry) => entry.id === podcastId);
+		const persistedEpisode = podcast?.episodes.find((entry) => entry.id === episode.id);
+		if (!persistedEpisode) return;
+
+		persistedEpisode.played = episode.played;
+		persistedEpisode.progress = episode.progress;
+		persistedEpisode.positionSec = episode.positionSec ?? 0;
+	}
+
+	function markEpisodeFullyPlayed(podcastId: number, episode: Episode) {
+		episode.played = true;
+		episode.progress = 100;
+		episode.positionSec = 0;
+		syncPersistedEpisodeState(podcastId, episode);
+		podcastData.lastEpisodeId = episode.id;
+		podcastData.lastPodcastId = podcastId;
+		podcastData.lastPositionSec = 0;
+	}
+
 	function scheduleReconnectResume(url: string, positionSec: number) {
 		cancelNetworkRetry(); // replace any previous pending retry
 		_reconnectListener = () => {
@@ -179,9 +199,7 @@
 			isBuffering = false;
 			mediaEngine.setPlaying(false);
 			if (currentEpisode) {
-				currentEpisode.episode.played = true;
-				currentEpisode.episode.progress = 100;
-				currentEpisode.episode.positionSec = 0;
+				markEpisodeFullyPlayed(currentEpisode.podcast.id, currentEpisode.episode);
 			}
 		};
 		const onError = () => {
@@ -834,15 +852,8 @@
 			if (!currentEpisode) return;
 			podcastData.lastEpisodeId   = currentEpisode.episode.id;
 			podcastData.lastPodcastId   = currentEpisode.podcast.id;
-			podcastData.lastPositionSec = audioEl.currentTime;
-			// Update only the target episode in-place to avoid cloning the whole array
-			const pod = podcastData.podcasts.find(p => p.id === currentEpisode!.podcast.id);
-			const ep  = pod?.episodes.find(e => e.id === currentEpisode!.episode.id);
-			if (ep) {
-				ep.played      = currentEpisode.episode.played;
-				ep.progress    = currentEpisode.episode.progress;
-				ep.positionSec = currentEpisode.episode.positionSec ?? 0;
-			}
+			podcastData.lastPositionSec = currentEpisode.episode.played ? 0 : audioEl.currentTime;
+			syncPersistedEpisodeState(currentEpisode.podcast.id, currentEpisode.episode);
 		};
 		audioEl.addEventListener('pause', onPause);
 		audioEl.addEventListener('ended', onPause);
@@ -982,7 +993,10 @@
 							<div class="flex-1 min-w-0">
 								<div class="flex items-center gap-2 mb-1">
 									{#if episode.played}
-										<CheckCircle2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+										<span class="inline-flex items-center gap-1 rounded-full bg-secondary/80 px-2 py-0.5 text-[11px] font-medium text-muted-foreground shrink-0">
+											<CheckCircle2 class="w-3.5 h-3.5" />
+											Played
+										</span>
 									{/if}
 									<p class="font-medium text-sm truncate {episode.played ? 'text-muted-foreground' : ''}">
 										{episode.title}

@@ -226,6 +226,40 @@ test.describe('Podcast view', () => {
 		await expect(page.getByRole('region', { name: /Mini player/i }).getByText('Episode 1: Introduction')).toBeVisible();
 	});
 
+	test('finishing an episode marks it as played', async ({ page }) => {
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+
+		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
+		await playEpisode(page, 'Episode 1: Introduction');
+
+		await page.locator('audio[src="https://example.com/ep1.mp3"]').evaluate((audioElement) => {
+			const audio = audioElement as HTMLAudioElement;
+			Object.defineProperty(audio, 'duration', { configurable: true, value: 3600 });
+			audio.currentTime = 3600;
+			audio.dispatchEvent(new Event('timeupdate'));
+			audio.dispatchEvent(new Event('ended'));
+		});
+
+		const episodeRow = page
+			.locator('div.tap-feedback')
+			.filter({ has: page.getByText('Episode 1: Introduction', { exact: true }) })
+			.first();
+
+		await expect(episodeRow.getByText('Played', { exact: true })).toBeVisible();
+		await expect
+			.poll(async () => page.evaluate(() => {
+				const raw = localStorage.getItem('podcast-data');
+				if (!raw) return null;
+				const data = JSON.parse(raw);
+				const episode = data.podcasts?.[0]?.episodes?.[0];
+				return episode
+					? { played: episode.played, progress: episode.progress, positionSec: episode.positionSec, lastPositionSec: data.lastPositionSec }
+					: null;
+			}))
+			.toEqual({ played: true, progress: 100, positionSec: 0, lastPositionSec: 0 });
+	});
+
 	test('clicking an episode row starts playback without using the play button', async ({ page }) => {
 		await page.getByPlaceholder('Search podcasts…').fill('test');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });

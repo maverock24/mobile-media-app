@@ -208,87 +208,87 @@
   }
 
   .list-tile-tone-slate-row {
-	background-color: hsl(215 28% 68% / 0.10);
+	background-color: hsl(215 16% 40% / 0.18);
 	transition: background-color 140ms ease;
   }
 
   .list-tile-tone-slate-row:hover,
   .list-tile-tone-slate-row:active,
   .list-tile-tone-slate-action:active {
-	background-color: hsl(215 30% 75% / 0.18);
+	background-color: hsl(215 18% 48% / 0.28);
   }
 
   .list-tile-tone-cyan-row {
-	background-color: hsl(192 92% 62% / 0.10);
+	background-color: hsl(192 58% 34% / 0.16);
 	transition: background-color 140ms ease;
   }
 
   .list-tile-tone-cyan-row:hover,
   .list-tile-tone-cyan-row:active,
   .list-tile-tone-cyan-action:active {
-	background-color: hsl(192 95% 70% / 0.19);
+	background-color: hsl(192 64% 42% / 0.26);
   }
 
   .list-tile-tone-emerald-row {
-	background-color: hsl(160 84% 54% / 0.10);
+	background-color: hsl(160 50% 30% / 0.16);
 	transition: background-color 140ms ease;
   }
 
   .list-tile-tone-emerald-row:hover,
   .list-tile-tone-emerald-row:active,
   .list-tile-tone-emerald-action:active {
-	background-color: hsl(160 88% 62% / 0.19);
+	background-color: hsl(160 56% 38% / 0.26);
   }
 
   .list-tile-tone-amber-row {
-	background-color: hsl(38 96% 62% / 0.12);
+	background-color: hsl(38 62% 36% / 0.18);
 	transition: background-color 140ms ease;
   }
 
   .list-tile-tone-amber-row:hover,
   .list-tile-tone-amber-row:active,
   .list-tile-tone-amber-action:active {
-	background-color: hsl(38 98% 70% / 0.22);
+	background-color: hsl(38 68% 44% / 0.28);
   }
 
   body.drive-mode .list-tile-tone-slate-row {
-	background-color: hsl(215 30% 78% / 0.15);
+	background-color: hsl(215 18% 42% / 0.22);
   }
 
   body.drive-mode .list-tile-tone-slate-row:hover,
   body.drive-mode .list-tile-tone-slate-row:active,
   body.drive-mode .list-tile-tone-slate-action:active {
-	background-color: hsl(215 36% 86% / 0.25);
+	background-color: hsl(215 20% 50% / 0.32);
   }
 
   body.drive-mode .list-tile-tone-cyan-row {
-	background-color: hsl(192 96% 72% / 0.16);
+	background-color: hsl(192 60% 36% / 0.23);
   }
 
   body.drive-mode .list-tile-tone-cyan-row:hover,
   body.drive-mode .list-tile-tone-cyan-row:active,
   body.drive-mode .list-tile-tone-cyan-action:active {
-	background-color: hsl(192 100% 78% / 0.28);
+	background-color: hsl(192 66% 44% / 0.34);
   }
 
   body.drive-mode .list-tile-tone-emerald-row {
-	background-color: hsl(160 88% 66% / 0.16);
+	background-color: hsl(160 52% 32% / 0.23);
   }
 
   body.drive-mode .list-tile-tone-emerald-row:hover,
   body.drive-mode .list-tile-tone-emerald-row:active,
   body.drive-mode .list-tile-tone-emerald-action:active {
-	background-color: hsl(160 92% 74% / 0.28);
+	background-color: hsl(160 58% 40% / 0.34);
   }
 
   body.drive-mode .list-tile-tone-amber-row {
-	background-color: hsl(38 100% 72% / 0.18);
+	background-color: hsl(38 66% 40% / 0.24);
   }
 
   body.drive-mode .list-tile-tone-amber-row:hover,
   body.drive-mode .list-tile-tone-amber-row:active,
   body.drive-mode .list-tile-tone-amber-action:active {
-	background-color: hsl(38 100% 80% / 0.30);
+	background-color: hsl(38 72% 48% / 0.36);
   }
 }
 
