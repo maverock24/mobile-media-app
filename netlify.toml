@@ -1,6 +1,7 @@
 [build]
-	command = "pnpm build"
-	publish = "build"
+  command = "pnpm build"
+  publish = "build"
+  ignore = "if [ \"$CONTEXT\" = \"production\" ]; then echo 'Skipping Netlify Git production build; GitHub Actions publishes production with Android assets.'; exit 0; fi; exit 1"
 
 [build.processing]
 	skip_processing = false
