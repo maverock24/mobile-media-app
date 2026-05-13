@@ -465,8 +465,8 @@
 	function claimMusicControls() {
 		if (typeof mediaEngine.setPlaybackHandlers === 'function') {
 			mediaEngine.setPlaybackHandlers(
-				() => { void togglePlay(); },
-				() => { void togglePlay(); },
+				() => { void resumePlayback(); },
+				() => { pausePlayback(); },
 				(seconds) => { handleSeekSeconds(seconds); }
 			);
 		}
@@ -2360,24 +2360,32 @@
 	// Playback controls
 	// ─────────────────────────────────────────────────────────────
 	async function togglePlay() {
-		if (!audioEl || !currentTrack) return;
-		void triggerPlaybackHaptic(!isPlaying);
-		initAudioContext();
 		if (isPlaying) { audioEl.pause(); }
-		else {
-			claimAudio('music');
-			if (!audioEl.src || audioEl.src === window.location.href) {
-				const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
-				if (!url) {
-					alert('Unable to load this track.');
-					return;
-				}
-				audioEl.src = url;
-				syncTrackToMediaEngine(musicSettings.lastTrackIndex);
+		else void resumePlayback();
+	}
+
+	function pausePlayback() {
+		if (!audioEl || !currentTrack || !isPlaying) return;
+		void triggerPlaybackHaptic(false);
+		audioEl.pause();
+	}
+
+	async function resumePlayback() {
+		if (!audioEl || !currentTrack || isPlaying) return;
+		void triggerPlaybackHaptic(true);
+		initAudioContext();
+		claimAudio('music');
+		if (!audioEl.src || audioEl.src === window.location.href) {
+			const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
+			if (!url) {
+				alert('Unable to load this track.');
+				return;
 			}
-			void preloadNextTrack(musicSettings.lastTrackIndex);
-			audioEl.play().catch(() => {});
+			audioEl.src = url;
+			syncTrackToMediaEngine(musicSettings.lastTrackIndex);
 		}
+		void preloadNextTrack(musicSettings.lastTrackIndex);
+		audioEl.play().catch(() => {});
 	}
 
 	async function selectTrack(index: number) {

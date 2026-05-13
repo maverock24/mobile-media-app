@@ -486,6 +486,58 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 	$effect.root(() => {
 		let mediaActionHandle: Promise<{ remove: () => Promise<void> }> | null = null;
+		let backgroundResumeTimer: number | null = null;
+		let backgroundResumeArmed = false;
+		let backgroundResumeAttempts = 0;
+
+		const clearBackgroundResume = () => {
+			backgroundResumeArmed = false;
+			backgroundResumeAttempts = 0;
+			if (backgroundResumeTimer != null) {
+				window.clearTimeout(backgroundResumeTimer);
+				backgroundResumeTimer = null;
+			}
+		};
+
+		const tryResumeAfterBackgroundPause = () => {
+			backgroundResumeTimer = null;
+			if (!backgroundResumeArmed || mediaEngine.item == null) return;
+			if (mediaEngine.isPlaying) {
+				clearBackgroundResume();
+				return;
+			}
+
+			mediaEngine._onPlay?.() ?? mediaEngine.resume();
+			backgroundResumeAttempts += 1;
+			if (backgroundResumeAttempts < 4) {
+				backgroundResumeTimer = window.setTimeout(tryResumeAfterBackgroundPause, 250);
+			}
+		};
+
+		const handleDocumentPause = () => {
+			if (Capacitor.getPlatform() !== 'android') return;
+			if (!mediaEngine.isPlaying || mediaEngine.item == null) {
+				clearBackgroundResume();
+				return;
+			}
+
+			backgroundResumeArmed = true;
+			backgroundResumeAttempts = 0;
+			if (backgroundResumeTimer != null) {
+				window.clearTimeout(backgroundResumeTimer);
+			}
+			backgroundResumeTimer = window.setTimeout(tryResumeAfterBackgroundPause, 180);
+		};
+
+		const handleDocumentResume = () => {
+			if (backgroundResumeArmed && mediaEngine.item != null && !mediaEngine.isPlaying) {
+				mediaEngine._onPlay?.() ?? mediaEngine.resume();
+			}
+			clearBackgroundResume();
+		};
+
+		document.addEventListener('pause', handleDocumentPause);
+		document.addEventListener('resume', handleDocumentResume);
 
 		$effect(() => {
 			mediaActionHandle = MediaControls.addListener('mediaAction', (event) => {
@@ -536,5 +588,11 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 				durationSec: mediaEngine.duration,
 			}).catch(() => {});
 		});
+
+		return () => {
+			clearBackgroundResume();
+			document.removeEventListener('pause', handleDocumentPause);
+			document.removeEventListener('resume', handleDocumentResume);
+		};
 	});
 }

@@ -101,8 +101,8 @@
 	function claimPodcastControls() {
 		if (typeof mediaEngine.setPlaybackHandlers === 'function') {
 			mediaEngine.setPlaybackHandlers(
-				() => { togglePlay(); },
-				() => { togglePlay(); },
+				() => { resumePlayback(); },
+				() => { pausePlayback(); },
 				(pos) => { handleSeekSeconds(pos); }
 			);
 		}
@@ -798,24 +798,34 @@
 	}
 
 	function togglePlay() {
-		if (!audioEl || !currentEpisode) return;
-		void triggerPlaybackHaptic(!isPlaying);
 		if (isPlaying) {
-			cancelNetworkRetry(); // user deliberately paused — no auto-resume
-			audioEl.pause();
+			pausePlayback();
 		} else {
-			claimAudio('podcast');
-			syncEpisodeAudioSource(
-				currentEpisode.podcast,
-				currentEpisode.episode,
-				getEpisodeResumePosition(currentEpisode.episode)
-			);
-			audioEl.play().catch((err) => {
-				if (err?.name !== 'AbortError') {
-					console.error('[Podcast] togglePlay() failed:', err);
-				}
-			});
+			resumePlayback();
 		}
+	}
+
+	function pausePlayback() {
+		if (!audioEl || !currentEpisode || !isPlaying) return;
+		void triggerPlaybackHaptic(false);
+		cancelNetworkRetry(); // user deliberately paused — no auto-resume
+		audioEl.pause();
+	}
+
+	function resumePlayback() {
+		if (!audioEl || !currentEpisode || isPlaying) return;
+		void triggerPlaybackHaptic(true);
+		claimAudio('podcast');
+		syncEpisodeAudioSource(
+			currentEpisode.podcast,
+			currentEpisode.episode,
+			getEpisodeResumePosition(currentEpisode.episode)
+		);
+		audioEl.play().catch((err) => {
+			if (err?.name !== 'AbortError') {
+				console.error('[Podcast] resumePlayback() failed:', err);
+			}
+		});
 	}
 
 	function prevEpisode() {

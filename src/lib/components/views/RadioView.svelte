@@ -40,8 +40,8 @@
 	function claimRadioControls() {
 		if (typeof mediaEngine.setPlaybackHandlers === 'function') {
 			mediaEngine.setPlaybackHandlers(
-				() => { togglePlay(); },
-				() => { togglePlay(); },
+				() => { resumePlayback(); },
+				() => { pausePlayback(); },
 				null
 			);
 		}
@@ -119,18 +119,28 @@
 	}
 
 	function togglePlay() {
-		if (!audioEl || !currentStation) return;
-		void triggerPlaybackHaptic(!isPlaying);
 		if (isPlaying) {
-			audioEl.pause();
+			pausePlayback();
 		} else {
-			claimAudio('radio');
-			isBuffering = true;
-			audioEl.play().catch((err) => {
-				isBuffering = false;
-				console.error('[Radio] togglePlay() failed:', err);
-			});
+			resumePlayback();
 		}
+	}
+
+	function pausePlayback() {
+		if (!audioEl || !currentStation || !isPlaying) return;
+		void triggerPlaybackHaptic(false);
+		audioEl.pause();
+	}
+
+	function resumePlayback() {
+		if (!audioEl || !currentStation || isPlaying) return;
+		void triggerPlaybackHaptic(true);
+		claimAudio('radio');
+		isBuffering = true;
+		audioEl.play().catch((err) => {
+			isBuffering = false;
+			console.error('[Radio] resumePlayback() failed:', err);
+		});
 	}
 
 	// ── Search (radio-browser.info via hosted proxy on Netlify/native) ─────
