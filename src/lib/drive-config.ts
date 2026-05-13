@@ -13,6 +13,7 @@
  */
 
 import type { PersistedPodcast, SavedCity } from '$lib/stores/settings.svelte';
+import type { ListTileTone } from '$lib/utils/listTileTone';
 
 export const DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const CONFIG_FILE_NAME = 'media-hub-config.json';
@@ -76,7 +77,7 @@ export interface DriveConfigAppSettings {
 	hapticFeedback: boolean;
 	driveMode?: boolean;
 	mediaControlsPosition?: 'top' | 'bottom';
-	listTileTone?: 'default' | 'lighter';
+	listTileTone?: ListTileTone | 'lighter';
 }
 
 export interface DriveConfigWeatherSettings {

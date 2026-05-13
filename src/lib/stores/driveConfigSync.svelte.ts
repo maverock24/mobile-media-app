@@ -26,6 +26,7 @@ import {
 	appSettings,
 	weatherSettings,
 } from '$lib/stores/settings.svelte';
+import { normalizeListTileTone } from '$lib/utils/listTileTone';
 
 export type SyncStatus = 'idle' | 'syncing' | 'saved' | 'error';
 
@@ -218,7 +219,7 @@ class DriveConfigSync {
 					appSettings.mediaControlsPosition = as.mediaControlsPosition as typeof appSettings.mediaControlsPosition;
 				}
 				if (as.listTileTone !== undefined) {
-					appSettings.listTileTone = as.listTileTone as typeof appSettings.listTileTone;
+					appSettings.listTileTone = normalizeListTileTone(as.listTileTone);
 				}
 			}
 

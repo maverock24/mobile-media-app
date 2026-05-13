@@ -108,11 +108,12 @@ test.describe('Settings view', () => {
 		await expect(page.getByRole('button', { name: 'Top', exact: true })).toHaveClass(/border-primary|text-primary/);
 	});
 
-	test('lighter list tiles can be enabled from Appearance settings', async ({ page }) => {
+	test('colored list tiles can be enabled from Appearance settings and remain visible in drive mode', async ({ page }) => {
 		await page.getByRole('button', { name: /^Appearance/ }).click();
-		await expect(page.getByText('List Tile Brightness', { exact: true })).toBeVisible();
-		await page.getByRole('button', { name: 'Lighter', exact: true }).click();
-		await expect(page.getByRole('button', { name: 'Lighter', exact: true })).toHaveClass(/border-primary|text-primary/);
+		await expect(page.getByText('List Tile Color', { exact: true })).toBeVisible();
+		await page.getByRole('button', { name: 'Cyan', exact: true }).click();
+		await expect(page.getByRole('button', { name: 'Cyan', exact: true })).toHaveClass(/border-primary|text-primary/);
+		await page.getByRole('switch', { name: 'Drive Mode' }).click();
 
 		await page.getByRole('tab', { name: 'Radio', exact: true }).click();
 		await page.getByRole('button', { name: 'Search', exact: true }).first().click();

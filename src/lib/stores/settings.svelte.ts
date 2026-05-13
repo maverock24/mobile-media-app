@@ -1,4 +1,5 @@
 import { persisted } from '$lib/persisted.svelte';
+import { normalizeListTileTone, type ListTileTone } from '$lib/utils/listTileTone';
 
 // ─────────────────────────────────────────────────────────────
 // App-level settings (theme, etc.)
@@ -11,8 +12,10 @@ export const appSettings = persisted('app-settings', {
 	hapticFeedback: true,
 	driveMode: false,
 	mediaControlsPosition: 'bottom' as 'top' | 'bottom',
-	listTileTone: 'default' as 'default' | 'lighter',
+	listTileTone: 'default' as ListTileTone,
 });
+
+appSettings.listTileTone = normalizeListTileTone(appSettings.listTileTone);
 
 // ─────────────────────────────────────────────────────────────
 // Sleep timer settings

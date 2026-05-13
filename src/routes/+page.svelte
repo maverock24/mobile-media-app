@@ -134,8 +134,8 @@
 		if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
 		const ids = tabs.map(t => t.id);
 		const idx = ids.indexOf(activeTab);
-		if (dx > 0 && idx > 0)              activeTab = ids[idx - 1]; // swipe right → previous
-		if (dx < 0 && idx < ids.length - 1) activeTab = ids[idx + 1]; // swipe left  → next
+		if (dx < 0 && idx > 0)              activeTab = ids[idx - 1]; // swipe left  → tab on the left
+		if (dx > 0 && idx < ids.length - 1) activeTab = ids[idx + 1]; // swipe right → tab on the right
 	}
 </script>
 

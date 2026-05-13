@@ -6,6 +6,7 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { appSettings, musicSettings, podcastSettings, sleepTimerSettings, weatherSettings } from '$lib/stores/settings.svelte';
+	import { LIST_TILE_TONE_OPTIONS } from '$lib/utils/listTileTone';
 	import {
 		clearStoredRuntimeError,
 		formatRuntimeErrorReport,
@@ -431,13 +432,10 @@
 							</div>
 						</div>
 						<div class="rounded-xl border border-border/50 bg-background/40 px-3 py-3">
-							<p class="text-sm font-medium mb-1">List Tile Brightness</p>
-							<p class="text-xs text-muted-foreground mb-3">Make the music, podcast, and radio list rows a little lighter.</p>
+							<p class="text-sm font-medium mb-1">List Tile Color</p>
+							<p class="text-xs text-muted-foreground mb-3">Tint music, podcast, and radio list rows with a stronger color that stays visible in Drive mode too.</p>
 							<div class="flex gap-2">
-								{#each [
-									{ id: 'default', label: 'Default' },
-									{ id: 'lighter', label: 'Lighter' }
-								] as option}
+								{#each LIST_TILE_TONE_OPTIONS as option}
 									<button
 										class="flex-1 py-2 rounded-lg text-sm border transition-colors {appSettings.listTileTone === option.id ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
 										onclick={() => (appSettings.listTileTone = option.id as typeof appSettings.listTileTone)}

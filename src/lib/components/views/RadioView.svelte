@@ -5,6 +5,7 @@
 	import { appSettings, radioData, type RadioStation } from '$lib/stores/settings.svelte';
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
+	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	import { Search, Radio, Star, Play, Pause, Loader, X, Wifi } from 'lucide-svelte';
 
 	// ── Playback state ───────────────────────────────────────────
@@ -18,7 +19,7 @@
 	let searchResults = $state<RadioStation[]>([]);
 	let searching     = $state(false);
 	let searchError   = $state('');
-	const lighterListTiles = $derived(appSettings.listTileTone === 'lighter');
+	const listTileToneClasses = $derived(getListTileToneClasses(appSettings.listTileTone));
 	const radioApiBaseUrl = (() => {
 		const configuredBaseUrl = env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
 		if (configuredBaseUrl) return configuredBaseUrl;
@@ -273,7 +274,7 @@
 			{:else}
 				<ul class="divide-y">
 					{#each radioData.favorites as station (station.stationuuid)}
-						<li class="flex items-center gap-3 px-4 py-3 transition-colors {currentStation?.stationuuid === station.stationuuid ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : lighterListTiles ? 'bg-card/45 hover:bg-card/70 active:bg-card/80' : ''}">
+						<li class="flex items-center gap-3 px-4 py-3 transition-colors {currentStation?.stationuuid === station.stationuuid ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : ''}">
 							{#if station.favicon}
 								<img src={station.favicon} alt="" class="w-10 h-10 rounded-lg object-cover shrink-0" />
 							{:else}
@@ -282,7 +283,7 @@
 								</div>
 							{/if}
 							<button
-								class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {lighterListTiles ? 'active:bg-card/80' : 'active:bg-accent/80'}"
+								class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}"
 								onclick={() => playStation(station)}
 							>
 								<p class="text-sm font-medium truncate">{station.name}</p>
@@ -355,12 +356,12 @@
 						<p class="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">Featured Stations</p>
 						<ul class="divide-y">
 							{#each FEATURED_STATIONS as station (station.stationuuid)}
-								<li class="flex items-center gap-3 px-4 py-3 transition-colors {currentStation?.stationuuid === station.stationuuid ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : lighterListTiles ? 'bg-card/45 hover:bg-card/70 active:bg-card/80' : ''}">
+								<li class="flex items-center gap-3 px-4 py-3 transition-colors {currentStation?.stationuuid === station.stationuuid ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : ''}">
 									<div class="w-10 h-10 rounded-lg bg-muted flex items-center justify-center shrink-0">
 										<Radio class="w-5 h-5 text-muted-foreground" />
 									</div>
 									<button
-										class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {lighterListTiles ? 'active:bg-card/80' : 'active:bg-accent/80'}"
+										class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}"
 										onclick={() => playStation(station)}
 									>
 										<p class="text-sm font-medium truncate">{station.name}</p>
@@ -391,7 +392,7 @@
 				{:else}
 					<ul class="divide-y">
 						{#each searchResults as station (station.stationuuid)}
-							<li class="flex items-center gap-3 px-4 py-3 transition-colors {currentStation?.stationuuid === station.stationuuid ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : lighterListTiles ? 'bg-card/45 hover:bg-card/70 active:bg-card/80' : ''}">
+							<li class="flex items-center gap-3 px-4 py-3 transition-colors {currentStation?.stationuuid === station.stationuuid ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : ''}">
 								{#if station.favicon}
 									<img src={station.favicon} alt="" class="w-10 h-10 rounded-lg object-cover shrink-0" onerror={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
 								{:else}
@@ -400,7 +401,7 @@
 									</div>
 								{/if}
 								<button
-									class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {lighterListTiles ? 'active:bg-card/80' : 'active:bg-accent/80'}"
+									class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}"
 									onclick={() => playStation(station)}
 								>
 									<p class="text-sm font-medium truncate">{station.name}</p>

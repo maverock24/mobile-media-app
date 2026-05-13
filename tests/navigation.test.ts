@@ -87,11 +87,14 @@ test.describe('Tab navigation', () => {
 		await goToTab(page, 'Podcasts');
 		const main = page.locator('main');
 
-		await dispatchHorizontalSwipe(main, { startX: 40, endX: 150 });
+		await dispatchHorizontalSwipe(main, { startX: 150, endX: 40 });
 		await expectActiveTab(page, 'Music');
 
-		await dispatchHorizontalSwipe(main, { startX: 150, endX: 40 });
+		await dispatchHorizontalSwipe(main, { startX: 40, endX: 150 });
 		await expectActiveTab(page, 'Podcasts');
+
+		await dispatchHorizontalSwipe(main, { startX: 40, endX: 150 });
+		await expectActiveTab(page, 'Radio');
 	});
 
 	test('unknown saved tab value falls back to default Music tab', async ({ page }) => {

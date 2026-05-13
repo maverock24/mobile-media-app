@@ -102,7 +102,7 @@ test.describe('MP3 Player view', () => {
 		await expect(page.getByText(/Track One|Track Two|Track Three/i).first()).toBeVisible({ timeout: 5000 });
 	});
 
-	test('right swipe in a subfolder returns to the parent folder', async ({ page }) => {
+	test('left swipe in a subfolder returns to the parent folder', async ({ page }) => {
 		const [fileChooser] = await Promise.all([
 			page.waitForEvent('filechooser'),
 			page.evaluate(() => {
@@ -120,7 +120,7 @@ test.describe('MP3 Player view', () => {
 		const nestedTrack = page.getByRole('button', { name: /Play 04 - Artist - Nested Track\.mp3/i }).first();
 		await expect(nestedTrack).toBeVisible({ timeout: 5000 });
 
-		await dispatchHorizontalSwipe(nestedTrack, { startX: 36, endX: 156 });
+		await dispatchHorizontalSwipe(nestedTrack, { startX: 156, endX: 36 });
 
 		await expect(page.getByRole('button', { name: /Browse Subfolder/i })).toBeVisible({ timeout: 5000 });
 		await expect(nestedTrack).not.toBeVisible();
@@ -433,6 +433,23 @@ test.describe('MP3 Player view', () => {
 
 		// Click Browse to switch back to the browse/queue list
 		await page.getByRole('button', { name: /Browse/i }).click({ timeout: 5000 });
+		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 3000 });
+	});
+
+	test('left swipe in player view returns to file list', async ({ page }) => {
+		const [fc] = await Promise.all([
+			page.waitForEvent('filechooser'),
+			page.evaluate(() => {
+				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
+				if (input) { input.style.display = 'block'; input.click(); }
+			}),
+		]);
+		await fc.setFiles(tmpDir);
+		await page.getByText('Track One').first().click({ timeout: 5000 });
+		await switchToPlayerView(page);
+
+		await dispatchHorizontalSwipe(page.getByRole('region', { name: /Music player/i }), { startX: 156, endX: 36 });
+
 		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 3000 });
 	});
 

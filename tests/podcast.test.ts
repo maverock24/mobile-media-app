@@ -179,7 +179,7 @@ test.describe('Podcast view', () => {
 		await expect(page.getByText('Episode 3: Q&A')).toBeVisible();
 	});
 
-	test('right swipe in the episode list returns to subscribed podcasts', async ({ page }) => {
+	test('left swipe in the episode list returns to subscribed podcasts', async ({ page }) => {
 		await page.getByPlaceholder('Search podcasts…').fill('test');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
 
@@ -189,7 +189,7 @@ test.describe('Podcast view', () => {
 			.first();
 		await expect(episodeRow).toBeVisible({ timeout: 5000 });
 
-		await dispatchHorizontalSwipe(episodeRow, { startX: 36, endX: 156 });
+		await dispatchHorizontalSwipe(episodeRow, { startX: 156, endX: 36 });
 
 		await expect(page.getByRole('button', { name: /Subscribed \(1\)/i })).toBeVisible({ timeout: 5000 });
 		await expectActiveTab(page, 'Podcasts');
