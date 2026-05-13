@@ -8,6 +8,7 @@
 		clearSleepTimer,
 		formatSleepTimerRemaining,
 	} from '$lib/stores/sleepTimer.svelte';
+	import { triggerToggleHaptic } from '$lib/native/haptics';
 	import { Play, Pause, SkipBack, SkipForward, Moon, X } from 'lucide-svelte';
 
 	interface Props {
@@ -89,6 +90,7 @@
 	function applySleepTimer(minutes: number) {
 		setSleepTimer(minutes);
 		showSleepTimerOptions = false;
+		void triggerToggleHaptic(true);
 	}
 
 	function toggleSleepTimerOptions() {
@@ -98,10 +100,13 @@
 	function clearSleepTimerFromMiniPlayer() {
 		clearSleepTimer();
 		showSleepTimerOptions = false;
+		void triggerToggleHaptic(false);
 	}
 
 	function setPodcastMiniPlayerSpeed() {
-		podcastSettings.playbackSpeed = podcastSettings.playbackSpeed === 1.5 ? 1.0 : 1.5;
+		const enabled = podcastSettings.playbackSpeed !== 1.5;
+		podcastSettings.playbackSpeed = enabled ? 1.5 : 1.0;
+		void triggerToggleHaptic(enabled);
 	}
 </script>
 
@@ -125,7 +130,7 @@
 			<div class="relative min-h-[3.75rem]">
 				<div class="absolute left-0 top-1/2 -translate-y-1/2">
 					<button
-						class="mini-player-action mini-player-sleep w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+						class="mini-player-action mini-player-sleep mini-player-control-surface w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
 						onclick={toggleSleepTimerOptions}
 						aria-label="Sleep timer"
 						title={sleepTimer.isActive ? `Sleep timer ${sleepTimerLabel}` : 'Set sleep timer'}
@@ -137,7 +142,7 @@
 				<div class="flex items-center justify-center gap-4">
 					{#if canSkipPrevious}
 						<button
-							class="mini-player-action w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+							class="mini-player-action mini-player-control-surface w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
 							onclick={skipPrevious}
 							aria-label="Previous"
 						>
@@ -146,7 +151,7 @@
 					{/if}
 
 					<button
-						class="mini-player-action mini-player-primary w-14 h-14 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
+						class="mini-player-action mini-player-primary mini-player-control-surface mini-player-control-primary w-14 h-14 flex items-center justify-center rounded-full text-primary"
 						onclick={togglePlayback}
 						aria-label={mediaEngine.isPlaying ? 'Pause' : 'Play'}
 					>
@@ -159,7 +164,7 @@
 
 					{#if canSkipNext}
 						<button
-							class="mini-player-action w-11 h-11 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+							class="mini-player-action mini-player-control-surface w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
 							onclick={skipNext}
 							aria-label="Next"
 						>
@@ -171,7 +176,7 @@
 				{#if showPodcastSpeedPreset}
 					<div class="absolute right-0 top-1/2 -translate-y-1/2">
 						<button
-							class="mini-player-action h-11 min-w-[3.5rem] px-3 inline-flex items-center justify-center rounded-full border text-sm font-semibold transition-colors {podcastOneAndHalfActive ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'}"
+							class="mini-player-action mini-player-control-surface h-11 min-w-[3.5rem] px-3 inline-flex items-center justify-center rounded-full text-sm font-semibold {podcastOneAndHalfActive ? 'border-primary bg-primary/18 text-primary' : 'text-muted-foreground hover:text-foreground'}"
 							onclick={setPodcastMiniPlayerSpeed}
 							aria-label="Play podcast at 1.5x speed"
 							aria-pressed={podcastOneAndHalfActive}
@@ -189,7 +194,7 @@
 					<span>Sleep timer {sleepTimer.isActive ? `in ${sleepTimerLabel}` : 'off'}</span>
 					{#if sleepTimer.isActive}
 						<button
-							class="mini-player-chip inline-flex items-center gap-1 rounded-full px-2 py-1 hover:bg-accent transition-colors"
+							class="mini-player-chip mini-player-control-surface inline-flex items-center gap-1 rounded-full px-2 py-1"
 							onclick={clearSleepTimerFromMiniPlayer}
 							aria-label="Clear sleep timer"
 						>
@@ -203,7 +208,7 @@
 					<div class="flex flex-wrap gap-2">
 						{#each SLEEP_TIMER_PRESETS as minutes}
 							<button
-								class="mini-player-chip px-3 py-1.5 rounded-full text-xs border transition-colors {sleepTimer.isActive && sleepTimer.lastDurationMin === minutes ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
+								class="mini-player-chip mini-player-control-surface px-3 py-1.5 rounded-full text-xs {sleepTimer.isActive && sleepTimer.lastDurationMin === minutes ? 'border-primary bg-primary/18 text-primary font-medium' : 'text-foreground'}"
 								onclick={() => applySleepTimer(minutes)}
 							>
 								{minutes}m

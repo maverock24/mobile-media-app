@@ -10,7 +10,7 @@
 	} = $props();
 </script>
 
-<div class={cn('rounded-xl border bg-card text-card-foreground shadow', className)}>
+<div class={cn('ui-panel-surface rounded-xl border bg-card text-card-foreground', className)}>
 	{#if children}
 		{@render children()}
 	{/if}

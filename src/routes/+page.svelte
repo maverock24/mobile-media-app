@@ -10,6 +10,7 @@
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
 	import { initSleepTimer } from '$lib/stores/sleepTimer.svelte';
 	import { appSettings } from '$lib/stores/settings.svelte';
+	import { triggerTabHaptic } from '$lib/native/haptics';
 	import {
 		runtimeDiagnostics,
 		recordUnhandledRejection,
@@ -27,6 +28,17 @@
 	const DRIVE_MODE_TABS: Tab[] = ['music', 'podcasts', 'radio', 'settings'];
 
 	let activeTab = $state<Tab>(DEFAULT_TAB);
+
+	function setActiveTab(nextTab: Tab) {
+		if (activeTab === nextTab) return;
+		activeTab = nextTab;
+		void triggerTabHaptic();
+	}
+
+	function navigateToTab(tab: string) {
+		if (!isTab(tab)) return;
+		setActiveTab(tab);
+	}
 
 	function isTab(value: unknown): value is Tab {
 		return value === 'music' || value === 'podcasts' || value === 'radio'
@@ -82,9 +94,13 @@
 		if (typeof document === 'undefined') return;
 		document.body.classList.toggle('drive-mode', appSettings.driveMode);
 		document.documentElement.classList.toggle('drive-mode', appSettings.driveMode);
+		document.body.classList.toggle('reduced-motion', appSettings.reducedMotion);
+		document.documentElement.classList.toggle('reduced-motion', appSettings.reducedMotion);
 		return () => {
 			document.body.classList.remove('drive-mode');
 			document.documentElement.classList.remove('drive-mode');
+			document.body.classList.remove('reduced-motion');
+			document.documentElement.classList.remove('reduced-motion');
 		};
 	});
 
@@ -134,14 +150,14 @@
 		if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
 		const ids = tabs.map(t => t.id);
 		const idx = ids.indexOf(activeTab);
-		if (dx < 0 && idx > 0)              activeTab = ids[idx - 1]; // swipe left  → tab on the left
-		if (dx > 0 && idx < ids.length - 1) activeTab = ids[idx + 1]; // swipe right → tab on the right
+		if (dx < 0 && idx > 0)              setActiveTab(ids[idx - 1]); // swipe left  → tab on the left
+		if (dx > 0 && idx < ids.length - 1) setActiveTab(ids[idx + 1]); // swipe right → tab on the right
 	}
 </script>
 
 <div class="drive-mode-shell flex flex-col h-dvh max-w-md mx-auto overflow-hidden relative" style="z-index:1;">
 	{#if appSettings.mediaControlsPosition === 'top'}
-		<MiniPlayer activeTab={activeTab} position="top" onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
+		<MiniPlayer activeTab={activeTab} position="top" onNavigateTo={navigateToTab} />
 	{/if}
 
 	<!-- Content -->
@@ -181,7 +197,7 @@
 
 	<!-- Mini-player: shown whenever music, podcast, or radio playback is active -->
 	{#if appSettings.mediaControlsPosition !== 'top'}
-		<MiniPlayer activeTab={activeTab} position="bottom" onNavigateTo={(tab) => (activeTab = tab as typeof activeTab)} />
+		<MiniPlayer activeTab={activeTab} position="bottom" onNavigateTo={navigateToTab} />
 	{/if}
 
 	<!-- Toast notifications -->
@@ -196,8 +212,8 @@
 					role="tab"
 					aria-selected="{activeTab === tab.id}"
 					aria-label="{tab.label}"
-					class="flex-1 flex flex-col items-center justify-center py-3 gap-1 transition-colors {activeTab === tab.id ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
-					onclick={() => (activeTab = tab.id)}
+					class="nav-tab-button flex-1 flex flex-col items-center justify-center py-3 gap-1.5 transition-colors {activeTab === tab.id ? 'nav-tab-button-active text-primary' : 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => setActiveTab(tab.id)}
 				>
 					<div class="relative">
 						<Icon class="w-7 h-7" />
@@ -205,7 +221,7 @@
 							<div class="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary"></div>
 						{/if}
 					</div>
-					<span class="text-[10px] font-medium leading-none">{tab.label}</span>
+					<span class="text-[11px] font-semibold tracking-[0.02em] leading-none">{tab.label}</span>
 				</button>
 			{/each}
 		</div>

@@ -198,13 +198,308 @@
 }
 
 @layer components {
+  @keyframes tactile-sheen-sweep {
+    0% {
+      opacity: 0;
+      transform: translateX(-135%);
+    }
+    12% {
+      opacity: 0.16;
+    }
+    36% {
+      opacity: 0.08;
+      transform: translateX(135%);
+    }
+    100% {
+      opacity: 0;
+      transform: translateX(135%);
+    }
+  }
+
+  .ui-panel-surface {
+    position: relative;
+    overflow: hidden;
+    border-color: hsl(214 42% 18% / 0.92);
+    background:
+      linear-gradient(180deg, hsl(214 34% 16% / 0.92) 0%, hsl(218 42% 10% / 0.9) 100%),
+      hsl(218 50% 9% / 0.88);
+    box-shadow:
+      0 18px 40px hsl(220 70% 2% / 0.34),
+      0 4px 14px hsl(220 65% 4% / 0.24),
+      inset 0 1px 0 hsl(0 0% 100% / 0.1),
+      inset 0 -1px 0 hsl(220 50% 2% / 0.35),
+      inset 0 0 0 1px hsl(200 70% 65% / 0.05);
+    backdrop-filter: blur(18px) saturate(125%);
+  }
+
+  .ui-panel-surface::before {
+    content: '';
+    position: absolute;
+    inset: 1px 1px auto 1px;
+    height: 44%;
+    border-radius: inherit;
+    background: linear-gradient(180deg, hsl(0 0% 100% / 0.11) 0%, transparent 72%);
+    pointer-events: none;
+  }
+
+  body.drive-mode .ui-panel-surface {
+    border-color: hsl(0 0% 42% / 0.92);
+    background:
+      linear-gradient(180deg, hsl(216 18% 14% / 0.96) 0%, hsl(220 24% 7% / 0.94) 100%),
+      hsl(220 28% 6% / 0.92);
+    box-shadow:
+      0 20px 44px hsl(220 75% 1% / 0.42),
+      0 6px 18px hsl(220 70% 2% / 0.3),
+      inset 0 1px 0 hsl(0 0% 100% / 0.13),
+      inset 0 -1px 0 hsl(220 50% 2% / 0.42),
+      inset 0 0 0 1px hsl(190 100% 78% / 0.07);
+  }
+
+  .ui-button-depth {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    transform: translateY(0);
+    box-shadow:
+      0 12px 22px hsl(220 70% 2% / 0.26),
+      0 3px 8px hsl(220 60% 3% / 0.18),
+      inset 0 1px 0 hsl(0 0% 100% / 0.12),
+      inset 0 -1px 0 hsl(220 60% 2% / 0.28);
+    transition:
+      transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      box-shadow 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      background-color 140ms ease,
+      color 140ms ease,
+      border-color 140ms ease,
+      filter 120ms ease;
+  }
+
+  .ui-button-depth::before {
+    content: '';
+    position: absolute;
+    inset: 1px 1px auto 1px;
+    height: 52%;
+    border-radius: inherit;
+    background: linear-gradient(180deg, hsl(0 0% 100% / 0.15) 0%, transparent 82%);
+    pointer-events: none;
+    opacity: 0.9;
+  }
+
+  .ui-button-depth::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(120deg, transparent 30%, hsl(0 0% 100% / 0.09) 50%, transparent 70%);
+    opacity: 0;
+    transform: translateX(-120%);
+    transition: transform 260ms ease, opacity 200ms ease;
+    pointer-events: none;
+  }
+
+  .ui-button-depth:hover::after,
+  .ui-button-depth:focus-visible::after {
+    opacity: 1;
+    transform: translateX(120%);
+  }
+
+  .ui-button-depth:active {
+    transform: translateY(1px) scale(0.985);
+    box-shadow:
+      0 5px 10px hsl(220 70% 2% / 0.22),
+      0 1px 3px hsl(220 60% 3% / 0.16),
+      inset 0 1px 0 hsl(0 0% 100% / 0.08),
+      inset 0 2px 6px hsl(220 60% 2% / 0.28);
+    filter: brightness(0.97) saturate(1.03);
+  }
+
+  .ui-button-primary {
+    border-color: hsl(190 92% 45% / 0.5);
+    box-shadow:
+      0 14px 24px hsl(192 100% 18% / 0.26),
+      0 4px 10px hsl(220 60% 3% / 0.18),
+      inset 0 1px 0 hsl(190 100% 92% / 0.22),
+      inset 0 -1px 0 hsl(190 100% 18% / 0.26);
+  }
+
+  .ui-button-secondary,
+  .ui-button-outline,
+  .ui-button-ghost {
+    border-color: hsl(215 32% 22% / 0.92);
+  }
+
+  .nav-tab-button {
+    position: relative;
+    margin: 0.35rem 0.3rem 0.45rem;
+    border-radius: 1rem;
+    border: 1px solid transparent;
+    background: linear-gradient(180deg, hsl(220 22% 12% / 0.52) 0%, hsl(220 22% 8% / 0.18) 100%);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.04);
+    transition:
+      transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      box-shadow 120ms ease,
+      background-color 140ms ease,
+      color 140ms ease,
+      border-color 140ms ease;
+  }
+
+  .nav-tab-button::before {
+    content: '';
+    position: absolute;
+    inset: 1px 1px auto 1px;
+    height: 48%;
+    border-radius: inherit;
+    background: linear-gradient(180deg, hsl(0 0% 100% / 0.08) 0%, transparent 80%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease;
+  }
+
+  .nav-tab-button:hover::before,
+  .nav-tab-button[aria-selected='true']::before {
+    opacity: 1;
+  }
+
+  .nav-tab-button:active {
+    transform: translateY(1px) scale(0.985);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.05), inset 0 2px 8px hsl(220 60% 2% / 0.2);
+  }
+
+  .nav-tab-button-active {
+    border-color: hsl(190 88% 44% / 0.34);
+    background: linear-gradient(180deg, hsl(192 72% 20% / 0.72) 0%, hsl(220 38% 10% / 0.78) 100%);
+    box-shadow:
+      0 14px 24px hsl(195 100% 14% / 0.2),
+      0 4px 10px hsl(220 65% 3% / 0.18),
+      inset 0 1px 0 hsl(190 100% 92% / 0.18),
+      inset 0 -1px 0 hsl(190 100% 16% / 0.24);
+  }
+
+  .nav-tab-button-active::after,
+  .mini-player-control-primary::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(115deg, transparent 32%, hsl(0 0% 100% / 0.18) 50%, transparent 68%);
+    transform: translateX(-135%);
+    animation: tactile-sheen-sweep 5.6s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  .mini-player-control-surface {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid hsl(215 32% 22% / 0.9);
+    background: linear-gradient(180deg, hsl(218 30% 14% / 0.92) 0%, hsl(220 30% 9% / 0.88) 100%);
+    box-shadow:
+      0 10px 18px hsl(220 70% 2% / 0.2),
+      0 3px 8px hsl(220 60% 3% / 0.16),
+      inset 0 1px 0 hsl(0 0% 100% / 0.08),
+      inset 0 -1px 0 hsl(220 60% 2% / 0.24);
+    transition:
+      transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      box-shadow 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      background-color 140ms ease,
+      color 140ms ease,
+      border-color 140ms ease;
+  }
+
+  .mini-player-control-surface::before {
+    content: '';
+    position: absolute;
+    inset: 1px 1px auto 1px;
+    height: 52%;
+    border-radius: inherit;
+    background: linear-gradient(180deg, hsl(0 0% 100% / 0.12) 0%, transparent 82%);
+    pointer-events: none;
+  }
+
+  .mini-player-control-surface:active {
+    transform: translateY(1px) scale(0.985);
+    box-shadow:
+      0 5px 10px hsl(220 70% 2% / 0.16),
+      inset 0 1px 0 hsl(0 0% 100% / 0.06),
+      inset 0 2px 8px hsl(220 60% 2% / 0.22);
+  }
+
+  .mini-player-control-primary {
+    border-color: hsl(190 88% 44% / 0.44);
+    background: linear-gradient(180deg, hsl(190 88% 27% / 0.9) 0%, hsl(194 90% 18% / 0.92) 100%);
+    box-shadow:
+      0 14px 22px hsl(192 100% 14% / 0.26),
+      0 4px 10px hsl(220 60% 3% / 0.16),
+      inset 0 1px 0 hsl(190 100% 92% / 0.18),
+      inset 0 -1px 0 hsl(190 100% 16% / 0.26);
+  }
+
+  .settings-section-trigger {
+    background: linear-gradient(180deg, hsl(218 26% 14% / 0.44) 0%, hsl(220 26% 9% / 0.2) 100%);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.03);
+  }
+
+  .settings-section-trigger:active {
+    background: linear-gradient(180deg, hsl(218 26% 16% / 0.56) 0%, hsl(220 26% 10% / 0.3) 100%);
+  }
+
+  .settings-panel-body {
+    margin: 0.75rem 0.75rem 1rem;
+    padding-top: 1rem;
+    border: 1px solid hsl(214 42% 18% / 0.82);
+    border-radius: 1rem;
+    background:
+      linear-gradient(180deg, hsl(218 24% 14% / 0.78) 0%, hsl(220 24% 9% / 0.66) 100%),
+      hsl(218 50% 9% / 0.5);
+    box-shadow:
+      0 14px 28px hsl(220 70% 2% / 0.18),
+      inset 0 1px 0 hsl(0 0% 100% / 0.05);
+  }
+
+  .settings-control-card {
+    border-color: hsl(214 34% 22% / 0.78);
+    background: linear-gradient(180deg, hsl(218 24% 14% / 0.7) 0%, hsl(220 22% 10% / 0.58) 100%);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.04);
+  }
+
   .tap-feedback {
-    transition: transform 140ms ease, background-color 140ms ease, color 140ms ease, opacity 140ms ease;
+    position: relative;
+    transition:
+      transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      box-shadow 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      background-color 140ms ease,
+      color 140ms ease,
+      opacity 140ms ease,
+      filter 120ms ease;
     -webkit-tap-highlight-color: transparent;
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.02);
   }
 
   .tap-feedback:active {
-    transform: scale(0.985);
+    transform: translateY(1px) scale(0.985);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.05), inset 0 2px 8px hsl(220 60% 2% / 0.16);
+    filter: brightness(0.97);
+  }
+
+  .tap-feedback.list-row-surface,
+  .list-row-surface {
+    background: linear-gradient(180deg, hsl(218 26% 12% / 0.44) 0%, hsl(220 26% 10% / 0.18) 100%);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.03);
+  }
+
+  .tap-feedback.list-row-surface:active,
+  .list-row-surface:active {
+    background: linear-gradient(180deg, hsl(218 26% 14% / 0.54) 0%, hsl(220 26% 10% / 0.26) 100%);
+  }
+
+  body.reduced-motion .ui-button-depth,
+  body.reduced-motion .tap-feedback,
+  body.reduced-motion .nav-tab-button,
+  body.reduced-motion .mini-player-control-surface {
+    transition-duration: 0.01ms;
+  }
+
+  body.reduced-motion .nav-tab-button-active::after,
+  body.reduced-motion .mini-player-control-primary::after {
+    animation: none;
+    opacity: 0;
   }
 
   .list-tile-tone-slate-row {

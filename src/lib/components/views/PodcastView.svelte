@@ -4,6 +4,7 @@
 	import { Capacitor } from '@capacitor/core';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
+	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import { appSettings, podcastSettings, podcastData } from '$lib/stores/settings.svelte';
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
@@ -329,6 +330,7 @@
 			const dy = e.changedTouches[0].clientY - _startY;
 			if (selectedPodcast && dx < -60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
 				e.stopPropagation();
+				void triggerSwipeBackHaptic();
 				selectedPodcast = null;
 				episodesError = null;
 				episodePullDist = 0;
@@ -769,6 +771,7 @@
 		}
 		cancelNetworkRetry(); // clear any pending retry for the previous episode
 		podcastSettings.playbackSpeed = 1.0; // reset speed for each new episode so the 1.5x button is off by default
+		void triggerPlaybackHaptic(true);
 		claimAudio('podcast');
 		currentEpisode = { podcast, episode };
 		const resumeAt = getEpisodeResumePosition(episode);
@@ -796,6 +799,7 @@
 
 	function togglePlay() {
 		if (!audioEl || !currentEpisode) return;
+		void triggerPlaybackHaptic(!isPlaying);
 		if (isPlaying) {
 			cancelNetworkRetry(); // user deliberately paused — no auto-resume
 			audioEl.pause();
@@ -979,7 +983,7 @@
 			{:else}
 				{#each selectedPodcast.episodes as episode}
 					<div
-						class="tap-feedback p-4 border-b transition-colors cursor-pointer {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}"
+						class="tap-feedback list-row-surface p-4 border-b transition-colors cursor-pointer {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}"
 						role="button"
 						tabindex="0"
 						onclick={() => selectedPodcast && activateEpisode(selectedPodcast, episode)}
@@ -998,7 +1002,7 @@
 											Played
 										</span>
 									{/if}
-									<p class="font-medium text-sm truncate {episode.played ? 'text-muted-foreground' : ''}">
+									<p class="font-semibold text-[0.95rem] leading-tight truncate {episode.played ? 'text-muted-foreground' : ''}">
 										{episode.title}
 									</p>
 								</div>
@@ -1105,7 +1109,7 @@
 				<!-- ── Subscribed List ── -->
 				{#each subscribedPodcasts as podcast}
 					{@const artGradient = artworkFallback(podcast)}
-					<div class="tap-feedback flex items-center gap-3 p-4 border-b transition-colors cursor-pointer {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}"
+					<div class="tap-feedback list-row-surface flex items-center gap-3 p-4 border-b transition-colors cursor-pointer {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}"
 						role="button" tabindex="0"
 						onclick={() => openPodcast(podcast)}
 						onkeydown={(e) => e.key === 'Enter' && openPodcast(podcast)}
@@ -1119,7 +1123,7 @@
 							</div>
 						{/if}
 						<div class="flex-1 min-w-0">
-							<p class="font-semibold text-sm truncate">{podcast.title}</p>
+							<p class="font-semibold text-[0.95rem] leading-tight truncate">{podcast.title}</p>
 							<p class="text-xs text-muted-foreground">{podcast.author}</p>
 							<Badge variant="secondary" class="mt-1 text-xs">{podcast.category}</Badge>
 						</div>
@@ -1160,7 +1164,7 @@
 					{#each searchResults as item}
 						{@const subscribed = isSubscribed(item.trackId)}
 						{@const localPodcast = podcastData.podcasts.find(p => p.itunesId === item.trackId)}
-						<div class="tap-feedback flex items-center gap-3 p-4 border-b transition-colors cursor-pointer {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}"
+						<div class="tap-feedback list-row-surface flex items-center gap-3 p-4 border-b transition-colors cursor-pointer {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}"
 							role="button" tabindex="0"
 							onclick={() => localPodcast && openPodcast(localPodcast)}
 							onkeydown={(e) => e.key === 'Enter' && localPodcast && openPodcast(localPodcast)}
@@ -1174,7 +1178,7 @@
 								</div>
 							{/if}
 							<div class="flex-1 min-w-0">
-								<p class="font-semibold text-sm truncate">{item.trackName}</p>
+								<p class="font-semibold text-[0.95rem] leading-tight truncate">{item.trackName}</p>
 								<p class="text-xs text-muted-foreground">{item.artistName}</p>
 								<Badge variant="outline" class="mt-1 text-xs">{item.primaryGenreName}</Badge>
 							</div>

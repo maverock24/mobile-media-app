@@ -325,18 +325,18 @@
 
 		<!-- ── App / Appearance ──────────────────────────────── -->
 		<div>
-			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('app')}>
+			<button class="tap-feedback settings-section-trigger w-full flex items-center gap-3 px-4 py-4 text-left transition-colors" onclick={() => toggle('app')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-slate-400 to-slate-600 flex items-center justify-center shrink-0">
 					<Palette class="w-5 h-5 text-white" />
 				</div>
 				<div class="flex-1 min-w-0">
-					<p class="font-semibold">Appearance</p>
+					<p class="font-semibold text-[0.95rem] leading-tight">Appearance</p>
 					<p class="text-xs text-muted-foreground capitalize">{appSettings.theme} theme · {appSettings.fontSize} text · controls {appSettings.mediaControlsPosition} · tiles {appSettings.listTileTone}{appSettings.driveMode ? ' · drive mode on' : ''}</p>
 				</div>
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'app' ? 'rotate-90' : ''}" />
 			</button>
 			{#if expandedSection === 'app'}
-				<div class="px-4 pb-4 space-y-4 bg-muted/20">
+				<div class="settings-panel-body px-4 pb-4 space-y-4">
 					<!-- Theme -->
 					<div>
 						<p class="text-sm font-medium mb-2">Theme</p>
@@ -414,7 +414,7 @@
 								<span class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all {appSettings.hapticFeedback ? 'left-4' : 'left-0.5'}"></span>
 							</button>
 						</label>
-						<div class="rounded-xl border border-border/50 bg-background/40 px-3 py-3">
+						<div class="settings-control-card rounded-xl border px-3 py-3">
 							<p class="text-sm font-medium mb-1">Media Controls Position</p>
 							<p class="text-xs text-muted-foreground mb-3">Show the current media controls above the list or keep them below it.</p>
 							<div class="flex gap-2">
@@ -431,7 +431,7 @@
 								{/each}
 							</div>
 						</div>
-						<div class="rounded-xl border border-border/50 bg-background/40 px-3 py-3">
+						<div class="settings-control-card rounded-xl border px-3 py-3">
 							<p class="text-sm font-medium mb-1">List Tile Color</p>
 							<p class="text-xs text-muted-foreground mb-3">Tint music, podcast, and radio list rows with a stronger color that stays visible in Drive mode too.</p>
 							<div class="flex gap-2">
@@ -445,7 +445,7 @@
 								{/each}
 							</div>
 						</div>
-						<label class="flex items-center justify-between gap-3 rounded-xl border border-border/50 bg-background/40 px-3 py-3">
+						<label class="settings-control-card flex items-center justify-between gap-3 rounded-xl border px-3 py-3">
 							<div class="min-w-0">
 								<div class="flex items-center gap-2">
 									<CarFront class="w-4 h-4 text-primary shrink-0" />
@@ -470,18 +470,18 @@
 
 		<!-- ── Sleep Timer ───────────────────────────────────── -->
 		<div>
-			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('sleep-timer')}>
+			<button class="tap-feedback settings-section-trigger w-full flex items-center gap-3 px-4 py-4 text-left transition-colors" onclick={() => toggle('sleep-timer')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-slate-700 flex items-center justify-center shrink-0">
 					<Moon class="w-5 h-5 text-white" />
 				</div>
 				<div class="flex-1 min-w-0">
-					<p class="font-semibold">Sleep Timer</p>
+					<p class="font-semibold text-[0.95rem] leading-tight">Sleep Timer</p>
 					<p class="text-xs text-muted-foreground">{sleepTimerSummary}</p>
 				</div>
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'sleep-timer' ? 'rotate-90' : ''}" />
 			</button>
 			{#if expandedSection === 'sleep-timer'}
-				<div class="px-4 pb-4 space-y-4 bg-muted/20">
+				<div class="settings-panel-body px-4 pb-4 space-y-4">
 					<p class="text-xs text-muted-foreground leading-relaxed">
 						Automatically pause music, podcasts, or radio after a preset duration. The timer keeps its target time across tab switches and app resume.
 					</p>
@@ -500,7 +500,7 @@
 						</div>
 					</div>
 
-					<div class="rounded-xl border border-border/60 bg-background/80 px-3 py-3 flex items-center justify-between gap-3">
+					<div class="settings-control-card rounded-xl border px-3 py-3 flex items-center justify-between gap-3">
 						<div>
 							<p class="text-sm font-medium">Current timer</p>
 							<p class="text-xs text-muted-foreground">{sleepTimerSummary}</p>
@@ -515,18 +515,18 @@
 
 		<!-- ── Music ─────────────────────────────────────────── -->
 		<div>
-			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('music')}>
+			<button class="tap-feedback settings-section-trigger w-full flex items-center gap-3 px-4 py-4 text-left transition-colors" onclick={() => toggle('music')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center shrink-0">
 					<Music2 class="w-5 h-5 text-white" />
 				</div>
 				<div class="flex-1 min-w-0">
-					<p class="font-semibold">Music Player</p>
+					<p class="font-semibold text-[0.95rem] leading-tight">Music Player</p>
 					<p class="text-xs text-muted-foreground">Vol {musicSettings.volume}% · {musicSettings.sortOrder} sort · {musicSettings.equalizerPreset} EQ</p>
 				</div>
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'music' ? 'rotate-90' : ''}" />
 			</button>
 			{#if expandedSection === 'music'}
-				<div class="px-4 pb-4 space-y-4 bg-muted/20">
+				<div class="settings-panel-body px-4 pb-4 space-y-4">
 					<!-- Volume -->
 					<div>
 						<div class="flex items-center justify-between mb-1">
@@ -621,18 +621,18 @@
 
 		<!-- ── Podcasts ───────────────────────────────────────── -->
 		<div>
-			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('podcasts')}>
+			<button class="tap-feedback settings-section-trigger w-full flex items-center gap-3 px-4 py-4 text-left transition-colors" onclick={() => toggle('podcasts')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center shrink-0">
 					<Mic2 class="w-5 h-5 text-white" />
 				</div>
 				<div class="flex-1 min-w-0">
-					<p class="font-semibold">Podcasts</p>
+					<p class="font-semibold text-[0.95rem] leading-tight">Podcasts</p>
 					<p class="text-xs text-muted-foreground">{podcastSettings.playbackSpeed}× speed · skip {podcastSettings.skipForwardSeconds}s forward</p>
 				</div>
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'podcasts' ? 'rotate-90' : ''}" />
 			</button>
 			{#if expandedSection === 'podcasts'}
-				<div class="px-4 pb-4 space-y-4 bg-muted/20">
+				<div class="settings-panel-body px-4 pb-4 space-y-4">
 					<!-- Playback Speed -->
 					<div>
 						<p class="text-sm font-medium mb-2">Playback Speed</p>
@@ -717,18 +717,18 @@
 
 		<!-- ── Weather ───────────────────────────────────────── -->
 		<div>
-			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('weather')}>
+			<button class="tap-feedback settings-section-trigger w-full flex items-center gap-3 px-4 py-4 text-left transition-colors" onclick={() => toggle('weather')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-blue-500 flex items-center justify-center shrink-0">
 					<Cloud class="w-5 h-5 text-white" />
 				</div>
 				<div class="flex-1 min-w-0">
-					<p class="font-semibold">Weather</p>
+					<p class="font-semibold text-[0.95rem] leading-tight">Weather</p>
 					<p class="text-xs text-muted-foreground">°{weatherSettings.units} · {weatherSettings.windUnit} · {weatherSettings.savedCities.length} cities</p>
 				</div>
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'weather' ? 'rotate-90' : ''}" />
 			</button>
 			{#if expandedSection === 'weather'}
-				<div class="px-4 pb-4 space-y-4 bg-muted/20">
+				<div class="settings-panel-body px-4 pb-4 space-y-4">
 					<!-- Temperature Unit -->
 					<div>
 						<p class="text-sm font-medium mb-2">Temperature Unit</p>
@@ -790,12 +790,12 @@
 
 		<!-- ── App Updates ───────────────────────────────────── -->
 		<div>
-			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('updates')}>
+			<button class="tap-feedback settings-section-trigger w-full flex items-center gap-3 px-4 py-4 text-left transition-colors" onclick={() => toggle('updates')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center shrink-0">
 					<Smartphone class="w-5 h-5 text-white" />
 				</div>
 				<div class="flex-1 min-w-0">
-					<p class="font-semibold">App Updates</p>
+					<p class="font-semibold text-[0.95rem] leading-tight">App Updates</p>
 					<p class="text-xs text-muted-foreground">
 						{#if androidRelease && installedVersionCode > 0}
 							{#if androidRelease.versionCode > installedVersionCode}
@@ -815,13 +815,13 @@
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'updates' ? 'rotate-90' : ''}" />
 			</button>
 			{#if expandedSection === 'updates'}
-				<div class="px-4 pb-4 space-y-3 bg-muted/20">
+				<div class="settings-panel-body px-4 pb-4 space-y-3">
 					<p class="text-xs text-muted-foreground leading-relaxed">
 						Each production Netlify deploy can publish the newest Android APK here. Open this page on an Android device, download the APK, and confirm the install prompt.
 					</p>
 
 					{#if isCheckingRelease}
-						<div class="rounded-xl border border-border/60 bg-background/70 px-3 py-3 text-sm text-muted-foreground">
+						<div class="settings-control-card rounded-xl border px-3 py-3 text-sm text-muted-foreground">
 							Checking the latest Android build...
 						</div>
 					{:else if releaseError}
@@ -829,7 +829,7 @@
 							{releaseError}
 						</div>
 					{:else if androidRelease}
-						<div class="rounded-xl border border-border/60 bg-background/80 p-4 space-y-3">
+						<div class="settings-control-card rounded-xl border p-4 space-y-3">
 							<div class="flex items-start justify-between gap-3">
 								<div>
 									<p class="font-medium leading-tight">Android build {androidRelease.versionName}</p>
@@ -916,7 +916,7 @@
 							</p>
 						</div>
 					{:else}
-						<div class="rounded-xl border border-border/60 bg-background/70 px-3 py-3 text-sm text-muted-foreground">
+						<div class="settings-control-card rounded-xl border px-3 py-3 text-sm text-muted-foreground">
 							No Android package has been published to this deployment yet.
 						</div>
 					{/if}
@@ -935,22 +935,22 @@
 
 		<!-- ── Data ──────────────────────────────────────────── -->
 		<div>
-			<button class="tap-feedback w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-accent active:bg-accent/80 transition-colors" onclick={() => toggle('data')}>
+			<button class="tap-feedback settings-section-trigger w-full flex items-center gap-3 px-4 py-4 text-left transition-colors" onclick={() => toggle('data')}>
 				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
 					<Globe class="w-5 h-5 text-white" />
 				</div>
 				<div class="flex-1 min-w-0">
-					<p class="font-semibold">Data &amp; Storage</p>
+					<p class="font-semibold text-[0.95rem] leading-tight">Data &amp; Storage</p>
 					<p class="text-xs text-muted-foreground">Settings stored in browser localStorage</p>
 				</div>
 				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'data' ? 'rotate-90' : ''}" />
 			</button>
 			{#if expandedSection === 'data'}
-				<div class="px-4 pb-4 space-y-3 bg-muted/20">
+				<div class="settings-panel-body px-4 pb-4 space-y-3">
 					<p class="text-xs text-muted-foreground leading-relaxed">
 						All settings are automatically saved to your browser's localStorage and restored on next visit. No data is sent to any server.
 					</p>
-					<div class="rounded-xl border border-border/60 bg-background/70 px-3 py-3 space-y-3">
+					<div class="settings-control-card rounded-xl border px-3 py-3 space-y-3">
 						<div class="flex items-start justify-between gap-3">
 							<div class="min-w-0">
 								<p class="text-sm font-medium">Last runtime error</p>
