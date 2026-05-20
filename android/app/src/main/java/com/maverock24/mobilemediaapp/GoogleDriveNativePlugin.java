@@ -1,8 +1,6 @@
 package com.maverock24.mobilemediaapp;
 
 import android.app.Activity;
-import android.content.IntentSender;
-
 import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.IntentSenderRequest;
@@ -74,15 +72,10 @@ public class GoogleDriveNativePlugin extends Plugin {
 
 			pendingAuthorizationCallId = call.getCallbackId();
 			bridge.saveCall(call);
-			try {
-				authorizationLauncher.launch(
-					new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender())
-						.build()
-				);
-			} catch (IntentSender.SendIntentException exception) {
-				releasePendingAuthorizationCall();
-				call.reject("Unable to launch Google authorization.", exception);
-			}
+			authorizationLauncher.launch(
+				new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender())
+					.build()
+			);
 			return;
 		}
 
