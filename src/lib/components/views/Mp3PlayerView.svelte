@@ -1252,15 +1252,12 @@
 				});
 
 			// Connect config sync (appdata scope) silently, then download + apply saved settings.
-			// This happens in the background — we don't block the folder picker on it.
+			// This happens in the background — we don't block the folder picker on it,
+			// and we never start a second interactive auth flow from this button press.
 			void (async () => {
 				const connected = await driveConfigSync.connect(false);
 				if (connected) {
 					await driveConfigSync.downloadAndApply();
-				} else {
-					// First-time or needs consent — request interactively after picker resolves
-					const ok = await driveConfigSync.connect(true);
-					if (ok) await driveConfigSync.downloadAndApply();
 				}
 			})();
 
