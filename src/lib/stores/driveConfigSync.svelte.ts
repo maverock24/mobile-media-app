@@ -18,7 +18,7 @@ import {
 	buildDriveConfig,
 	type DriveConfig,
 } from '$lib/drive-config';
-import { loadGoogleIdentityScript, getGoogleDriveClientId } from '$lib/google-drive';
+import { requestGoogleDriveAccessToken } from '$lib/google-drive';
 import {
 	musicSettings,
 	podcastSettings,
@@ -61,31 +61,12 @@ class DriveConfigSync {
 	/** Request an appdata-scoped token (may prompt the user). */
 	async connect(interactive = true): Promise<boolean> {
 		try {
-			const clientId = getGoogleDriveClientId();
-			if (!clientId) return false;
-
-			await loadGoogleIdentityScript();
-
-			const { token, expiresIn } = await new Promise<{ token: string; expiresIn: number }>((resolve, reject) => {
-				const client = window.google?.accounts?.oauth2.initTokenClient({
-					client_id: clientId,
-					scope: DRIVE_APPDATA_SCOPE,
-					callback: (resp: { access_token?: string; expires_in?: number; error?: string; error_description?: string }) => {
-						if (resp?.access_token) {
-							resolve({ token: resp.access_token, expiresIn: resp.expires_in ?? 3600 });
-						} else {
-							reject(new Error(resp?.error_description || resp?.error || 'appdata auth failed'));
-						}
-					},
-					error_callback: (e: { type?: string }) => reject(new Error(e.type || 'auth interrupted')),
-				});
-				if (!client) { reject(new Error('Google Identity unavailable')); return; }
-				// interactive=true: show UI only when needed (not 'consent' which forces screen every time)
-				// interactive=false: 'none' ensures truly silent — no popup, fails if unable
-				client.requestAccessToken({ prompt: interactive ? '' : 'none' });
+			const response = await requestGoogleDriveAccessToken({
+				prompt: interactive ? '' : 'none',
+				scope: DRIVE_APPDATA_SCOPE,
 			});
 
-			this._storeToken(token, expiresIn);
+			this._storeToken(response.access_token, response.expires_in ?? 3600);
 			return true;
 		} catch {
 			return false;
@@ -95,30 +76,12 @@ class DriveConfigSync {
 	/** Silently refresh the token (no user prompt). Returns true if successful. */
 	async silentRefresh(): Promise<boolean> {
 		try {
-			const clientId = getGoogleDriveClientId();
-			if (!clientId) return false;
-
-			await loadGoogleIdentityScript();
-
-			const { token, expiresIn } = await new Promise<{ token: string; expiresIn: number }>((resolve, reject) => {
-				const client = window.google?.accounts?.oauth2.initTokenClient({
-					client_id: clientId,
-					scope: DRIVE_APPDATA_SCOPE,
-					callback: (resp: { access_token?: string; expires_in?: number; error?: string; error_description?: string }) => {
-						if (resp?.access_token) {
-							resolve({ token: resp.access_token, expiresIn: resp.expires_in ?? 3600 });
-						} else {
-							reject(new Error(resp?.error_description || resp?.error || 'silent refresh failed'));
-						}
-					},
-					error_callback: (e: { type?: string }) => reject(new Error(e.type || 'silent refresh interrupted')),
-				});
-				if (!client) { reject(new Error('Google Identity unavailable')); return; }
-				// 'none' = truly silent: returns error instead of showing a popup
-				client.requestAccessToken({ prompt: 'none' });
+			const response = await requestGoogleDriveAccessToken({
+				prompt: 'none',
+				scope: DRIVE_APPDATA_SCOPE,
 			});
 
-			this._storeToken(token, expiresIn);
+			this._storeToken(response.access_token, response.expires_in ?? 3600);
 			return true;
 		} catch {
 			return false;

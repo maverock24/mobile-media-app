@@ -1,10 +1,15 @@
 import { PUBLIC_GOOGLE_CLIENT_ID } from '$env/static/public';
 import { DRIVE_APPDATA_SCOPE } from '$lib/drive-config';
+import {
+	isNativeGoogleDriveAuthAvailable,
+	requestNativeGoogleDriveAccessToken
+} from '$lib/google-drive-native';
 
 const GOOGLE_IDENTITY_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
-export const GOOGLE_DRIVE_AUTH_SCOPE = `${GOOGLE_DRIVE_SCOPE} ${DRIVE_APPDATA_SCOPE}`;
+export const GOOGLE_DRIVE_WRITE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+export const GOOGLE_DRIVE_AUTH_SCOPE = `${GOOGLE_DRIVE_SCOPE} ${GOOGLE_DRIVE_WRITE_SCOPE} ${DRIVE_APPDATA_SCOPE}`;
 
 export interface GoogleDriveTokenResponse {
 	access_token: string;
@@ -40,6 +45,8 @@ export interface GoogleDriveFolder {
 	webViewLink?: string;
 }
 
+const GOOGLE_DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+
 let scriptPromise: Promise<void> | null = null;
 
 function resetGoogleIdentityScriptLoad() {
@@ -61,13 +68,24 @@ function buildGoogleApiUrl(path: string, searchParams?: URLSearchParams): string
 	return `https://www.googleapis.com${path}${query}`;
 }
 
-async function googleApiFetch<T>(path: string, accessToken: string, searchParams?: URLSearchParams): Promise<T> {
+function escapeDriveQueryValue(value: string): string {
+	return value.replace(/'/g, "\\'");
+}
+
+async function googleApiFetch<T>(
+	path: string,
+	accessToken: string,
+	searchParams?: URLSearchParams,
+	requestInit?: RequestInit
+): Promise<T> {
 	const MAX_RETRIES = 3;
 	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 		const response = await fetch(buildGoogleApiUrl(path, searchParams), {
+			...requestInit,
 			headers: {
 				Authorization: `Bearer ${accessToken}`,
-				Accept: 'application/json'
+				Accept: 'application/json',
+				...(requestInit?.headers ?? {})
 			}
 		});
 
@@ -91,6 +109,10 @@ async function googleApiFetch<T>(path: string, accessToken: string, searchParams
 }
 
 export function isGoogleDriveConfigured(): boolean {
+	if (isNativeGoogleDriveAuthAvailable()) {
+		return true;
+	}
+
 	return Boolean(getGoogleDriveClientId());
 }
 
@@ -138,7 +160,24 @@ export async function loadGoogleIdentityScript(): Promise<void> {
 export async function requestGoogleDriveAccessToken(options?: {
 	clientId?: string;
 	prompt?: string;
+	scope?: string;
 }): Promise<GoogleDriveTokenResponse> {
+	const scope = options?.scope?.trim() || GOOGLE_DRIVE_AUTH_SCOPE;
+
+	if (isNativeGoogleDriveAuthAvailable()) {
+		const response = await requestNativeGoogleDriveAccessToken({
+			interactive: options?.prompt !== 'none',
+			scopes: scope.split(/\s+/).filter(Boolean)
+		});
+
+		return {
+			access_token: response.accessToken,
+			expires_in: response.expiresIn ?? 3600,
+			scope: response.grantedScopes?.join(' ') || scope,
+			token_type: 'Bearer'
+		};
+	}
+
 	const clientId = options?.clientId?.trim() || getGoogleDriveClientId();
 
 	if (!clientId) {
@@ -150,7 +189,7 @@ export async function requestGoogleDriveAccessToken(options?: {
 	return await new Promise<GoogleDriveTokenResponse>((resolve, reject) => {
 		const tokenClient = window.google?.accounts?.oauth2.initTokenClient({
 			client_id: clientId,
-			scope: GOOGLE_DRIVE_AUTH_SCOPE,
+			scope,
 			callback: (response) => {
 				if (!response?.access_token || response.error) {
 					reject(new Error(response?.error_description || response?.error || 'Unable to authorize Google Drive access.'));
@@ -185,11 +224,13 @@ export async function revokeGoogleDriveAccess(accessToken: string): Promise<void
 		return;
 	}
 
-	await loadGoogleIdentityScript();
-
-	await new Promise<void>((resolve) => {
-		window.google?.accounts?.oauth2.revoke(accessToken, () => resolve());
-	});
+	await fetch('https://oauth2.googleapis.com/revoke', {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/x-www-form-urlencoded'
+		},
+		body: new URLSearchParams({ token: accessToken })
+	}).catch(() => undefined);
 }
 
 export async function fetchGoogleDriveUser(accessToken: string): Promise<GoogleDriveUser> {
@@ -220,7 +261,7 @@ export async function listGoogleDriveFolders(
 		'/drive/v3/files',
 		accessToken,
 		new URLSearchParams({
-			q: `trashed = false and mimeType = 'application/vnd.google-apps.folder' and '${parent}' in parents`,
+			q: `trashed = false and mimeType = '${GOOGLE_DRIVE_FOLDER_MIME_TYPE}' and '${parent}' in parents`,
 			fields: 'files(id,name,mimeType,webViewLink)',
 			pageSize: '100',
 			orderBy: 'name',
@@ -235,13 +276,172 @@ export async function checkFolderHasSubfolders(accessToken: string, folderId: st
 		'/drive/v3/files',
 		accessToken,
 		new URLSearchParams({
-			q: `trashed = false and mimeType = 'application/vnd.google-apps.folder' and '${folderId}' in parents`,
+			q: `trashed = false and mimeType = '${GOOGLE_DRIVE_FOLDER_MIME_TYPE}' and '${folderId}' in parents`,
 			fields: 'files(id)',
 			pageSize: '1',
 			spaces: 'drive'
 		})
 	);
 	return (response.files?.length ?? 0) > 0;
+}
+
+export async function findGoogleDriveFolderByName(
+	accessToken: string,
+	name: string,
+	parentId?: string
+): Promise<GoogleDriveFolder | null> {
+	const normalizedName = name.trim();
+	if (!normalizedName) {
+		throw new Error('Google Drive folder name is required.');
+	}
+
+	const parent = parentId?.trim() || 'root';
+	const response = await googleApiFetch<{ files?: GoogleDriveFolder[] }>(
+		'/drive/v3/files',
+		accessToken,
+		new URLSearchParams({
+			q: `trashed = false and mimeType = '${GOOGLE_DRIVE_FOLDER_MIME_TYPE}' and name = '${escapeDriveQueryValue(normalizedName)}' and '${parent}' in parents`,
+			fields: 'files(id,name,mimeType,webViewLink)',
+			pageSize: '1',
+			spaces: 'drive'
+		})
+	);
+
+	return response.files?.[0] ?? null;
+}
+
+export async function ensureGoogleDriveFolder(
+	accessToken: string,
+	name: string,
+	parentId?: string
+): Promise<GoogleDriveFolder> {
+	const existing = await findGoogleDriveFolderByName(accessToken, name, parentId);
+	if (existing) {
+		return existing;
+	}
+
+	return await googleApiFetch<GoogleDriveFolder>(
+		'/drive/v3/files',
+		accessToken,
+		new URLSearchParams({ fields: 'id,name,mimeType,webViewLink' }),
+		{
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				name,
+				mimeType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+				parents: [parentId?.trim() || 'root']
+			})
+		}
+	);
+}
+
+export async function findGoogleDriveFileByName(
+	accessToken: string,
+	name: string,
+	parentId: string
+): Promise<GoogleDriveFile | null> {
+	const normalizedName = name.trim();
+	const normalizedParentId = parentId.trim();
+	if (!normalizedName || !normalizedParentId) {
+		throw new Error('Google Drive file lookup requires a file name and parent folder.');
+	}
+
+	const response = await googleApiFetch<{ files?: GoogleDriveFile[] }>(
+		'/drive/v3/files',
+		accessToken,
+		new URLSearchParams({
+			q: `trashed = false and name = '${escapeDriveQueryValue(normalizedName)}' and '${normalizedParentId}' in parents`,
+			fields: 'files(id,name,mimeType,fileExtension,modifiedTime,size,webViewLink)',
+			pageSize: '1',
+			spaces: 'drive'
+		})
+	);
+
+	return response.files?.[0] ?? null;
+}
+
+function buildMultipartJsonBody(metadata: object, jsonContent: string, boundary: string): Blob {
+	const metaPart =
+		`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+		JSON.stringify(metadata) +
+		`\r\n`;
+	const dataPart =
+		`--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
+		jsonContent +
+		`\r\n--${boundary}--`;
+	return new Blob([metaPart + dataPart], {
+		type: `multipart/related; boundary="${boundary}"`
+	});
+}
+
+export async function uploadGoogleDriveJsonFile<T>(options: {
+	accessToken: string;
+	parentId: string;
+	fileName: string;
+	content: T;
+}): Promise<GoogleDriveFile> {
+	const existing = await findGoogleDriveFileByName(options.accessToken, options.fileName, options.parentId);
+	const boundary = `MediaHubBoundary${Math.random().toString(36).slice(2)}`;
+	const body = buildMultipartJsonBody(
+		{
+			name: options.fileName,
+			parents: [options.parentId]
+		},
+		JSON.stringify(options.content, null, 2),
+		boundary
+	);
+
+	if (existing) {
+		return await googleApiFetch<GoogleDriveFile>(
+			`/upload/drive/v3/files/${existing.id}`,
+			options.accessToken,
+			new URLSearchParams({
+				uploadType: 'multipart',
+				fields: 'id,name,mimeType,fileExtension,modifiedTime,size,webViewLink'
+			}),
+			{
+				method: 'PATCH',
+				body
+			}
+		);
+	}
+
+	return await googleApiFetch<GoogleDriveFile>(
+		'/upload/drive/v3/files',
+		options.accessToken,
+		new URLSearchParams({
+			uploadType: 'multipart',
+			fields: 'id,name,mimeType,fileExtension,modifiedTime,size,webViewLink'
+		}),
+		{
+			method: 'POST',
+			body
+		}
+	);
+}
+
+export async function downloadGoogleDriveJsonFile<T>(accessToken: string, fileId: string): Promise<T> {
+	const normalizedFileId = fileId.trim();
+	if (!normalizedFileId) {
+		throw new Error('Google Drive file ID is required.');
+	}
+
+	const response = await fetch(`https://www.googleapis.com/drive/v3/files/${normalizedFileId}?alt=media`, {
+		headers: {
+			Authorization: `Bearer ${accessToken}`,
+			Accept: 'application/json'
+		}
+	});
+
+	if (!response.ok) {
+		const message = await response.text().catch(() => '');
+		throw new Error(message || `Google API request failed with ${response.status}`);
+	}
+
+	return (await response.json()) as T;
 }
 
 function isMp3File(file: GoogleDriveFile): boolean {

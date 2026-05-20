@@ -2,8 +2,9 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
+	import { mediaHubSync } from '$lib/stores/mediaHubSync.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
-	import { Cloud, LogIn, LogOut, RefreshCw } from 'lucide-svelte';
+	import { Cloud, Download, LogIn, LogOut, RefreshCw, Upload } from 'lucide-svelte';
 
 	onMount(() => {
 		void googleDriveSession.ensureUser();
@@ -15,6 +16,14 @@
 
 	async function handleRefreshConnection() {
 		await googleDriveSession.signIn();
+	}
+
+	async function handlePushToMediaHub() {
+		await mediaHubSync.push();
+	}
+
+	async function handleFetchFromMediaHub() {
+		await mediaHubSync.fetchAndApply();
 	}
 </script>
 
@@ -46,12 +55,24 @@
 			<p class="text-sm text-destructive">{googleDriveSession.error}</p>
 		{/if}
 
+		{#if mediaHubSync.error}
+			<p class="text-sm text-destructive">{mediaHubSync.error}</p>
+		{/if}
+
 		{#if !googleDriveSession.configured}
 			<p class="text-sm text-muted-foreground">Google Drive sign-in is disabled until `PUBLIC_GOOGLE_CLIENT_ID` is configured at runtime or build time.</p>
 		{/if}
 
 		<div class="flex gap-2">
 			{#if googleDriveSession.user}
+				<Button variant="outline" onclick={handlePushToMediaHub} class="gap-2" disabled={mediaHubSync.state === 'syncing'}>
+					<Upload class="w-4 h-4" />
+					Push to MediaHub
+				</Button>
+				<Button variant="outline" onclick={handleFetchFromMediaHub} class="gap-2" disabled={mediaHubSync.state === 'syncing'}>
+					<Download class="w-4 h-4" />
+					Fetch from MediaHub
+				</Button>
 				<Button variant="outline" onclick={handleRefreshConnection} class="gap-2" disabled={googleDriveSession.isAuthenticating}>
 					{#if googleDriveSession.isAuthenticating}
 						<RefreshCw class="w-4 h-4 animate-spin" />
@@ -77,5 +98,16 @@
 				</Button>
 			{/if}
 		</div>
+
+		{#if googleDriveSession.user}
+			<p class="text-xs text-muted-foreground">
+				MediaHub stores podcasts, weather locations, radio favorites, and favorite MP3 references in a visible Google Drive folder.
+				Fetching restores settings only and does not download MP3 files.
+			</p>
+		{/if}
+
+		{#if mediaHubSync.lastSyncedAt}
+			<p class="text-xs text-muted-foreground">Last MediaHub sync: {mediaHubSync.lastSyncedAt.toLocaleString()}</p>
+		{/if}
 	</Card>
 </div>

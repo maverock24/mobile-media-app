@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		registerPlugin(DirectoryReaderPlugin.class);
+		registerPlugin(GoogleDriveNativePlugin.class);
 		registerPlugin(MediaControlsPlugin.class);
 		super.onCreate(savedInstanceState);
 		setVolumeControlStream(AudioManager.STREAM_MUSIC);
