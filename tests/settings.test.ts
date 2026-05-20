@@ -250,7 +250,7 @@ test.describe('Settings view', () => {
 		await expect(page.getByText('No Android package has been published to this deployment yet.')).toBeVisible();
 	});
 
-	test('App Updates shows a download link when release metadata exists', async ({ page }) => {
+	test('App Updates shows release metadata without an update action when no installed build code is available', async ({ page }) => {
 		await page.route('**/releases/android/latest.json*', async (route) => {
 			await route.fulfill({
 				status: 200,
@@ -275,10 +275,36 @@ test.describe('Settings view', () => {
 		await page.getByRole('button', { name: /^App Updates/ }).click();
 
 		await expect(page.getByText('Android build 0.0.1 (build 42)')).toBeVisible();
-		// href may be relative or absolute depending on PUBLIC_RELEASE_BASE_URL env var
-		await expect(page.getByRole('link', { name: 'Download Latest Android APK' })).toHaveAttribute(
-			'href',
-			/releases\/android\/media-hub-0\.0\.1-build-42-deadbee\.apk/
-		);
+		await expect(page.getByRole('link', { name: 'Download Latest Android APK' })).toHaveCount(0);
+		await expect(page.getByRole('button', { name: 'Install Update' })).toHaveCount(0);
+	});
+
+	test('App Updates hides update actions when release metadata exists but no newer build is known', async ({ page }) => {
+		await page.route('**/releases/android/latest.json*', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					version: '0.0.1',
+					versionCode: 42,
+					versionName: '0.0.1 (build 42)',
+					buildType: 'release',
+					fileName: 'media-hub-0.0.1-build-42-deadbee.apk',
+					url: '/releases/android/media-hub-0.0.1-build-42-deadbee.apk',
+					sizeBytes: 15_728_640,
+					sha256: 'abc123',
+					publishedAt: '2026-03-16T12:00:00Z',
+					commitSha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+					commitUrl: 'https://github.com/maverock24/mobile-media-app/commit/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+				})
+			});
+		});
+
+		await page.goto('/');
+		await page.getByRole('button', { name: /^App Updates/ }).click();
+
+		await expect(page.getByText('0.0.1 (build 42) · release APK')).toBeVisible();
+		await expect(page.getByRole('link', { name: 'Download Latest Android APK' })).toHaveCount(0);
+		await expect(page.getByRole('button', { name: 'Install Update' })).toHaveCount(0);
 	});
 });

@@ -60,6 +60,9 @@
 	let installError = $state('');
 	let installStep = $state<'idle' | 'downloading' | 'launching'>('idle');
 	const installedVersionCode = parseInt(env.PUBLIC_BUILD_VERSION_CODE ?? '0', 10);
+	const hasNewerAndroidRelease = $derived(
+		Boolean(androidRelease) && installedVersionCode > 0 && androidRelease.versionCode > installedVersionCode
+	);
 	const releaseBaseUrl = (() => {
 		const configuredBaseUrl = env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');
 		if (configuredBaseUrl) {
@@ -840,7 +843,7 @@
 										{androidRelease.buildType}
 									</span>
 									{#if installedVersionCode > 0}
-										{#if androidRelease.versionCode > installedVersionCode}
+										{#if hasNewerAndroidRelease}
 											<span class="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
 												Update available
 											</span>
@@ -870,35 +873,37 @@
 							</div>
 
 							<div class="flex flex-col gap-2">
-								{#if Capacitor.isNativePlatform()}
-									<button
-										class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60 disabled:pointer-events-none"
-										onclick={() => void installUpdate()}
-										disabled={isInstalling}
-									>
-										{#if installStep === 'downloading'}
-											<RefreshCw class="w-4 h-4 animate-spin" />
-											Downloading…
-										{:else if installStep === 'launching'}
-											<RefreshCw class="w-4 h-4 animate-spin" />
-											Launching installer…
-										{:else}
-											<Download class="w-4 h-4" />
-											Install Update
+								{#if hasNewerAndroidRelease}
+									{#if Capacitor.isNativePlatform()}
+										<button
+											class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60 disabled:pointer-events-none"
+											onclick={() => void installUpdate()}
+											disabled={isInstalling}
+										>
+											{#if installStep === 'downloading'}
+												<RefreshCw class="w-4 h-4 animate-spin" />
+												Downloading…
+											{:else if installStep === 'launching'}
+												<RefreshCw class="w-4 h-4 animate-spin" />
+												Launching installer…
+											{:else}
+												<Download class="w-4 h-4" />
+												Install Update
+											{/if}
+										</button>
+										{#if installError}
+											<p class="text-xs text-destructive">{installError}</p>
 										{/if}
-									</button>
-									{#if installError}
-										<p class="text-xs text-destructive">{installError}</p>
+									{:else}
+										<a
+											href={androidRelease.url}
+											class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+											download={androidRelease.fileName}
+										>
+											<Download class="w-4 h-4" />
+											Download Latest Android APK
+										</a>
 									{/if}
-								{:else}
-									<a
-										href={androidRelease.url}
-										class="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-										download={androidRelease.fileName}
-									>
-										<Download class="w-4 h-4" />
-										Download Latest Android APK
-									</a>
 								{/if}
 								<a
 									href={androidRelease.commitUrl}
