@@ -91,11 +91,11 @@ public class GoogleDriveNativePlugin extends Plugin {
 		response.put("expiresIn", 3600);
 
 		JSArray grantedScopes = new JSArray();
-		List<Scope> scopes = result.getGrantedScopes();
+		List<String> scopes = result.getGrantedScopes();
 		if (scopes != null) {
-			for (Scope scope : scopes) {
-				if (scope != null && scope.getScopeUri() != null) {
-					grantedScopes.put(scope.getScopeUri());
+			for (String scope : scopes) {
+				if (scope != null && !scope.isEmpty()) {
+					grantedScopes.put(scope);
 				}
 			}
 		}
