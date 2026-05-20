@@ -1241,10 +1241,15 @@
 			if (!token) {
 				return;
 			}
-
-			const user = await fetchGoogleDriveUser(token);
-			driveUser = user;
 			driveError = '';
+
+			void fetchGoogleDriveUser(token)
+				.then((user) => {
+					driveUser = user;
+				})
+				.catch(() => {
+					// Folder selection should still work even if the user profile request fails.
+				});
 
 			// Connect config sync (appdata scope) silently, then download + apply saved settings.
 			// This happens in the background — we don't block the folder picker on it.

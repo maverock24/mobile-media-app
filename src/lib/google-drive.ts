@@ -1,9 +1,10 @@
 import { PUBLIC_GOOGLE_CLIENT_ID } from '$env/static/public';
+import { DRIVE_APPDATA_SCOPE } from '$lib/drive-config';
 
 const GOOGLE_IDENTITY_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
-// Note: config sync uses drive.appdata scope — see src/lib/drive-config.ts
+export const GOOGLE_DRIVE_AUTH_SCOPE = `${GOOGLE_DRIVE_SCOPE} ${DRIVE_APPDATA_SCOPE}`;
 
 export interface GoogleDriveTokenResponse {
 	access_token: string;
@@ -40,6 +41,14 @@ export interface GoogleDriveFolder {
 }
 
 let scriptPromise: Promise<void> | null = null;
+
+function resetGoogleIdentityScriptLoad() {
+	scriptPromise = null;
+	const existing = document.querySelector<HTMLScriptElement>(`script[src="${GOOGLE_IDENTITY_SCRIPT_SRC}"]`);
+	if (existing && !window.google?.accounts?.oauth2) {
+		existing.remove();
+	}
+}
 
 function ensureBrowser() {
 	if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -100,10 +109,14 @@ export async function loadGoogleIdentityScript(): Promise<void> {
 	if (!scriptPromise) {
 		scriptPromise = new Promise<void>((resolve, reject) => {
 			const existing = document.querySelector<HTMLScriptElement>(`script[src="${GOOGLE_IDENTITY_SCRIPT_SRC}"]`);
+			const handleError = () => {
+				resetGoogleIdentityScriptLoad();
+				reject(new Error('Unable to load Google Identity Services.'));
+			};
 
 			if (existing) {
 				existing.addEventListener('load', () => resolve(), { once: true });
-				existing.addEventListener('error', () => reject(new Error('Unable to load Google Identity Services.')), {
+				existing.addEventListener('error', handleError, {
 					once: true
 				});
 				return;
@@ -114,7 +127,7 @@ export async function loadGoogleIdentityScript(): Promise<void> {
 			script.async = true;
 			script.defer = true;
 			script.onload = () => resolve();
-			script.onerror = () => reject(new Error('Unable to load Google Identity Services.'));
+			script.onerror = handleError;
 			document.head.appendChild(script);
 		});
 	}
@@ -137,7 +150,7 @@ export async function requestGoogleDriveAccessToken(options?: {
 	return await new Promise<GoogleDriveTokenResponse>((resolve, reject) => {
 		const tokenClient = window.google?.accounts?.oauth2.initTokenClient({
 			client_id: clientId,
-			scope: GOOGLE_DRIVE_SCOPE,
+			scope: GOOGLE_DRIVE_AUTH_SCOPE,
 			callback: (response) => {
 				if (!response?.access_token || response.error) {
 					reject(new Error(response?.error_description || response?.error || 'Unable to authorize Google Drive access.'));
