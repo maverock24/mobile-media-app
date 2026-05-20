@@ -62,7 +62,7 @@
 	let installStep = $state<'idle' | 'downloading' | 'launching'>('idle');
 	const installedVersionCode = parseInt(env.PUBLIC_BUILD_VERSION_CODE ?? '0', 10);
 	const hasNewerAndroidRelease = $derived(
-		Boolean(androidRelease) && installedVersionCode > 0 && androidRelease.versionCode > installedVersionCode
+		installedVersionCode > 0 && (androidRelease?.versionCode ?? 0) > installedVersionCode
 	);
 	const releaseBaseUrl = (() => {
 		const configuredBaseUrl = env.PUBLIC_RELEASE_BASE_URL?.trim().replace(/\/$/, '');

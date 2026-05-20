@@ -1,6 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { goToTab } from './helpers';
 
+type GoogleDriveTestWindow = Window & {
+	__interactiveAuthRequests__?: number;
+};
+
 const MINIMAL_MP3 = Buffer.from([
 	0x49, 0x44, 0x33, 0x03, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00,
@@ -97,6 +101,7 @@ test.describe('Google Drive music library', () => {
 		let downloadCount = 0;
 
 		await page.addInitScript(() => {
+			const testWindow = window as GoogleDriveTestWindow;
 			window.__GOOGLE_CLIENT_ID__ = 'playwright-google-client-id.apps.googleusercontent.com';
 			window.google = {
 				accounts: {
@@ -259,7 +264,8 @@ test.describe('Google Drive music library', () => {
 								}
 
 								if (prompt !== 'none') {
-									window.__interactiveAuthRequests__ = (window.__interactiveAuthRequests__ ?? 0) + 1;
+									const testWindow = window as GoogleDriveTestWindow;
+									testWindow.__interactiveAuthRequests__ = (testWindow.__interactiveAuthRequests__ ?? 0) + 1;
 								}
 
 								config.callback({
@@ -314,11 +320,11 @@ test.describe('Google Drive music library', () => {
 
 		await expect(page.getByRole('dialog', { name: 'Choose Google Drive folder' })).toBeVisible({ timeout: 5000 });
 		await expect(page.getByRole('button', { name: /Select all/i })).toBeVisible();
-		await expect.poll(async () => page.evaluate(() => window.__interactiveAuthRequests__ ?? 0)).toBe(1);
+		await expect.poll(async () => page.evaluate(() => (window as GoogleDriveTestWindow).__interactiveAuthRequests__ ?? 0)).toBe(1);
 	});
 
 	test('shows the folder picker while the initial Drive folder list is still loading', async ({ page }) => {
-		let releaseFolderList: (() => void) | null = null;
+		let releaseFolderList!: () => void;
 		const folderListStarted = new Promise<void>((resolve) => {
 			releaseFolderList = resolve;
 		});
@@ -384,7 +390,7 @@ test.describe('Google Drive music library', () => {
 		await expect(page.getByRole('dialog', { name: 'Choose Google Drive folder' })).toBeVisible({ timeout: 5000 });
 		await expect(page.getByLabel('Choose Google Drive folder').locator('.animate-spin')).toBeVisible();
 
-		releaseFolderList?.();
+		releaseFolderList();
 
 		await expect(page.getByRole('button', { name: /Select all/i })).toBeVisible();
 	});
