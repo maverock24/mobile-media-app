@@ -9,6 +9,7 @@
 	import { LIST_TILE_TONE_OPTIONS } from '$lib/utils/listTileTone';
 	import {
 		clearStoredRuntimeError,
+		formatRuntimeErrorHistoryReport,
 		formatRuntimeErrorReport,
 		runtimeDiagnostics,
 	} from '$lib/stores/runtimeDiagnostics.svelte';
@@ -102,6 +103,11 @@
 			? formatRuntimeErrorReport(runtimeDiagnostics.lastRuntimeError)
 			: ''
 	);
+	const runtimeDiagnosticsReport = $derived(
+		runtimeDiagnostics.recentRuntimeErrors.length > 0
+			? formatRuntimeErrorHistoryReport(runtimeDiagnostics.recentRuntimeErrors)
+			: ''
+	);
 
 	function formatRuntimeErrorTimestamp(timestamp: number): string {
 		return new Date(timestamp).toLocaleString();
@@ -112,10 +118,10 @@
 
 		try {
 			if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-				await navigator.clipboard.writeText(lastRuntimeErrorReport);
+				await navigator.clipboard.writeText(runtimeDiagnosticsReport);
 			} else if (typeof document !== 'undefined') {
 				const textarea = document.createElement('textarea');
-				textarea.value = lastRuntimeErrorReport;
+				textarea.value = runtimeDiagnosticsReport;
 				textarea.setAttribute('readonly', 'true');
 				textarea.style.position = 'fixed';
 				textarea.style.opacity = '0';
@@ -958,7 +964,7 @@
 					<div class="settings-control-card rounded-xl border px-3 py-3 space-y-3">
 						<div class="flex items-start justify-between gap-3">
 							<div class="min-w-0">
-								<p class="text-sm font-medium">Last runtime error</p>
+								<p class="text-sm font-medium">Runtime diagnostics</p>
 								{#if runtimeDiagnostics.lastRuntimeError}
 									<p class="text-xs text-muted-foreground mt-1">
 										{formatRuntimeErrorTimestamp(runtimeDiagnostics.lastRuntimeError.recordedAt)}
@@ -966,9 +972,10 @@
 										{#if runtimeDiagnostics.lastRuntimeError.activeTab}
 											· {runtimeDiagnostics.lastRuntimeError.activeTab}
 										{/if}
+										· {runtimeDiagnostics.recentRuntimeErrors.length} entr{runtimeDiagnostics.recentRuntimeErrors.length === 1 ? 'y' : 'ies'}
 									</p>
 								{:else}
-									<p class="text-xs text-muted-foreground mt-1">No stored runtime errors.</p>
+									<p class="text-xs text-muted-foreground mt-1">No stored runtime diagnostics.</p>
 								{/if}
 							</div>
 							{#if runtimeDiagnostics.lastRuntimeError}
@@ -986,10 +993,10 @@
 
 						{#if runtimeDiagnostics.lastRuntimeError}
 							<div class="rounded-lg border border-border/60 bg-background/85 px-3 py-2 max-h-44 overflow-y-auto">
-								<pre class="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-foreground">{lastRuntimeErrorReport}</pre>
+								<pre class="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-foreground">{runtimeDiagnosticsReport}</pre>
 							</div>
 							<p class="text-[11px] text-muted-foreground leading-relaxed">
-								Captures JavaScript runtime errors and unhandled promise rejections so you can copy them after reopening the app. Native Android process crashes still need device logs.
+								Captures the most recent JavaScript runtime errors, unhandled promise rejections, and console.error messages so you can copy more app context after reopening. Native Android process crashes still need device logs.
 							</p>
 						{/if}
 					</div>

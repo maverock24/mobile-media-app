@@ -1,8 +1,11 @@
 const RUNTIME_DIAGNOSTICS_KEY = 'runtime-diagnostics';
+const MAX_RUNTIME_DIAGNOSTICS = 20;
+
+export type RuntimeDiagnosticSource = 'error' | 'unhandledrejection' | 'console.error';
 
 export interface StoredRuntimeError {
 	recordedAt: number;
-	source: 'error' | 'unhandledrejection';
+	source: RuntimeDiagnosticSource;
 	message: string;
 	stack: string;
 	details: string;
@@ -13,13 +16,14 @@ export interface StoredRuntimeError {
 
 type RuntimeDiagnosticsState = {
 	lastRuntimeError: StoredRuntimeError | null;
+	recentRuntimeErrors: StoredRuntimeError[];
 };
 
 function isStoredRuntimeError(value: unknown): value is StoredRuntimeError {
 	if (!value || typeof value !== 'object') return false;
 	const record = value as Record<string, unknown>;
 	return typeof record.recordedAt === 'number'
-		&& (record.source === 'error' || record.source === 'unhandledrejection')
+		&& (record.source === 'error' || record.source === 'unhandledrejection' || record.source === 'console.error')
 		&& typeof record.message === 'string'
 		&& typeof record.stack === 'string'
 		&& typeof record.details === 'string'
@@ -28,20 +32,28 @@ function isStoredRuntimeError(value: unknown): value is StoredRuntimeError {
 		&& typeof record.userAgent === 'string';
 }
 
+function isStoredRuntimeErrorList(value: unknown): value is StoredRuntimeError[] {
+	return Array.isArray(value) && value.every(isStoredRuntimeError);
+}
+
 function readStoredDiagnostics(): RuntimeDiagnosticsState {
 	if (typeof localStorage === 'undefined') {
-		return { lastRuntimeError: null };
+		return { lastRuntimeError: null, recentRuntimeErrors: [] };
 	}
 
 	try {
 		const raw = localStorage.getItem(RUNTIME_DIAGNOSTICS_KEY);
-		if (!raw) return { lastRuntimeError: null };
-		const parsed = JSON.parse(raw) as { lastRuntimeError?: unknown };
+		if (!raw) return { lastRuntimeError: null, recentRuntimeErrors: [] };
+		const parsed = JSON.parse(raw) as { lastRuntimeError?: unknown; recentRuntimeErrors?: unknown };
+		const recentRuntimeErrors = isStoredRuntimeErrorList(parsed.recentRuntimeErrors)
+			? parsed.recentRuntimeErrors.slice(0, MAX_RUNTIME_DIAGNOSTICS)
+			: (isStoredRuntimeError(parsed.lastRuntimeError) ? [parsed.lastRuntimeError] : []);
 		return {
-			lastRuntimeError: isStoredRuntimeError(parsed.lastRuntimeError) ? parsed.lastRuntimeError : null
+			lastRuntimeError: recentRuntimeErrors[0] ?? null,
+			recentRuntimeErrors
 		};
 	} catch {
-		return { lastRuntimeError: null };
+		return { lastRuntimeError: null, recentRuntimeErrors: [] };
 	}
 }
 
@@ -57,7 +69,8 @@ function flushDiagnostics(): void {
 		}
 
 		localStorage.setItem(RUNTIME_DIAGNOSTICS_KEY, JSON.stringify({
-			lastRuntimeError: runtimeDiagnostics.lastRuntimeError
+			lastRuntimeError: runtimeDiagnostics.lastRuntimeError,
+			recentRuntimeErrors: runtimeDiagnostics.recentRuntimeErrors
 		}));
 	} catch {
 		// Ignore storage failures — crash logging should never crash the app.
@@ -108,16 +121,16 @@ function normalizeUnknownError(value: unknown): { message: string; stack: string
 	};
 }
 
-export function recordRuntimeError(input: {
-	source: StoredRuntimeError['source'];
+function buildStoredRuntimeError(input: {
+	source: RuntimeDiagnosticSource;
 	message: string;
 	stack?: string;
 	details?: string;
 	href?: string;
 	activeTab?: string;
 	userAgent?: string;
-}): void {
-	runtimeDiagnostics.lastRuntimeError = {
+}): StoredRuntimeError {
+	return {
 		recordedAt: Date.now(),
 		source: input.source,
 		message: input.message || 'Unknown runtime error',
@@ -127,7 +140,35 @@ export function recordRuntimeError(input: {
 		activeTab: input.activeTab ?? '',
 		userAgent: input.userAgent ?? (typeof navigator !== 'undefined' ? navigator.userAgent : '')
 	};
+}
+
+function appendRuntimeError(entry: StoredRuntimeError): void {
+	const previous = runtimeDiagnostics.recentRuntimeErrors[0];
+	const isDuplicateOfPrevious = Boolean(previous)
+		&& previous.source === entry.source
+		&& previous.message === entry.message
+		&& previous.stack === entry.stack
+		&& previous.details === entry.details
+		&& previous.href === entry.href
+		&& previous.activeTab === entry.activeTab;
+
+	runtimeDiagnostics.recentRuntimeErrors = isDuplicateOfPrevious
+		? [entry, ...runtimeDiagnostics.recentRuntimeErrors.slice(1, MAX_RUNTIME_DIAGNOSTICS)]
+		: [entry, ...runtimeDiagnostics.recentRuntimeErrors].slice(0, MAX_RUNTIME_DIAGNOSTICS);
+	runtimeDiagnostics.lastRuntimeError = runtimeDiagnostics.recentRuntimeErrors[0] ?? null;
 	flushDiagnostics();
+}
+
+export function recordRuntimeError(input: {
+	source: RuntimeDiagnosticSource;
+	message: string;
+	stack?: string;
+	details?: string;
+	href?: string;
+	activeTab?: string;
+	userAgent?: string;
+}): void {
+	appendRuntimeError(buildStoredRuntimeError(input));
 }
 
 export function recordWindowErrorEvent(event: ErrorEvent, activeTab: string): void {
@@ -156,8 +197,33 @@ export function recordUnhandledRejection(reason: unknown, activeTab: string): vo
 	});
 }
 
+export function recordConsoleError(args: unknown[], activeTab: string): void {
+	const firstError = args.find((value): value is Error => value instanceof Error);
+	const firstString = args.find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+	const firstObjectWithMessage = args.find((value): value is { message: string } => {
+		if (!value || typeof value !== 'object') return false;
+		const record = value as Record<string, unknown>;
+		return typeof record.message === 'string' && record.message.trim().length > 0;
+	});
+	const message = firstError?.message
+		|| firstString
+		|| firstObjectWithMessage?.message
+		|| 'console.error';
+	const stack = firstError?.stack ?? '';
+	const details = args.map(stringifyUnknown).filter(Boolean).join('\n\n');
+
+	recordRuntimeError({
+		source: 'console.error',
+		message,
+		stack,
+		details,
+		activeTab
+	});
+}
+
 export function clearStoredRuntimeError(): void {
 	runtimeDiagnostics.lastRuntimeError = null;
+	runtimeDiagnostics.recentRuntimeErrors = [];
 	flushDiagnostics();
 }
 
@@ -174,4 +240,14 @@ export function formatRuntimeErrorReport(error: StoredRuntimeError): string {
 	].filter(Boolean);
 
 	return lines.join('\n\n');
+}
+
+export function formatRuntimeErrorHistoryReport(errors: StoredRuntimeError[]): string {
+	if (errors.length === 0) {
+		return '';
+	}
+
+	return errors
+		.map((error, index) => [`Entry ${index + 1} of ${errors.length}`, formatRuntimeErrorReport(error)].join('\n'))
+		.join('\n\n----------------------------------------\n\n');
 }

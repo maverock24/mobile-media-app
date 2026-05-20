@@ -12,6 +12,7 @@
 	import { appSettings } from '$lib/stores/settings.svelte';
 	import { triggerTabHaptic } from '$lib/native/haptics';
 	import {
+		recordConsoleError,
 		runtimeDiagnostics,
 		recordUnhandledRejection,
 		recordWindowErrorEvent,
@@ -75,11 +76,17 @@
 		const onUnhandledRejection = (event: PromiseRejectionEvent) => {
 			recordUnhandledRejection(event.reason, activeTab);
 		};
+		const originalConsoleError = console.error.bind(console);
+		console.error = (...args: unknown[]) => {
+			recordConsoleError(args, activeTab);
+			originalConsoleError(...args);
+		};
 
 		window.addEventListener('error', onWindowError);
 		window.addEventListener('unhandledrejection', onUnhandledRejection);
 
 		return () => {
+			console.error = originalConsoleError;
 			window.removeEventListener('error', onWindowError);
 			window.removeEventListener('unhandledrejection', onUnhandledRejection);
 		};

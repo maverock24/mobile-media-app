@@ -31,7 +31,7 @@ test.describe('Settings view', () => {
 		await expect(page.getByRole('button', { name: /Reset.*Setting|Reset All/i })).toBeVisible();
 	});
 
-	test('shows and copies a stored runtime error report', async ({ page }) => {
+	test('shows and copies stored runtime diagnostics', async ({ page }) => {
 		await page.addInitScript(() => {
 			Object.defineProperty(navigator, 'clipboard', {
 				value: {
@@ -54,14 +54,38 @@ test.describe('Settings view', () => {
 					href: 'http://127.0.0.1:4173/',
 					activeTab: 'music',
 					userAgent: 'Playwright'
-				}
+				},
+				recentRuntimeErrors: [
+					{
+						recordedAt: Date.UTC(2026, 4, 10, 12, 0, 0),
+						source: 'error',
+						message: 'Boom from previous session',
+						stack: 'Error: Boom from previous session\n    at test.ts:1:1',
+						details: 'test.ts:1:1',
+						href: 'http://127.0.0.1:4173/',
+						activeTab: 'music',
+						userAgent: 'Playwright'
+					},
+					{
+						recordedAt: Date.UTC(2026, 4, 10, 11, 58, 0),
+						source: 'console.error',
+						message: 'APK folder picker stalled',
+						stack: '',
+						details: 'APK folder picker stalled\n\n{"stage":"after-account-chooser","source":"android-webview"}',
+						href: 'http://127.0.0.1:4173/',
+						activeTab: 'music',
+						userAgent: 'Playwright'
+					}
+				]
 			}));
 		});
 		await page.reload();
 
 		await page.getByRole('button', { name: /^Data & Storage/ }).click();
-		await expect(page.getByText('Last runtime error', { exact: true })).toBeVisible();
+		await expect(page.getByText('Runtime diagnostics', { exact: true })).toBeVisible();
 		await expect(page.getByText('Boom from previous session')).toBeVisible();
+		await expect(page.getByText(/2 entries/)).toBeVisible();
+		await expect(page.getByText('APK folder picker stalled')).toBeVisible();
 
 		await page.getByRole('button', { name: 'Copy report' }).click();
 		await expect(page.getByText('Crash report copied.')).toBeVisible();
@@ -69,6 +93,10 @@ test.describe('Settings view', () => {
 		const copiedReport = await page.evaluate(() => (window as Window & { __copiedCrashReport?: string }).__copiedCrashReport || '');
 		expect(copiedReport).toContain('Boom from previous session');
 		expect(copiedReport).toContain('Source: error');
+		expect(copiedReport).toContain('APK folder picker stalled');
+		expect(copiedReport).toContain('Source: console.error');
+		expect(copiedReport).toContain('Entry 1 of 2');
+		expect(copiedReport).toContain('Entry 2 of 2');
 	});
 
 	// ── Appearance section ─────────────────────────────────────────────────
