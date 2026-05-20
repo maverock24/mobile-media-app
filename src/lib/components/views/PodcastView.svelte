@@ -371,6 +371,7 @@
 
 	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
 	const RSS_CACHE_TTL = 30 * 60 * 1000;
+	const PODCAST_REQUEST_TIMEOUT_MS = 20_000;
 	const rssCache = new Map<string, { data: Record<string, unknown>; ts: number }>();
 	function resolvePodcastApiUrl(path: string): string {
 		if (/^https?:\/\//i.test(path)) {
@@ -385,7 +386,28 @@
 	}
 
 	async function readPodcastJson<T>(requestUrl: string, signal?: AbortSignal): Promise<T> {
-		const response = await fetch(requestUrl, { signal });
+		const controller = new AbortController();
+		let timedOut = false;
+		const timeoutId = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, PODCAST_REQUEST_TIMEOUT_MS);
+		const abortFromParent = () => controller.abort();
+		if (signal?.aborted) controller.abort();
+		signal?.addEventListener('abort', abortFromParent, { once: true });
+
+		let response: Response;
+		try {
+			response = await fetch(requestUrl, { signal: controller.signal });
+		} catch (error) {
+			if (timedOut) {
+				throw new Error('Podcast request timed out. Check your connection and try again.');
+			}
+			throw error;
+		} finally {
+			clearTimeout(timeoutId);
+			signal?.removeEventListener('abort', abortFromParent);
+		}
 		if (!response.ok) {
 			let message = `Podcast request failed: HTTP ${response.status}`;
 			try {
@@ -402,6 +424,53 @@
 		}
 
 		return await response.json() as T;
+	}
+
+	function getStringField(item: Record<string, unknown>, key: string): string {
+		const value = item[key];
+		return typeof value === 'string' ? value.trim() : '';
+	}
+
+	function getEpisodeIdentitySource(item: Record<string, unknown>, enclosure: { link?: string } | null): string {
+		const guid = item.guid;
+		if (typeof guid === 'string' && guid.trim()) return guid.trim();
+		if (guid && typeof guid === 'object') {
+			const guidRecord = guid as Record<string, unknown>;
+			const guidValue = typeof guidRecord._ === 'string' ? guidRecord._.trim() : '';
+			if (guidValue) return guidValue;
+		}
+
+		return enclosure?.link?.trim()
+			|| getStringField(item, 'link')
+			|| `${getStringField(item, 'title')}|${getStringField(item, 'pubDate')}`;
+	}
+
+	function buildEpisodeId(podcast: Podcast, item: Record<string, unknown>, index: number, enclosure: { link?: string } | null): string {
+		const source = getEpisodeIdentitySource(item, enclosure) || `episode-${index}`;
+		return `${podcast.itunesId}:${source}`;
+	}
+
+	function mergeEpisodeHistory(podcastId: number, episodes: Episode[]): Episode[] {
+		const existingEpisodes = podcastData.podcasts.find(p => p.id === podcastId)?.episodes ?? [];
+		const byId = new Map(existingEpisodes.map(episode => [episode.id, episode]));
+		const byAudioUrl = new Map(existingEpisodes.filter(episode => episode.audioUrl).map(episode => [episode.audioUrl, episode]));
+		const byTitleDate = new Map(existingEpisodes.map(episode => [`${episode.title}|${episode.publishedAt}`, episode]));
+
+		return episodes.map(episode => {
+			const existing = byId.get(episode.id)
+				?? byAudioUrl.get(episode.audioUrl)
+				?? byTitleDate.get(`${episode.title}|${episode.publishedAt}`);
+			if (!existing) return episode;
+			if (podcastData.lastPodcastId === podcastId && podcastData.lastEpisodeId === existing.id) {
+				podcastData.lastEpisodeId = episode.id;
+			}
+			return {
+				...episode,
+				played: existing.played,
+				progress: existing.progress,
+				positionSec: existing.positionSec
+			};
+		});
 	}
 
 	function describePodcastRequestError(error: unknown, fallback: string): string {
@@ -468,6 +537,14 @@
 		];
 		return colors[podcast.id % colors.length];
 	}
+	const NEW_EPISODE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+	function isNewEpisode(episode: Episode): boolean {
+		if (episode.played || (episode.progress ?? 0) > 0 || (episode.positionSec ?? 0) > 0) return false;
+		if (!episode.publishedAt) return true;
+		const publishedTime = new Date(episode.publishedAt).getTime();
+		if (!Number.isFinite(publishedTime)) return true;
+		return Date.now() - publishedTime <= NEW_EPISODE_WINDOW_MS;
+	}
 
 	// ── iTunes Search ────────────────────────────────────────────
 	async function searchITunes(q: string) {
@@ -532,6 +609,8 @@
 			episodeLoadController?.abort();
 			episodeLoadController = null;
 			episodeLoadPodcastId = null;
+			episodesLoading = false;
+			episodesRefreshing = false;
 		}
 		podcastData.podcasts = podcastData.podcasts.map(p => p.id === podcast.id ? { ...p, subscribed: false } : p);
 		// Re-sync selectedPodcast so the subscribe toggle reflects the new state immediately
@@ -570,7 +649,7 @@
 					const enc = item.enclosure as { link?: string } | null;
 					const rawDur = item.itunes_duration ?? item.duration ?? 0;
 					return {
-						id:          `${p.itunesId}-${i}`,
+						id:          buildEpisodeId(p, item, i, enc),
 						title:       String(item.title ?? 'Untitled'),
 						description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
 						duration:    parseDuration(rawDur as string | number),
@@ -582,15 +661,7 @@
 					};
 				}
 			);
-			const existingMap = new Map(
-				(podcastData.podcasts.find(pd => pd.id === p.id)?.episodes ?? []).map(e => [e.id, e])
-			);
-			const mergedEps = eps.map(ep => {
-				const existing = existingMap.get(ep.id);
-				return existing
-					? { ...ep, played: existing.played, progress: existing.progress, positionSec: existing.positionSec }
-					: ep;
-			});
+			const mergedEps = mergeEpisodeHistory(p.id, eps);
 			podcastData.podcasts = podcastData.podcasts.map(pd =>
 				pd.id === p.id ? { ...pd, episodes: mergedEps, episodesLoaded: true } : pd
 			);
@@ -662,8 +733,7 @@
 				// itunes_duration is a string like "1:23:45" or seconds as number
 				const rawDur = item.itunes_duration ?? item.duration ?? 0;
 				return {
-			// prefix with itunesId so IDs are unique across podcasts
-				id:          `${podcast.itunesId}-${i}`,
+				id:          buildEpisodeId(podcast, item, i, enc),
 				title:       String(item.title ?? 'Untitled'),
 				description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
 				duration:    parseDuration(rawDur as string | number),
@@ -678,15 +748,7 @@
 				? (data.feed as Record<string, unknown>).image as string
 				: '';
 			// Merge: preserve played/progress/positionSec from already-known episodes
-			const existingMap = new Map(
-				(podcastData.podcasts.find(p => p.id === podcast.id)?.episodes ?? []).map(e => [e.id, e])
-			);
-			const mergedEps = eps.map(ep => {
-				const existing = existingMap.get(ep.id);
-				return existing
-					? { ...ep, played: existing.played, progress: existing.progress, positionSec: existing.positionSec }
-					: ep;
-			});
+			const mergedEps = mergeEpisodeHistory(podcast.id, eps);
 			podcastData.podcasts = podcastData.podcasts.map(p =>
 				p.id === podcast.id
 					? { ...p, episodes: mergedEps, episodesLoaded: true, artworkUrl: p.artworkUrl || feedImage }
@@ -711,7 +773,9 @@
 				autoDismissMs: 8000
 			});
 		} finally {
-			if (!signal.aborted) {
+			if (episodeLoadController === controller) {
+				episodeLoadController = null;
+				episodeLoadPodcastId = null;
 				episodesLoading = false;
 				episodesRefreshing = false;
 			}
@@ -992,8 +1056,9 @@
 				</div>
 			{:else}
 				{#each selectedPodcast.episodes as episode}
+					{@const newEpisode = isNewEpisode(episode)}
 					<div
-						class="tap-feedback list-row-surface p-4 border-b transition-colors cursor-pointer {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}"
+						class="tap-feedback list-row-surface relative overflow-hidden border-l-[6px] p-4 border-b transition-colors cursor-pointer {newEpisode ? 'border-l-primary bg-gradient-to-r from-primary/20 via-primary/10 to-background shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] hover:from-primary/25 hover:via-primary/15 active:from-primary/30' : `border-l-transparent ${listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}`}"
 						role="button"
 						tabindex="0"
 						onclick={() => selectedPodcast && activateEpisode(selectedPodcast, episode)}
@@ -1003,16 +1068,25 @@
 							if (selectedPodcast) activateEpisode(selectedPodcast, episode);
 						}}
 					>
+						{#if newEpisode}
+							<div class="pointer-events-none absolute inset-y-0 left-0 w-24 bg-primary/10 blur-2xl"></div>
+						{/if}
 						<div class="flex items-start gap-3">
 							<div class="flex-1 min-w-0">
 								<div class="flex items-center gap-2 mb-1">
+									{#if newEpisode}
+										<Badge variant="default" class="shrink-0 gap-1.5 px-2.5 py-0.5 text-[11px] uppercase tracking-wide shadow-sm">
+											<span class="h-1.5 w-1.5 rounded-full bg-primary-foreground"></span>
+											New
+										</Badge>
+									{/if}
 									{#if episode.played}
 										<span class="inline-flex items-center gap-1 rounded-full bg-secondary/80 px-2 py-0.5 text-[11px] font-medium text-muted-foreground shrink-0">
 											<CheckCircle2 class="w-3.5 h-3.5" />
 											Played
 										</span>
 									{/if}
-									<p class="font-semibold text-[0.95rem] leading-tight truncate {episode.played ? 'text-muted-foreground' : ''}">
+									<p class="font-semibold text-[0.95rem] leading-tight truncate {episode.played ? 'text-muted-foreground' : newEpisode ? 'text-primary text-base' : ''}">
 										{episode.title}
 									</p>
 								</div>

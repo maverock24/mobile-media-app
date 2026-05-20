@@ -203,6 +203,39 @@ test.describe('Podcast view', () => {
 		await expect(page.getByText(/Jan 15/i)).toBeVisible();
 	});
 
+	test('recent untouched episodes are highlighted as new', async ({ page }) => {
+		await page.unroute('**/api.rss2json.com/**');
+		await page.route('**/api.rss2json.com/**', (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					status: 'ok',
+					feed: { title: 'Test Podcast', image: 'https://example.com/art.jpg' },
+					items: [
+						{
+							title: 'Fresh Episode',
+							description: '<p>Fresh episode description.</p>',
+							pubDate: new Date().toUTCString(),
+							itunes_duration: '1800',
+							enclosure: { link: 'https://example.com/fresh.mp3', length: 0, type: 'audio/mpeg' },
+						},
+					],
+				}),
+			})
+		);
+
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+
+		const episodeRow = page
+			.locator('div.tap-feedback')
+			.filter({ has: page.getByText('Fresh Episode', { exact: true }) })
+			.first();
+		await expect(episodeRow.getByText('New', { exact: true })).toBeVisible({ timeout: 5000 });
+		await expect(episodeRow).toHaveClass(/border-l-primary/);
+	});
+
 	test('episode play button is present for each episode', async ({ page }) => {
 		await page.getByPlaceholder('Search podcasts…').fill('test');
 		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
@@ -369,6 +402,75 @@ test.describe('Podcast view', () => {
 			.toContain('https://example.com/ep2.mp3');
 
 		await restoredPage.close();
+	});
+
+	test('new episodes do not inherit saved position when feed order changes', async ({ page }) => {
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
+		await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+
+		await page.evaluate(() => {
+			const raw = localStorage.getItem('podcast-data');
+			if (!raw) throw new Error('podcast-data missing');
+			const data = JSON.parse(raw);
+			const podcast = data.podcasts[0];
+			const episode = podcast.episodes[0];
+			episode.progress = 17;
+			episode.positionSec = 600;
+			data.lastPodcastId = podcast.id;
+			data.lastEpisodeId = episode.id;
+			data.lastPositionSec = 600;
+			localStorage.setItem('podcast-data', JSON.stringify(data));
+		});
+
+		const refreshedPage = await page.context().newPage();
+		await setupMocks(refreshedPage);
+		await refreshedPage.route('**/api.rss2json.com/**', (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					...MOCK_RSS_RESPONSE,
+					items: [
+						{
+							title: 'Brand New Episode',
+							description: '<p>Freshly published.</p>',
+							pubDate: '2026-02-05 10:00:00',
+							itunes_duration: '1800',
+							enclosure: { link: 'https://example.com/new.mp3', length: 0, type: 'audio/mpeg' },
+						},
+						...MOCK_RSS_RESPONSE.items,
+					],
+				}),
+			})
+		);
+
+		await refreshedPage.goto('/');
+		await goToTab(refreshedPage, 'Podcasts');
+		await expect(refreshedPage.getByText('Brand New Episode')).toBeVisible({ timeout: 5000 });
+
+		await expect
+			.poll(async () => refreshedPage.evaluate(() => {
+				const data = JSON.parse(localStorage.getItem('podcast-data') || '{}');
+				const podcast = data.podcasts?.[0];
+				const newEpisode = podcast?.episodes?.find((episode: { title: string }) => episode.title === 'Brand New Episode');
+				const oldEpisode = podcast?.episodes?.find((episode: { title: string }) => episode.title === 'Episode 1: Introduction');
+				return {
+					newPositionSec: newEpisode?.positionSec,
+					oldPositionSec: oldEpisode?.positionSec,
+					lastEpisodeId: data.lastEpisodeId,
+					oldEpisodeId: oldEpisode?.id,
+				};
+			}))
+			.toEqual({
+				newPositionSec: 0,
+				oldPositionSec: 600,
+				lastEpisodeId: expect.stringContaining('ep1.mp3'),
+				oldEpisodeId: expect.stringContaining('ep1.mp3'),
+			});
+
+		await refreshedPage.close();
 	});
 
 	// ── Episode view navigation ────────────────────────────────────────────
