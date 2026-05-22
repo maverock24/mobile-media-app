@@ -9,6 +9,7 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
 		checkFolderHasSubfolders,
+		consumePendingGoogleDriveAccessToken,
 		downloadGoogleDriveFile,
 		fetchGoogleDriveUser,
 		getGoogleDriveClientId,
@@ -1207,6 +1208,22 @@
 			driveTokenExpiresAt = googleDriveSession.expiresAt;
 			driveUser = googleDriveSession.user;
 			return driveAccessToken;
+		}
+
+		try {
+			const pendingNativeAuthorization = await consumePendingGoogleDriveAccessToken();
+			if (pendingNativeAuthorization?.access_token) {
+				driveAccessToken = pendingNativeAuthorization.access_token;
+				driveTokenExpiresAt = Date.now() + Number(pendingNativeAuthorization.expires_in ?? 3600) * 1000;
+				driveUser = googleDriveSession.user;
+				driveError = '';
+				googleDriveSession.accessToken = driveAccessToken;
+				googleDriveSession.expiresAt = driveTokenExpiresAt;
+				googleDriveSession.persist();
+				return driveAccessToken;
+			}
+		} catch {
+			// Native auth recovery is best-effort; fall through to the normal flow.
 		}
 
 		if (!interactive) {
@@ -2550,10 +2567,31 @@
 			return;
 		}
 
-		void (async () => {
-			const token = await ensureDriveAccessToken(false);
-			if (!token) {
+		let cancelled = false;
+		let restoreAttempts = 0;
+		let restoreTimer: number | null = null;
+
+		const scheduleRetry = () => {
+			if (!isNativeApp || restoreAttempts >= 8 || cancelled) {
 				clearPendingDriveFolderPickerIntent();
+				return;
+			}
+
+			restoreAttempts += 1;
+			restoreTimer = window.setTimeout(() => {
+				restoreTimer = null;
+				void restorePendingFolderPicker();
+			}, 250);
+		};
+
+		const restorePendingFolderPicker = async () => {
+			const token = await ensureDriveAccessToken(false);
+			if (cancelled) {
+				return;
+			}
+
+			if (!token) {
+				scheduleRetry();
 				return;
 			}
 
@@ -2561,7 +2599,16 @@
 			if (!showFolderPicker) {
 				await openFolderPicker();
 			}
-		})();
+		};
+
+		void restorePendingFolderPicker();
+
+		return () => {
+			cancelled = true;
+			if (restoreTimer !== null) {
+				window.clearTimeout(restoreTimer);
+			}
+		};
 	});
 
 	// ── Restore last folder handle from IndexedDB on mount ───────

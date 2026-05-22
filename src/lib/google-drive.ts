@@ -1,6 +1,7 @@
 import { PUBLIC_GOOGLE_CLIENT_ID } from '$env/static/public';
 import { DRIVE_APPDATA_SCOPE } from '$lib/drive-config';
 import {
+	consumePendingNativeGoogleDriveAccessToken,
 	isNativeGoogleDriveAuthAvailable,
 	requestNativeGoogleDriveAccessToken
 } from '$lib/google-drive-native';
@@ -217,6 +218,24 @@ export async function requestGoogleDriveAccessToken(options?: {
 
 		tokenClient.requestAccessToken({ prompt: options?.prompt ?? '' });
 	});
+}
+
+export async function consumePendingGoogleDriveAccessToken(): Promise<GoogleDriveTokenResponse | null> {
+	if (!isNativeGoogleDriveAuthAvailable()) {
+		return null;
+	}
+
+	const response = await consumePendingNativeGoogleDriveAccessToken();
+	if (!response) {
+		return null;
+	}
+
+	return {
+		access_token: response.accessToken,
+		expires_in: response.expiresIn ?? 3600,
+		scope: response.grantedScopes?.join(' ') || GOOGLE_DRIVE_AUTH_SCOPE,
+		token_type: 'Bearer'
+	};
 }
 
 export async function revokeGoogleDriveAccess(accessToken: string): Promise<void> {

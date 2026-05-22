@@ -11,8 +11,15 @@ export interface NativeGoogleDriveAuthResult {
 	grantedScopes?: string[];
 }
 
+interface NativeGoogleDrivePendingAuthResult {
+	accessToken?: string;
+	expiresIn?: number;
+	grantedScopes?: string[];
+}
+
 interface GoogleDriveNativePlugin {
 	authorize(options: NativeGoogleDriveAuthOptions): Promise<NativeGoogleDriveAuthResult>;
+	consumePendingAuthorizationResult(): Promise<NativeGoogleDrivePendingAuthResult>;
 }
 
 const GoogleDriveNative = registerPlugin<GoogleDriveNativePlugin>('GoogleDriveNative');
@@ -29,4 +36,21 @@ export async function requestNativeGoogleDriveAccessToken(
 	}
 
 	return GoogleDriveNative.authorize(options);
+}
+
+export async function consumePendingNativeGoogleDriveAccessToken(): Promise<NativeGoogleDriveAuthResult | null> {
+	if (!isNativeGoogleDriveAuthAvailable()) {
+		return null;
+	}
+
+	const response = await GoogleDriveNative.consumePendingAuthorizationResult();
+	if (!response?.accessToken) {
+		return null;
+	}
+
+	return {
+		accessToken: response.accessToken,
+		expiresIn: response.expiresIn,
+		grantedScopes: response.grantedScopes,
+	};
 }
