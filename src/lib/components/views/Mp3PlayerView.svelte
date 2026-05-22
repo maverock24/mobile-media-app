@@ -417,6 +417,7 @@
 			return haystack.includes(query);
 		});
 	});
+	const DRIVE_FOLDER_PICKER_PENDING_KEY = 'google-drive-folder-picker-pending';
 	// ── Drive folder picker dialog state ──
 	let showFolderPicker      = $state(false);
 	let folderPickerFolders   = $state<GoogleDriveFolder[]>([]);
@@ -424,6 +425,7 @@
 	let folderPickerStack     = $state<{ id: string; name: string }[]>([]);
 	let folderPickerToken     = $state('');
 	let folderHasSubFolders   = $state<Record<string, boolean>>({}); // folderId → has subfolders
+	let hasRestoredPendingDriveFolderPicker = false;
 
 	// ── Web Audio API (lazy-init) ──
 	let audioCtx: AudioContext | null = null;
@@ -1165,6 +1167,30 @@
 		return message;
 	}
 
+	function hasPendingDriveFolderPickerIntent(): boolean {
+		if (typeof localStorage === 'undefined') {
+			return false;
+		}
+
+		return localStorage.getItem(DRIVE_FOLDER_PICKER_PENDING_KEY) === '1';
+	}
+
+	function markDriveFolderPickerPending() {
+		if (typeof localStorage === 'undefined') {
+			return;
+		}
+
+		localStorage.setItem(DRIVE_FOLDER_PICKER_PENDING_KEY, '1');
+	}
+
+	function clearPendingDriveFolderPickerIntent() {
+		if (typeof localStorage === 'undefined') {
+			return;
+		}
+
+		localStorage.removeItem(DRIVE_FOLDER_PICKER_PENDING_KEY);
+	}
+
 	function hasValidDriveToken(): boolean {
 		return driveAccessToken.length > 0 && Date.now() < driveTokenExpiresAt - 60_000;
 	}
@@ -1230,7 +1256,12 @@
 	async function loadDriveLibrary(interactive: boolean) {
 		if (!googleDriveConfigured) {
 			driveError = 'Google Drive is not configured. Add PUBLIC_GOOGLE_CLIENT_ID to enable sign-in.';
+			clearPendingDriveFolderPickerIntent();
 			return;
+		}
+
+		if (interactive) {
+			markDriveFolderPickerPending();
 		}
 
 		isDriveAuthenticating = interactive;
@@ -1239,6 +1270,7 @@
 		try {
 			const token = await ensureDriveAccessToken(interactive);
 			if (!token) {
+				clearPendingDriveFolderPickerIntent();
 				return;
 			}
 			driveError = '';
@@ -1320,6 +1352,7 @@
 
 	async function confirmDriveFolderSelection(folderId?: string, folderName?: string) {
 		showFolderPicker = false;
+		clearPendingDriveFolderPickerIntent();
 		musicSettings.driveFolderId = folderId ?? '';
 		musicSettings.driveFolderName = folderName ?? '';
 		const token = folderPickerToken;
@@ -1329,6 +1362,7 @@
 
 	function cancelFolderPicker() {
 		showFolderPicker = false;
+		clearPendingDriveFolderPickerIntent();
 		folderPickerToken = '';
 		folderPickerStack = [];
 		folderPickerFolders = [];
@@ -1560,6 +1594,7 @@
 	}
 
 	async function changeDriveFolder() {
+		markDriveFolderPickerPending();
 		const token = await ensureDriveAccessToken(false);
 		if (!token) { await loadDriveLibrary(true); return; }
 		folderPickerToken = token;
@@ -1573,6 +1608,7 @@
 			// Ignore revoke failures and clear local session state regardless.
 		}
 
+		clearPendingDriveFolderPickerIntent();
 		if (tracks.some((track) => track.source.source === 'drive')) {
 			audioEl?.pause();
 			revokeAll();
@@ -2505,6 +2541,28 @@
 		showPanel = showPanel === p ? 'none' : p;
 		if (showPanel !== 'none') initAudioContext();
 	}
+
+	$effect(() => {
+		if (hasRestoredPendingDriveFolderPicker) return;
+		hasRestoredPendingDriveFolderPicker = true;
+
+		if (!hasPendingDriveFolderPickerIntent()) {
+			return;
+		}
+
+		void (async () => {
+			const token = await ensureDriveAccessToken(false);
+			if (!token) {
+				clearPendingDriveFolderPickerIntent();
+				return;
+			}
+
+			folderPickerToken = token;
+			if (!showFolderPicker) {
+				await openFolderPicker();
+			}
+		})();
+	});
 
 	// ── Restore last folder handle from IndexedDB on mount ───────
 	// untrack() prevents any reactive reads in the sync preamble (e.g. driveAccessToken reads

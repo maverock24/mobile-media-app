@@ -129,13 +129,38 @@
 	}
 
 	function syncPersistedEpisodeState(podcastId: number, episode: Episode) {
-		const podcast = podcastData.podcasts.find((entry) => entry.id === podcastId);
-		const persistedEpisode = podcast?.episodes.find((entry) => entry.id === episode.id);
-		if (!persistedEpisode) return;
+		const podcastIndex = podcastData.podcasts.findIndex((entry) => entry.id === podcastId);
+		if (podcastIndex < 0) return;
 
-		persistedEpisode.played = episode.played;
-		persistedEpisode.progress = episode.progress;
-		persistedEpisode.positionSec = episode.positionSec ?? 0;
+		const podcast = podcastData.podcasts[podcastIndex];
+		const episodeIndex = podcast.episodes.findIndex((entry) => entry.id === episode.id);
+		if (episodeIndex < 0) return;
+
+		const persistedEpisode = {
+			...podcast.episodes[episodeIndex],
+			played: episode.played,
+			progress: episode.progress,
+			positionSec: episode.positionSec ?? 0,
+			duration: episode.duration,
+		};
+		const episodes = [...podcast.episodes];
+		episodes[episodeIndex] = persistedEpisode;
+		const updatedPodcast = { ...podcast, episodes };
+
+		podcastData.podcasts = podcastData.podcasts.map((entry, index) =>
+			index === podcastIndex ? updatedPodcast : entry
+		);
+
+		if (selectedPodcast?.id === podcastId) {
+			selectedPodcast = updatedPodcast;
+		}
+
+		if (currentEpisode?.podcast.id === podcastId && currentEpisode.episode.id === episode.id) {
+			currentEpisode = {
+				podcast: updatedPodcast,
+				episode: persistedEpisode,
+			};
+		}
 	}
 
 	function markEpisodeFullyPlayed(podcastId: number, episode: Episode) {
@@ -182,13 +207,28 @@
 			_lastTimeUpdate = now;
 			currentTime = audioEl.currentTime;
 			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
-			if (currentEpisode && duration > 0) {
-				currentEpisode.episode.progress = Math.min(100, Math.round((audioEl.currentTime / duration) * 100));
-				currentEpisode.episode.positionSec = audioEl.currentTime;
+			const playbackDuration =
+				(isFinite(audioEl.duration) && audioEl.duration > 0)
+					? audioEl.duration
+					: currentEpisode?.episode.duration ?? duration;
+			if (currentEpisode && playbackDuration > 0) {
+				const updatedEpisode = {
+					...currentEpisode.episode,
+					progress: Math.min(100, Number(((audioEl.currentTime / playbackDuration) * 100).toFixed(1))),
+					positionSec: audioEl.currentTime,
+					duration: playbackDuration,
+				};
+				syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode);
 			}
 		};
 		const onLoadedMetadata = () => {
 			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
+			if (currentEpisode && duration > 0) {
+				syncPersistedEpisodeState(currentEpisode.podcast.id, {
+					...currentEpisode.episode,
+					duration,
+				});
+			}
 			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
 		};
 		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.setPlaying(true);  };

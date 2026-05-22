@@ -6,6 +6,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { dispatchHorizontalSwipe, expectActiveTab, goToTab } from './helpers';
 
+const MINIMAL_MP3 = Buffer.from([
+	0x49, 0x44, 0x33, 0x03, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+	0xff, 0xfb, 0x90, 0x00,
+	0x00, 0x00, 0x00, 0x00,
+]);
+
 // ── Mock response factories ─────────────────────────────────────────────────
 const MOCK_ITUNES_RESULT = {
 	trackId:          123456789,
@@ -65,7 +72,10 @@ async function setupMocks(page: Page) {
 	await page.route('**/api.rss2json.com/**', (route) =>
 		route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_RSS_RESPONSE) })
 	);
-	// Block real artwork fetches
+	await page.route('**/example.com/*.mp3', (route) =>
+		route.fulfill({ status: 200, contentType: 'audio/mpeg', body: MINIMAL_MP3 })
+	);
+	// Block non-audio example.com fetches like artwork.
 	await page.route('**/example.com/**', (route) => route.abort());
 	// Stub Google Identity Services — prevents OAuth popup/redirect with any client ID
 	await page.route('**/accounts.google.com/gsi/client**', (route) =>
@@ -265,6 +275,7 @@ test.describe('Podcast view', () => {
 
 		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
 		await playEpisode(page, 'Episode 1: Introduction');
+		await page.waitForTimeout(300);
 
 		await page.locator('audio[src="https://example.com/ep1.mp3"]').evaluate((audioElement) => {
 			const audio = audioElement as HTMLAudioElement;
@@ -291,6 +302,60 @@ test.describe('Podcast view', () => {
 					: null;
 			}))
 			.toEqual({ played: true, progress: 100, positionSec: 0, lastPositionSec: 0 });
+	});
+
+	test('episode tile renders fractional saved progress', async ({ page }) => {
+		const seededPage = await page.context().newPage();
+		await seededPage.addInitScript(() => {
+			localStorage.clear();
+			sessionStorage.clear();
+			localStorage.setItem('podcast-data', JSON.stringify({
+				podcasts: [
+					{
+						id: 1,
+						itunesId: 123456789,
+						title: 'Test Podcast',
+						author: 'Test Author',
+						category: 'Technology',
+						artworkUrl: 'https://example.com/art.jpg',
+						feedUrl: 'https://example.com/feed.xml',
+						subscribed: true,
+						episodesLoaded: true,
+						episodes: [
+							{
+								id: 'seeded-episode-1',
+								title: 'Episode 1: Introduction',
+								description: 'First episode description here.',
+								duration: 3600,
+								publishedAt: '2026-01-15 10:00:00',
+								played: false,
+								progress: 0.2,
+								positionSec: 6,
+								audioUrl: 'https://example.com/ep1.mp3',
+							}
+						]
+					}
+				],
+				nextId: 1,
+				lastEpisodeId: '',
+				lastPodcastId: 1,
+				lastPositionSec: 0,
+			}));
+		});
+		await setupMocks(seededPage);
+		await seededPage.goto('/');
+		await goToTab(seededPage, 'Podcasts');
+
+		const episodeRow = seededPage
+			.locator('div.tap-feedback')
+			.filter({ has: seededPage.getByText('Episode 1: Introduction', { exact: true }) })
+			.first();
+		const progressBar = episodeRow.locator('div.mt-2 div.h-full.bg-primary.rounded-full');
+
+		await expect(progressBar).toBeVisible({ timeout: 5000 });
+		await expect(progressBar).toHaveAttribute('style', /width: 0.2%/);
+
+		await seededPage.close();
 	});
 
 	test('clicking an episode row starts playback without using the play button', async ({ page }) => {

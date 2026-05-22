@@ -247,6 +247,80 @@ test.describe('Google Drive music library', () => {
 		await expect(page.getByRole('button', { name: /Select all/i })).toBeVisible();
 	});
 
+	test('reopens the folder picker after auth completes across a page reload', async ({ page }) => {
+		await page.addInitScript(() => {
+			window.__GOOGLE_CLIENT_ID__ = 'playwright-google-client-id.apps.googleusercontent.com';
+			const originalSetItem = Storage.prototype.setItem;
+			Storage.prototype.setItem = function(key, value) {
+				originalSetItem.call(this, key, value);
+				if (
+					this === localStorage &&
+					key === 'google-drive-session' &&
+					sessionStorage.getItem('drive-auth-reload-complete') !== '1'
+				) {
+					originalSetItem.call(sessionStorage, 'drive-auth-reload-complete', '1');
+					setTimeout(() => window.location.reload(), 0);
+				}
+			};
+			window.google = {
+				accounts: {
+					oauth2: {
+						initTokenClient: (config) => ({
+							requestAccessToken: () => {
+								config.callback({
+									access_token: 'drive-token',
+									expires_in: 3600,
+									scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.appdata',
+									token_type: 'Bearer'
+								});
+							}
+						}),
+						revoke: (_token, done) => done()
+					}
+				}
+			};
+		});
+
+		await page.route('https://www.googleapis.com/drive/v3/about?*', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					user: {
+						displayName: 'Drive Reload Tester',
+						emailAddress: 'drive.reload@example.com'
+					}
+				})
+			});
+		});
+
+		await page.route('https://www.googleapis.com/drive/v3/files?*', async (route) => {
+			const url = new URL(route.request().url());
+			if (url.searchParams.get('spaces') === 'appDataFolder') {
+				await route.fulfill({
+					status: 200,
+					contentType: 'application/json',
+					body: JSON.stringify({ files: [] })
+				});
+				return;
+			}
+
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({ files: [] })
+			});
+		});
+
+		await page.goto('/');
+		await goToTab(page, 'Music');
+
+		await page.getByRole('button', { name: /Connect Google Drive/i }).click();
+
+		await expect(page.getByRole('dialog', { name: 'Choose Google Drive folder' })).toBeVisible({ timeout: 7000 });
+		await expect(page.getByRole('button', { name: /Select all/i })).toBeVisible();
+	});
+
 	test('does not start a second interactive auth flow before the folder picker opens', async ({ page }) => {
 		let interactiveAuthRequests = 0;
 
