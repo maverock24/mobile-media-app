@@ -35,7 +35,9 @@ export async function requestNativeGoogleDriveAccessToken(
 		throw new Error('Native Google Drive authorization is only available on Android.');
 	}
 
-	return GoogleDriveNative.authorize(options);
+	const response = await GoogleDriveNative.authorize(options);
+	void GoogleDriveNative.consumePendingAuthorizationResult().catch(() => undefined);
+	return response;
 }
 
 export async function consumePendingNativeGoogleDriveAccessToken(): Promise<NativeGoogleDriveAuthResult | null> {

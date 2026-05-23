@@ -427,6 +427,7 @@
 	let folderPickerToken     = $state('');
 	let folderHasSubFolders   = $state<Record<string, boolean>>({}); // folderId → has subfolders
 	let hasRestoredPendingDriveFolderPicker = false;
+	let isRestoringPendingDriveFolderPicker = false;
 
 	// ── Web Audio API (lazy-init) ──
 	let audioCtx: AudioContext | null = null;
@@ -1190,6 +1191,29 @@
 		}
 
 		localStorage.removeItem(DRIVE_FOLDER_PICKER_PENDING_KEY);
+	}
+
+	async function restorePendingDriveFolderPickerIfNeeded(): Promise<boolean> {
+		if (!hasPendingDriveFolderPickerIntent() || isRestoringPendingDriveFolderPicker) {
+			return false;
+		}
+
+		isRestoringPendingDriveFolderPicker = true;
+		try {
+			const token = await ensureDriveAccessToken(false);
+			if (!token) {
+				return false;
+			}
+
+			folderPickerToken = token;
+			if (!showFolderPicker) {
+				await openFolderPicker();
+			}
+
+			return true;
+		} finally {
+			isRestoringPendingDriveFolderPicker = false;
+		}
 	}
 
 	function hasValidDriveToken(): boolean {
@@ -2585,19 +2609,13 @@
 		};
 
 		const restorePendingFolderPicker = async () => {
-			const token = await ensureDriveAccessToken(false);
+			const restored = await restorePendingDriveFolderPickerIfNeeded();
 			if (cancelled) {
 				return;
 			}
 
-			if (!token) {
+			if (!restored) {
 				scheduleRetry();
-				return;
-			}
-
-			folderPickerToken = token;
-			if (!showFolderPicker) {
-				await openFolderPicker();
 			}
 		};
 
@@ -2608,6 +2626,34 @@
 			if (restoreTimer !== null) {
 				window.clearTimeout(restoreTimer);
 			}
+		};
+	});
+
+	$effect(() => {
+		if (!isNativeApp) {
+			return;
+		}
+
+		const handleFocusRestore = () => {
+			if (!hasPendingDriveFolderPickerIntent()) {
+				return;
+			}
+
+			void restorePendingDriveFolderPickerIfNeeded();
+		};
+
+		const handleVisibilityRestore = () => {
+			if (document.visibilityState === 'visible') {
+				handleFocusRestore();
+			}
+		};
+
+		window.addEventListener('focus', handleFocusRestore);
+		document.addEventListener('visibilitychange', handleVisibilityRestore);
+
+		return () => {
+			window.removeEventListener('focus', handleFocusRestore);
+			document.removeEventListener('visibilitychange', handleVisibilityRestore);
 		};
 	});
 

@@ -132,8 +132,8 @@ public class GoogleDriveNativePlugin extends Plugin {
 
 			AuthorizationResult result = Identity.getAuthorizationClient(getContext())
 				.getAuthorizationResultFromIntent(activityResult.getData());
+			persistPendingAuthorizationResult(result);
 			if (savedCall == null) {
-				persistPendingAuthorizationResult(result);
 				return;
 			}
 
