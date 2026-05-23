@@ -2,12 +2,10 @@ package com.maverock24.mobilemediaapp;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentSender;
 import android.content.SharedPreferences;
 import android.os.Bundle;
-import androidx.activity.result.ActivityResult;
-import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.IntentSenderRequest;
-import androidx.activity.result.contract.ActivityResultContracts;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -30,23 +28,12 @@ import java.util.Set;
 
 @CapacitorPlugin(name = "GoogleDriveNative")
 public class GoogleDriveNativePlugin extends Plugin {
+	private static final int GOOGLE_DRIVE_AUTH_REQUEST_CODE = 47028;
 	private static final String PENDING_AUTH_PREFS = "google_drive_native_auth";
 	private static final String PENDING_AUTH_ACCESS_TOKEN_KEY = "pending_access_token";
 	private static final String PENDING_AUTH_EXPIRES_AT_KEY = "pending_expires_at";
 	private static final String PENDING_AUTH_GRANTED_SCOPES_KEY = "pending_granted_scopes";
 	private static final long DEFAULT_EXPIRES_IN_SECONDS = 3600L;
-
-	private ActivityResultLauncher<IntentSenderRequest> authorizationLauncher;
-	private String pendingAuthorizationCallId;
-
-	@Override
-	public void load() {
-		super.load();
-		authorizationLauncher = bridge.registerForActivityResult(
-			new ActivityResultContracts.StartIntentSenderForResult(),
-			this::handleAuthorizationActivityResult
-		);
-	}
 
 	@PluginMethod
 	public void authorize(PluginCall call) {
@@ -95,12 +82,18 @@ public class GoogleDriveNativePlugin extends Plugin {
 				return;
 			}
 
-			pendingAuthorizationCallId = call.getCallbackId();
-			bridge.saveCall(call);
-			authorizationLauncher.launch(
-				new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender())
-					.build()
-			);
+			saveCall(call);
+			try {
+				getActivity().startIntentSenderForResult(
+					result.getPendingIntent().getIntentSender(),
+					GOOGLE_DRIVE_AUTH_REQUEST_CODE,
+					new Intent(),
+					0, 0, 0, null
+				);
+			} catch (IntentSender.SendIntentException exception) {
+				freeSavedCall();
+				call.reject("Unable to launch Google authorization.", exception);
+			}
 			return;
 		}
 
@@ -116,13 +109,18 @@ public class GoogleDriveNativePlugin extends Plugin {
 		call.resolve(response);
 	}
 
-	private void handleAuthorizationActivityResult(ActivityResult activityResult) {
-		PluginCall savedCall = pendingAuthorizationCallId == null
-			? null
-			: bridge.getSavedCall(pendingAuthorizationCallId);
+	@Override
+	@Deprecated
+	protected void handleOnActivityResult(int requestCode, int resultCode, Intent data) {
+		if (requestCode != GOOGLE_DRIVE_AUTH_REQUEST_CODE) {
+			super.handleOnActivityResult(requestCode, resultCode, data);
+			return;
+		}
+
+		PluginCall savedCall = getSavedCall();
 
 		try {
-			if (activityResult.getResultCode() != Activity.RESULT_OK || activityResult.getData() == null) {
+			if (resultCode != Activity.RESULT_OK || data == null) {
 				clearPendingAuthorizationResult();
 				if (savedCall != null) {
 					savedCall.reject("Google authorization was cancelled.");
@@ -131,8 +129,10 @@ public class GoogleDriveNativePlugin extends Plugin {
 			}
 
 			AuthorizationResult result = Identity.getAuthorizationClient(getContext())
-				.getAuthorizationResultFromIntent(activityResult.getData());
+				.getAuthorizationResultFromIntent(data);
+			
 			persistPendingAuthorizationResult(result);
+			
 			if (savedCall == null) {
 				return;
 			}
@@ -144,7 +144,9 @@ public class GoogleDriveNativePlugin extends Plugin {
 				savedCall.reject("Unable to finish Google authorization.", exception);
 			}
 		} finally {
-			releasePendingAuthorizationCall();
+			if (savedCall != null) {
+				freeSavedCall();
+			}
 		}
 	}
 
@@ -185,9 +187,7 @@ public class GoogleDriveNativePlugin extends Plugin {
 		if (rawExpiresIn instanceof String) {
 			try {
 				return Math.max(1L, Long.parseLong((String) rawExpiresIn));
-			} catch (NumberFormatException ignored) {
-				// Fall through to the default token lifetime.
-			}
+			} catch (NumberFormatException ignored) {}
 		}
 
 		return DEFAULT_EXPIRES_IN_SECONDS;
@@ -258,18 +258,7 @@ public class GoogleDriveNativePlugin extends Plugin {
 	}
 
 	private void clearPendingAuthorizationResult() {
-		SharedPreferences.Editor editor = getPendingAuthorizationPreferences().edit();
-		editor.remove(PENDING_AUTH_ACCESS_TOKEN_KEY);
-		editor.remove(PENDING_AUTH_EXPIRES_AT_KEY);
-		editor.remove(PENDING_AUTH_GRANTED_SCOPES_KEY);
-		editor.apply();
-	}
-
-	private void releasePendingAuthorizationCall() {
-		if (pendingAuthorizationCallId != null) {
-			bridge.releaseCall(pendingAuthorizationCallId);
-			pendingAuthorizationCallId = null;
-		}
+		getPendingAuthorizationPreferences().edit().clear().apply();
 	}
 
 	private List<Scope> parseScopes(JSONArray rawScopes) {

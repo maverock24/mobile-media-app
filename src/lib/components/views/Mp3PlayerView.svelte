@@ -1350,10 +1350,8 @@
 
 	async function openFolderPicker() {
 		folderPickerStack = [];
-		showFolderPicker = true;
-		folderPickerFolders = [];
-		folderPickerLoading = true;
 		await loadFolderPickerLevel();
+		showFolderPicker = true;
 	}
 
 	async function loadFolderPickerLevel() {
