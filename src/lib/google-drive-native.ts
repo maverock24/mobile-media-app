@@ -25,7 +25,7 @@ interface GoogleDriveNativePlugin {
 const GoogleDriveNative = registerPlugin<GoogleDriveNativePlugin>('GoogleDriveNative');
 
 export function isNativeGoogleDriveAuthAvailable(): boolean {
-	return Capacitor.getPlatform() === 'android';
+	return false;
 }
 
 export async function requestNativeGoogleDriveAccessToken(

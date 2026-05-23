@@ -2077,12 +2077,17 @@
 					browseVersion++;
 				}
 			} catch (error) {
-				console.error('Failed to open native folder.', error);
+				const isCancel = error instanceof Error && /cancel/i.test(error.message);
+				if (!isCancel) {
+					console.error('Failed to open native folder.', error);
+				}
 				if (nativeFileInputEl) {
 					nativeFileInputEl.click();
 					return;
 				}
-				alert('Unable to open a folder on this device. Please try again.');
+				if (!isCancel) {
+					alert('Unable to open a folder on this device. Please try again.');
+				}
 			} finally {
 				isLoading = false;
 			}
