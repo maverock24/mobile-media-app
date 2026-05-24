@@ -2,10 +2,13 @@ package com.maverock24.mobilemediaapp;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
-import android.content.IntentSender;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+
+import androidx.activity.result.ActivityResult;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.IntentSenderRequest;
+import androidx.activity.result.contract.ActivityResultContracts;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -28,12 +31,23 @@ import java.util.Set;
 
 @CapacitorPlugin(name = "GoogleDriveNative")
 public class GoogleDriveNativePlugin extends Plugin {
-	private static final int GOOGLE_DRIVE_AUTH_REQUEST_CODE = 47028;
 	private static final String PENDING_AUTH_PREFS = "google_drive_native_auth";
 	private static final String PENDING_AUTH_ACCESS_TOKEN_KEY = "pending_access_token";
 	private static final String PENDING_AUTH_EXPIRES_AT_KEY = "pending_expires_at";
 	private static final String PENDING_AUTH_GRANTED_SCOPES_KEY = "pending_granted_scopes";
 	private static final long DEFAULT_EXPIRES_IN_SECONDS = 3600L;
+
+	private ActivityResultLauncher<IntentSenderRequest> authorizationLauncher;
+	private String pendingAuthorizationCallId;
+
+	@Override
+	public void load() {
+		super.load();
+		authorizationLauncher = bridge.registerForActivityResult(
+			new ActivityResultContracts.StartIntentSenderForResult(),
+			this::handleAuthorizationActivityResult
+		);
+	}
 
 	@PluginMethod
 	public void authorize(PluginCall call) {
@@ -82,16 +96,14 @@ public class GoogleDriveNativePlugin extends Plugin {
 				return;
 			}
 
-			saveCall(call);
+			pendingAuthorizationCallId = call.getCallbackId();
+			bridge.saveCall(call);
 			try {
-				getActivity().startIntentSenderForResult(
-					result.getPendingIntent().getIntentSender(),
-					GOOGLE_DRIVE_AUTH_REQUEST_CODE,
-					new Intent(),
-					0, 0, 0, null
+				authorizationLauncher.launch(
+					new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender()).build()
 				);
-			} catch (IntentSender.SendIntentException exception) {
-				freeSavedCall();
+			} catch (RuntimeException exception) {
+				releasePendingAuthorizationCall();
 				call.reject("Unable to launch Google authorization.", exception);
 			}
 			return;
@@ -109,18 +121,13 @@ public class GoogleDriveNativePlugin extends Plugin {
 		call.resolve(response);
 	}
 
-	@Override
-	@Deprecated
-	protected void handleOnActivityResult(int requestCode, int resultCode, Intent data) {
-		if (requestCode != GOOGLE_DRIVE_AUTH_REQUEST_CODE) {
-			super.handleOnActivityResult(requestCode, resultCode, data);
-			return;
-		}
-
-		PluginCall savedCall = getSavedCall();
+	private void handleAuthorizationActivityResult(ActivityResult activityResult) {
+		PluginCall savedCall = pendingAuthorizationCallId == null
+			? null
+			: bridge.getSavedCall(pendingAuthorizationCallId);
 
 		try {
-			if (resultCode != Activity.RESULT_OK || data == null) {
+			if (activityResult.getResultCode() != Activity.RESULT_OK || activityResult.getData() == null) {
 				clearPendingAuthorizationResult();
 				if (savedCall != null) {
 					savedCall.reject("Google authorization was cancelled.");
@@ -129,10 +136,10 @@ public class GoogleDriveNativePlugin extends Plugin {
 			}
 
 			AuthorizationResult result = Identity.getAuthorizationClient(getContext())
-				.getAuthorizationResultFromIntent(data);
-			
+				.getAuthorizationResultFromIntent(activityResult.getData());
+
 			persistPendingAuthorizationResult(result);
-			
+
 			if (savedCall == null) {
 				return;
 			}
@@ -144,9 +151,14 @@ public class GoogleDriveNativePlugin extends Plugin {
 				savedCall.reject("Unable to finish Google authorization.", exception);
 			}
 		} finally {
-			if (savedCall != null) {
-				freeSavedCall();
-			}
+			releasePendingAuthorizationCall();
+		}
+	}
+
+	private void releasePendingAuthorizationCall() {
+		if (pendingAuthorizationCallId != null) {
+			bridge.releaseCall(pendingAuthorizationCallId);
+			pendingAuthorizationCallId = null;
 		}
 	}
 
