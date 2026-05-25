@@ -423,6 +423,7 @@
 	let showFolderPicker      = $state(false);
 	let folderPickerFolders   = $state<GoogleDriveFolder[]>([]);
 	let folderPickerLoading   = $state(false);
+	let folderPickerError     = $state('');
 	let folderPickerStack     = $state<{ id: string; name: string }[]>([]);
 	let folderPickerToken     = $state('');
 	let folderHasSubFolders   = $state<Record<string, boolean>>({}); // folderId → has subfolders
@@ -1350,12 +1351,15 @@
 
 	async function openFolderPicker() {
 		folderPickerStack = [];
-		await loadFolderPickerLevel();
+		folderPickerFolders = [];
+		folderPickerError = '';
 		showFolderPicker = true;
+		await loadFolderPickerLevel();
 	}
 
 	async function loadFolderPickerLevel() {
 		folderPickerLoading = true;
+		folderPickerError = '';
 		try {
 			const parentId = folderPickerStack.at(-1)?.id;
 			folderPickerFolders = await listGoogleDriveFolders(folderPickerToken, parentId);
@@ -1372,8 +1376,9 @@
 				});
 				folderHasSubFolders = { ...folderHasSubFolders, ...updates };
 			}
-		} catch {
+		} catch (error) {
 			folderPickerFolders = [];
+			folderPickerError = formatDriveAuthError(error);
 		} finally {
 			folderPickerLoading = false;
 		}
@@ -1405,6 +1410,7 @@
 		folderPickerToken = '';
 		folderPickerStack = [];
 		folderPickerFolders = [];
+		folderPickerError = '';
 	}
 
 	// ── Folder favorites ──────────────────────────────────────────
@@ -3413,6 +3419,11 @@
 			{#if folderPickerLoading}
 				<div class="flex items-center justify-center py-12">
 					<div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+				</div>
+			{:else if folderPickerError}
+				<div class="px-4 py-8 text-center space-y-3">
+					<p class="text-sm text-destructive">{folderPickerError}</p>
+					<Button variant="outline" size="sm" onclick={loadFolderPickerLevel}>Retry</Button>
 				</div>
 			{:else}
 				<!-- "All files" option (only at root level) -->
