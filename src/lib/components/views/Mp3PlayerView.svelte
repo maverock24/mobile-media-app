@@ -429,6 +429,7 @@
 	let folderHasSubFolders   = $state<Record<string, boolean>>({}); // folderId → has subfolders
 	let hasRestoredPendingDriveFolderPicker = false;
 	let isRestoringPendingDriveFolderPicker = false;
+	let pendingDriveFolderPickerRestoreTimers: number[] = [];
 
 	// ── Web Audio API (lazy-init) ──
 	let audioCtx: AudioContext | null = null;
@@ -1207,6 +1208,9 @@
 			}
 
 			folderPickerToken = token;
+			isDriveAuthenticating = false;
+			isDriveLoading = false;
+			clearPendingDriveFolderPickerRestoreTimers();
 			if (!showFolderPicker) {
 				await openFolderPicker();
 			}
@@ -1215,6 +1219,30 @@
 		} finally {
 			isRestoringPendingDriveFolderPicker = false;
 		}
+	}
+
+	function schedulePendingDriveFolderPickerRestore() {
+		if (!isNativeApp || typeof window === 'undefined') {
+			return;
+		}
+
+		pendingDriveFolderPickerRestoreTimers.forEach((timer) => window.clearTimeout(timer));
+		pendingDriveFolderPickerRestoreTimers = [750, 1500, 3000, 6000].map((delay) => window.setTimeout(() => {
+			if (!hasPendingDriveFolderPickerIntent() || showFolderPicker) {
+				return;
+			}
+
+			void restorePendingDriveFolderPickerIfNeeded();
+		}, delay));
+	}
+
+	function clearPendingDriveFolderPickerRestoreTimers() {
+		if (typeof window === 'undefined') {
+			return;
+		}
+
+		pendingDriveFolderPickerRestoreTimers.forEach((timer) => window.clearTimeout(timer));
+		pendingDriveFolderPickerRestoreTimers = [];
 	}
 
 	function hasValidDriveToken(): boolean {
@@ -1304,6 +1332,7 @@
 
 		if (interactive) {
 			markDriveFolderPickerPending();
+			schedulePendingDriveFolderPickerRestore();
 		}
 
 		isDriveAuthenticating = interactive;
@@ -2663,6 +2692,7 @@
 		return () => {
 			window.removeEventListener('focus', handleFocusRestore);
 			document.removeEventListener('visibilitychange', handleVisibilityRestore);
+			clearPendingDriveFolderPickerRestoreTimers();
 		};
 	});
 
