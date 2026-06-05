@@ -1222,7 +1222,7 @@
 	}
 
 	function schedulePendingDriveFolderPickerRestore() {
-		if (!isNativeApp || typeof window === 'undefined') {
+		if (typeof window === 'undefined') {
 			return;
 		}
 
@@ -2634,7 +2634,7 @@
 		let restoreTimer: number | null = null;
 
 		const scheduleRetry = () => {
-			if (!isNativeApp || restoreAttempts >= 8 || cancelled) {
+			if (restoreAttempts >= 8 || cancelled) {
 				clearPendingDriveFolderPickerIntent();
 				return;
 			}
@@ -2668,10 +2668,6 @@
 	});
 
 	$effect(() => {
-		if (!isNativeApp) {
-			return;
-		}
-
 		const handleFocusRestore = () => {
 			if (!hasPendingDriveFolderPickerIntent()) {
 				return;

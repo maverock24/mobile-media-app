@@ -304,6 +304,39 @@ test.describe('Podcast view', () => {
 			.toEqual({ played: true, progress: 100, positionSec: 0, lastPositionSec: 0 });
 	});
 
+	test('episode tile progress updates while playback advances', async ({ page }) => {
+		await page.getByPlaceholder('Search podcasts…').fill('test');
+		await page.getByRole('button', { name: /^Subscribe$/i }).first().click({ timeout: 3000 });
+
+		await expect(page.getByText('Episode 1: Introduction')).toBeVisible({ timeout: 5000 });
+		await playEpisode(page, 'Episode 1: Introduction');
+		await page.waitForTimeout(300);
+
+		const episodeRow = page
+			.locator('div.tap-feedback')
+			.filter({ has: page.getByText('Episode 1: Introduction', { exact: true }) })
+			.first();
+		const progressBar = episodeRow.locator('div.mt-2 div.h-full.bg-primary.rounded-full');
+
+		await page.locator('audio[src="https://example.com/ep1.mp3"]').evaluate((audioElement) => {
+			const audio = audioElement as HTMLAudioElement;
+			Object.defineProperty(audio, 'duration', { configurable: true, value: 3600 });
+			audio.currentTime = 180;
+			audio.dispatchEvent(new Event('timeupdate'));
+		});
+
+		await expect(progressBar).toHaveAttribute('style', /width: 5%/, { timeout: 5000 });
+
+		await page.waitForTimeout(300);
+		await page.locator('audio[src="https://example.com/ep1.mp3"]').evaluate((audioElement) => {
+			const audio = audioElement as HTMLAudioElement;
+			audio.currentTime = 720;
+			audio.dispatchEvent(new Event('timeupdate'));
+		});
+
+		await expect(progressBar).toHaveAttribute('style', /width: 20%/, { timeout: 5000 });
+	});
+
 	test('episode tile renders fractional saved progress', async ({ page }) => {
 		const seededPage = await page.context().newPage();
 		await seededPage.addInitScript(() => {

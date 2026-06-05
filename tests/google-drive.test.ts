@@ -321,6 +321,74 @@ test.describe('Google Drive music library', () => {
 		await expect(page.getByRole('button', { name: /Select all/i })).toBeVisible();
 	});
 
+	test('reopens the folder picker in the browser when auth session appears after popup return', async ({ page }) => {
+		await page.addInitScript(() => {
+			window.__GOOGLE_CLIENT_ID__ = 'playwright-google-client-id.apps.googleusercontent.com';
+			window.google = {
+				accounts: {
+					oauth2: {
+						initTokenClient: () => ({
+							requestAccessToken: () => {
+								setTimeout(() => {
+									localStorage.setItem('google-drive-session', JSON.stringify({
+										accessToken: 'drive-token',
+										expiresAt: Date.now() + 3600_000,
+										user: {
+											displayName: 'Drive Focus Tester',
+											emailAddress: 'drive.focus@example.com'
+										}
+									}));
+									window.dispatchEvent(new Event('focus'));
+									document.dispatchEvent(new Event('visibilitychange'));
+								}, 150);
+							}
+						}),
+						revoke: (_token, done) => done()
+					}
+				}
+			};
+		});
+
+		await page.route('https://www.googleapis.com/drive/v3/about?*', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					user: {
+						displayName: 'Drive Focus Tester',
+						emailAddress: 'drive.focus@example.com'
+					}
+				})
+			});
+		});
+
+		await page.route('https://www.googleapis.com/drive/v3/files?*', async (route) => {
+			const url = new URL(route.request().url());
+			if (url.searchParams.get('spaces') === 'appDataFolder') {
+				await route.fulfill({
+					status: 200,
+					contentType: 'application/json',
+					body: JSON.stringify({ files: [] })
+				});
+				return;
+			}
+
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({ files: [] })
+			});
+		});
+
+		await page.goto('/');
+		await goToTab(page, 'Music');
+
+		await page.getByRole('button', { name: /Connect Google Drive/i }).click();
+
+		await expect(page.getByRole('dialog', { name: 'Choose Google Drive folder' })).toBeVisible({ timeout: 5000 });
+		await expect(page.getByRole('button', { name: /Select all/i })).toBeVisible();
+	});
+
 	test('does not start a second interactive auth flow before the folder picker opens', async ({ page }) => {
 		let interactiveAuthRequests = 0;
 

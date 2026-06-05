@@ -567,6 +567,40 @@
 		if (parts.length === 2) return parts[0] * 60 + parts[1];
 		return parts[0] || 0;
 	}
+	function isActiveEpisode(episode: Episode): boolean {
+		return currentEpisode?.episode.id === episode.id;
+	}
+	function getEpisodeProgressPercent(episode: Episode): number {
+		const savedProgress = episode.progress ?? 0;
+
+		if (!isActiveEpisode(episode)) {
+			return savedProgress;
+		}
+
+		const liveDuration = duration > 0 ? duration : episode.duration;
+		if (liveDuration <= 0 || currentTime <= 0) {
+			return savedProgress;
+		}
+
+		return Math.min(100, Number(((currentTime / liveDuration) * 100).toFixed(1)));
+	}
+	function getEpisodeProgressLabel(episode: Episode): string {
+		if (!isActiveEpisode(episode)) {
+			return '';
+		}
+
+		const progressPosition = currentTime > 0 ? currentTime : (episode.positionSec ?? 0);
+		if (progressPosition <= 0) {
+			return '';
+		}
+
+		const liveDuration = duration > 0 ? duration : episode.duration;
+		if (liveDuration <= 0) {
+			return `Playing ${formatTime(progressPosition)}`;
+		}
+
+		return `${formatTime(progressPosition)} of ${formatTime(liveDuration)}`;
+	}
 	function artworkFallback(podcast: Podcast): string {
 		// Use a nice gradient placeholder if no artwork
 		const colors = [
@@ -1096,6 +1130,9 @@
 				</div>
 			{:else}
 				{#each selectedPodcast.episodes as episode}
+					{@const activeEpisode = isActiveEpisode(episode)}
+					{@const episodeProgress = getEpisodeProgressPercent(episode)}
+					{@const episodeProgressLabel = getEpisodeProgressLabel(episode)}
 					{@const newEpisode = isNewEpisode(episode)}
 					<div
 						class="tap-feedback list-row-surface relative overflow-hidden border-l-[6px] p-4 border-b transition-colors cursor-pointer {newEpisode ? 'border-l-primary bg-gradient-to-r from-primary/20 via-primary/10 to-background shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] hover:from-primary/25 hover:via-primary/15 active:from-primary/30' : `border-l-transparent ${listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}`}"
@@ -1143,14 +1180,22 @@
 										<span>{formatDate(episode.publishedAt)}</span>
 									{/if}
 								</div>
-								{#if episode.progress > 0 && episode.progress < 100}
-									<div class="mt-2 h-1 rounded-full bg-secondary overflow-hidden">
-										<div class="h-full bg-primary rounded-full" style="width: {episode.progress}%"></div>
+								{#if episodeProgress > 0 && episodeProgress < 100}
+									<div class="mt-2 space-y-1">
+										<div class="h-1 rounded-full bg-secondary overflow-hidden">
+											<div class="h-full bg-primary rounded-full" style="width: {episodeProgress}%"></div>
+										</div>
+										{#if activeEpisode && episodeProgressLabel}
+											<div class="flex items-center gap-1 text-[11px] font-medium text-primary">
+												<span class={`h-1.5 w-1.5 rounded-full ${isPlaying ? 'bg-primary animate-pulse' : 'bg-primary/70'}`}></span>
+												<span>{episodeProgressLabel}</span>
+											</div>
+										{/if}
 									</div>
 								{/if}
 							</div>
 							<Button
-								size="icon" variant={currentEpisode?.episode.id === episode.id && (isPlaying || isBuffering) ? 'default' : 'outline'}
+								size="icon" variant={activeEpisode && (isPlaying || isBuffering) ? 'default' : 'outline'}
 								class="shrink-0 w-11 h-11 rounded-full"
 								onclick={(event) => {
 									event.stopPropagation();
@@ -1159,9 +1204,9 @@
 									}
 								}}
 							>
-								{#if currentEpisode?.episode.id === episode.id && isBuffering}
+								{#if activeEpisode && isBuffering}
 									<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-								{:else if currentEpisode?.episode.id === episode.id && isPlaying}
+								{:else if activeEpisode && isPlaying}
 									<Pause class="w-5 h-5" />
 								{:else}
 									<Play class="w-5 h-5 ml-0.5" />
