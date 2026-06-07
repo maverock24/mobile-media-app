@@ -92,26 +92,7 @@ public class GoogleDriveNativePlugin extends Plugin {
 
 	private void handleAuthorizationResult(PluginCall call, AuthorizationResult result, boolean interactive) {
 		if (result.hasResolution()) {
-			if (!interactive) {
-				call.reject("Silent Google authorization is unavailable.");
-				return;
-			}
-
-			if (result.getPendingIntent() == null) {
-				call.reject("Google authorization requires additional confirmation.");
-				return;
-			}
-
-			pendingAuthorizationCallId = call.getCallbackId();
-			bridge.saveCall(call);
-			try {
-				authorizationLauncher.launch(
-					new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender()).build()
-				);
-			} catch (RuntimeException exception) {
-				releasePendingAuthorizationCall();
-				call.reject("Unable to launch Google authorization.", exception);
-			}
+			launchAuthorizationResolution(call, result, interactive);
 			return;
 		}
 
@@ -144,6 +125,15 @@ public class GoogleDriveNativePlugin extends Plugin {
 			AuthorizationResult result = Identity.getAuthorizationClient(getContext())
 				.getAuthorizationResultFromIntent(activityResult.getData());
 
+			if (result.hasResolution()) {
+				if (savedCall == null) {
+					return;
+				}
+
+				launchAuthorizationResolution(savedCall, result, true);
+				return;
+			}
+
 			persistPendingAuthorizationResult(result);
 
 			if (savedCall == null) {
@@ -158,6 +148,29 @@ public class GoogleDriveNativePlugin extends Plugin {
 			}
 		} finally {
 			releasePendingAuthorizationCall();
+		}
+	}
+
+	private void launchAuthorizationResolution(PluginCall call, AuthorizationResult result, boolean interactive) {
+		if (!interactive) {
+			call.reject("Silent Google authorization is unavailable.");
+			return;
+		}
+
+		if (result.getPendingIntent() == null) {
+			call.reject("Google authorization requires additional confirmation.");
+			return;
+		}
+
+		pendingAuthorizationCallId = call.getCallbackId();
+		bridge.saveCall(call);
+		try {
+			authorizationLauncher.launch(
+				new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender()).build()
+			);
+		} catch (RuntimeException exception) {
+			releasePendingAuthorizationCall();
+			call.reject("Unable to launch Google authorization.", exception);
 		}
 	}
 
