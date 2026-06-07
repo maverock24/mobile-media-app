@@ -17,7 +17,7 @@ The root is intentionally reserved for entry-point project docs and core configu
 
 - Node.js 22
 - pnpm 10
-- Java 21 for Android builds
+- Java 21 JDK for Android builds
 - Android Studio for native Android work
 - Optional: a Google Cloud OAuth client if you want Google Drive playback locally
 
@@ -40,6 +40,8 @@ Typical Google OAuth origins:
 - your Netlify production URL
 - any custom domain serving this app
 
+For Android APK Google Drive auth, this repo already uses a native Google Play Services bridge instead of WebView OAuth. To make Drive login work in the APK, configure an Android OAuth client in Google Cloud for package `com.maverock24.mobilemediaapp` with the SHA-1 and SHA-256 of the signing key used to build or install that APK. If that mapping is wrong, the account chooser can appear but the Drive grant will fail and the folder picker will never open.
+
 ## Common Commands
 
 ```sh
@@ -50,6 +52,8 @@ pnpm check          # Svelte + TypeScript validation
 pnpm test           # Playwright end-to-end tests
 pnpm validate       # typecheck + end-to-end tests
 pnpm build:mobile   # mobile-oriented static build
+pnpm android:doctor # print Java/toolchain + Android OAuth fingerprint setup info
+pnpm repo:check     # fail if the local Drive/APK setup is incomplete
 pnpm cap:sync:android
 pnpm cap:open:android
 ```
@@ -87,6 +91,8 @@ This project uses `@sveltejs/adapter-netlify` for the web deployment path.
 Capacitor Android support lives in `android/`.
 
 ```sh
+pnpm repo:check
+pnpm android:doctor
 pnpm build:mobile
 pnpm cap:sync:android
 pnpm cap:open:android
@@ -97,6 +103,8 @@ Notes:
 - mobile builds output to `dist-mobile/`
 - web builds output to `build/`
 - CI uses Java 21 and Gradle to produce APKs
+- `pnpm android:doctor` prints the package name, Java 21 JDK status, and debug/release signing fingerprints to use when configuring the Android OAuth client for Google Drive
+- `pnpm repo:check` exits nonzero when the local Google Drive setup is incomplete
 
 ## CI And Releases
 

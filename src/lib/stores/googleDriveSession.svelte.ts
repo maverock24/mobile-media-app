@@ -6,6 +6,7 @@ import {
 	revokeGoogleDriveAccess,
 	type GoogleDriveUser
 } from '$lib/google-drive';
+import { formatGoogleDriveAuthError } from '$lib/google-drive-auth-error';
 
 const GOOGLE_DRIVE_SESSION_KEY = 'google-drive-session';
 
@@ -52,19 +53,7 @@ function writeStoredSession(session: StoredGoogleDriveSession) {
 
 const storedSession = readStoredSession();
 
-function formatDriveAuthError(error: unknown): string {
-	const message = error instanceof Error ? error.message : 'Unable to access Google Drive.';
-
-	if (/popup_closed|popup closed|access denied|interrupted/i.test(message)) {
-		return 'Google sign-in was cancelled.';
-	}
-
-	if (/public_google_client_id/i.test(message)) {
-		return 'Google Drive is not configured. Add PUBLIC_GOOGLE_CLIENT_ID to enable sign-in.';
-	}
-
-	return message;
-}
+const formatDriveAuthError = formatGoogleDriveAuthError;
 
 export const googleDriveSession = $state.raw({
 	accessToken: storedSession.accessToken ?? '',

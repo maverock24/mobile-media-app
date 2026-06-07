@@ -7,6 +7,8 @@
 		"dev": "vite dev",
 		"build": "vite build",
 		"build:mobile": "BUILD_TARGET=mobile vite build",
+		"android:doctor": "bash ./scripts/android-doctor.sh",
+		"repo:check": "bash ./scripts/android-doctor.sh --strict",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"cap:sync": "pnpm build:mobile && cap sync",

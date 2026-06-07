@@ -20,6 +20,7 @@ import com.google.android.gms.auth.api.identity.AuthorizationRequest;
 import com.google.android.gms.auth.api.identity.AuthorizationResult;
 import com.google.android.gms.auth.api.identity.Identity;
 import com.google.android.gms.common.api.ApiException;
+import com.google.android.gms.common.api.CommonStatusCodes;
 import com.google.android.gms.common.api.Scope;
 
 import org.json.JSONArray;
@@ -67,9 +68,14 @@ public class GoogleDriveNativePlugin extends Plugin {
 		Identity.getAuthorizationClient(getActivity())
 			.authorize(request)
 			.addOnSuccessListener(result -> handleAuthorizationResult(call, result, interactive))
-			.addOnFailureListener(exception ->
-				call.reject("Unable to authorize Google Drive access.", exception)
-			);
+			.addOnFailureListener(exception -> {
+				if (exception instanceof ApiException apiException) {
+					call.reject(describeApiException("Unable to authorize Google Drive access.", apiException), apiException);
+					return;
+				}
+
+				call.reject("Unable to authorize Google Drive access.", exception);
+			});
 	}
 
 	@PluginMethod
@@ -115,7 +121,7 @@ public class GoogleDriveNativePlugin extends Plugin {
 	private void resolveAuthorization(PluginCall call, AuthorizationResult result) {
 		JSObject response = createAuthorizationResponse(result);
 		if (response == null) {
-			call.reject("Google authorization did not return an access token.");
+			call.reject("Google authorization did not return an access token. If this only fails in the APK, verify the Android OAuth client package name and signing certificate in Google Cloud.");
 			return;
 		}
 		call.resolve(response);
@@ -148,11 +154,39 @@ public class GoogleDriveNativePlugin extends Plugin {
 		} catch (ApiException exception) {
 			clearPendingAuthorizationResult();
 			if (savedCall != null) {
-				savedCall.reject("Unable to finish Google authorization.", exception);
+				savedCall.reject(describeApiException("Unable to finish Google authorization.", exception), exception);
 			}
 		} finally {
 			releasePendingAuthorizationCall();
 		}
+	}
+
+	private String describeApiException(String prefix, ApiException exception) {
+		int statusCode = exception.getStatusCode();
+		String statusName = CommonStatusCodes.getStatusCodeString(statusCode);
+		String statusMessage = exception.getStatusMessage();
+
+		if (statusCode == CommonStatusCodes.CANCELED) {
+			return "Google authorization was cancelled.";
+		}
+
+		if (statusCode == CommonStatusCodes.DEVELOPER_ERROR) {
+			return prefix + " (status 10: DEVELOPER_ERROR). This APK's Android OAuth client or signing certificate does not match Google Cloud configuration. Add or update the Android OAuth client for package " + getContext().getPackageName() + " with the SHA-1/SHA-256 of the key used to sign this APK.";
+		}
+
+		if (statusCode == CommonStatusCodes.NETWORK_ERROR) {
+			return prefix + " (status 7: NETWORK_ERROR). Check the device connection and Google Play services, then try again.";
+		}
+
+		if (statusCode == CommonStatusCodes.SIGN_IN_REQUIRED) {
+			return prefix + " (status 4: SIGN_IN_REQUIRED). Choose a Google account and try again.";
+		}
+
+		if (statusMessage != null && !statusMessage.isEmpty() && !statusMessage.equals(statusName)) {
+			return prefix + " (status " + statusCode + ": " + statusName + ", " + statusMessage + ").";
+		}
+
+		return prefix + " (status " + statusCode + ": " + statusName + ").";
 	}
 
 	private void releasePendingAuthorizationCall() {

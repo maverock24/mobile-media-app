@@ -53,6 +53,29 @@ jobs:
 
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/media-hub-upload.keystore"
 
+      - name: Verify Android signing keystore fingerprint
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/media-hub-upload.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          EXPECTED_KEY_SHA1: '1C:29:3D:F4:67:50:70:BC:79:72:C3:35:56:71:00:0D:09:03:67:82'
+        run: |
+          actual_sha1=$(keytool -list -v \
+            -keystore "$ANDROID_KEYSTORE_PATH" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_KEY_ALIAS" \
+            | awk -F': ' '/SHA1:/{print $2; exit}')
+
+          normalized_actual=$(printf '%s' "$actual_sha1" | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          normalized_expected=$(printf '%s' "$EXPECTED_KEY_SHA1" | tr -d ':' | tr '[:lower:]' '[:upper:]')
+
+          if [[ "$normalized_actual" != "$normalized_expected" ]]; then
+            echo "Release keystore SHA-1 does not match the Google Cloud Android OAuth entry."
+            echo "Expected: $EXPECTED_KEY_SHA1"
+            echo "Actual:   $actual_sha1"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
