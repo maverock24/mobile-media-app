@@ -164,9 +164,7 @@ export async function requestGoogleDriveAccessToken(options?: {
 	scope?: string;
 }): Promise<GoogleDriveTokenResponse> {
 	const scope = options?.scope?.trim() || GOOGLE_DRIVE_AUTH_SCOPE;
-	const shouldUseNativeAndroidAuth = isNativeGoogleDriveAuthAvailable() && options?.prompt !== 'consent';
-
-	if (shouldUseNativeAndroidAuth) {
+	if (isNativeGoogleDriveAuthAvailable()) {
 		const response = await requestNativeGoogleDriveAccessToken({
 			interactive: options?.prompt !== 'none',
 			scopes: scope.split(/\s+/).filter(Boolean)
