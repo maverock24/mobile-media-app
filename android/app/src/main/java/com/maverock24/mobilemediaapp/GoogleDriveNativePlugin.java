@@ -112,6 +112,7 @@ public class GoogleDriveNativePlugin extends Plugin {
 		PluginCall savedCall = pendingAuthorizationCallId == null
 			? null
 			: bridge.getSavedCall(pendingAuthorizationCallId);
+		boolean relaunchingAuthorization = false;
 
 		try {
 			if (activityResult.getResultCode() != Activity.RESULT_OK || activityResult.getData() == null) {
@@ -130,6 +131,7 @@ public class GoogleDriveNativePlugin extends Plugin {
 					return;
 				}
 
+				relaunchingAuthorization = true;
 				launchAuthorizationResolution(savedCall, result, true);
 				return;
 			}
@@ -147,7 +149,9 @@ public class GoogleDriveNativePlugin extends Plugin {
 				savedCall.reject(describeApiException("Unable to finish Google authorization.", exception), exception);
 			}
 		} finally {
-			releasePendingAuthorizationCall();
+			if (!relaunchingAuthorization) {
+				releasePendingAuthorizationCall();
+			}
 		}
 	}
 
