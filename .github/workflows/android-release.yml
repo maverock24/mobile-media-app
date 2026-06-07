@@ -58,7 +58,7 @@ jobs:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/media-hub-upload.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          EXPECTED_KEY_SHA1: '1C:29:3D:F4:67:50:70:BC:79:72:C3:35:56:71:00:0D:09:03:67:82'
+          EXPECTED_KEY_SHA1: 'FB:F5:DD:52:5A:45:F1:AF:C8:3C:1F:67:EE:00:D6:5F:23:B8:16:A3'
         run: |
           actual_sha1=$(keytool -list -v \
             -keystore "$ANDROID_KEYSTORE_PATH" \
