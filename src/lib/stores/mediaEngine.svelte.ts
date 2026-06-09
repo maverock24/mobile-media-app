@@ -30,6 +30,8 @@ export function claimAudio(id: AudioSourceId): void {
 	for (const other of Object.keys(_stopFns) as AudioSourceId[]) {
 		if (other !== id) _stopFns[other]?.();
 	}
+	// Stop any active live stream unless this is a radio claim
+	if (id !== 'radio') stopStreamAudio();
 }
 
 export interface NowPlayingState {
@@ -72,6 +74,16 @@ export const mediaEngine = $state<NowPlayingState & {
 	clear(): void;
 	/** Metadata-only update — sets now-playing info without starting audio playback. */
 	setNowPlaying(item: MediaItem, source: MediaSource): void;
+
+	// ─── Live stream methods (radio) ───
+	_streamError: ((err: MediaError | null) => void) | null;
+	_streamWaiting: (() => void) | null;
+	_streamPlaying: (() => void) | null;
+	playStream(url: string, item: MediaItem): void;
+	pauseStream(): void;
+	resumeStream(): void;
+	stopStream(): void;
+	setStreamCallbacks(error: (err: MediaError | null) => void, waiting: () => void, playing: () => void): void;
 
 	// --- Callbacks for views to override behavior ---
 	_onPlay: (() => void) | null;
@@ -258,6 +270,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	clear() {
 		const slots = getAudioSlots();
 		slots.forEach(s => { s.pause(); s.src = ''; });
+		stopStreamAudio();
 		this.item = null;
 		this.isPlaying = false;
 		this.currentTime = 0;
@@ -287,7 +300,89 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.source = source;
 		this.currentTime = 0;
 		this.duration = item.duration ?? 0;
-	}
+	},
+
+	// ─── Live stream playback (radio) ────────────────────────────────────
+	_streamError: null as ((err: MediaError | null) => void) | null,
+	_streamWaiting: null as (() => void) | null,
+	_streamPlaying: null as (() => void) | null,
+
+	/** Begin playing a live stream URL through the shared audio pipeline. */
+	playStream(url: string, item: MediaItem) {
+		claimAudio('radio');
+		stopStreamAudio();
+		_streamAudio = new Audio();
+		_streamAudio.preload = 'none';
+
+		_streamAudio.addEventListener('play', () => { this.setPlaying(true); this._streamPlaying?.(); });
+		_streamAudio.addEventListener('pause', () => { this.setPlaying(false); });
+		_streamAudio.addEventListener('waiting', () => { this._streamWaiting?.(); });
+		_streamAudio.addEventListener('playing', () => { this._streamPlaying?.(); });
+		_streamAudio.addEventListener('error', () => {
+			this.setPlaying(false);
+			this._streamError?.(_streamAudio?.error ?? null);
+		});
+
+		this.item = item;
+		this.source = 'radio';
+		this.duration = 0;
+
+		// Route through Web Audio filters if available, otherwise init them
+		if (_audioCtx && _filters.length > 0) {
+			try {
+				const src = _audioCtx.createMediaElementSource(_streamAudio);
+				src.connect(_filters[0]);
+			} catch { /* filter routing unavailable — stream plays direct */ }
+		} else if (!_audioCtx) {
+			// Init context lazily (filters get created when slots exist too)
+			try {
+				_audioCtx = new AudioContext();
+			} catch { /* AudioContext unavailable */ }
+		}
+
+		_streamAudio.src = url;
+		_streamAudio.play().catch((err) => {
+			if (err?.name !== 'AbortError') {
+				this.setPlaying(false);
+				addToast({ message: 'Stream unavailable. Try another station.', type: 'error', autoDismissMs: 4000 });
+			}
+		});
+	},
+
+	/** Pause the live stream without tearing down the audio element. */
+	pauseStream() {
+		if (_streamAudio) {
+			_streamAudio.pause();
+			this.setPlaying(false);
+		}
+	},
+
+	/** Resume the live stream if paused. */
+	resumeStream() {
+		if (_streamAudio && this.source === 'radio') {
+			if (_audioCtx?.state === 'suspended') void _audioCtx.resume();
+			_streamAudio.play().catch(() => {});
+			this.setPlaying(true);
+		}
+	},
+
+	/** Stop the live stream and tear down its audio element. */
+	stopStream() {
+		stopStreamAudio();
+		if (this.source === 'radio') {
+			this.clear();
+		}
+	},
+
+	setStreamCallbacks(
+		error: (err: MediaError | null) => void,
+		waiting: () => void,
+		playing: () => void
+	) {
+		this._streamError = error;
+		this._streamWaiting = waiting;
+		this._streamPlaying = playing;
+	},
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -310,6 +405,16 @@ let _audioSlots: [HTMLAudioElement, HTMLAudioElement] | null = null;
 let _activeSlot = 0;
 let _audioCtx: AudioContext | null = null;
 let _filters: BiquadFilterNode[] = [];
+let _streamAudio: HTMLAudioElement | null = null;
+
+function stopStreamAudio() {
+	if (_streamAudio) {
+		_streamAudio.pause();
+		_streamAudio.src = '';
+		_streamAudio.load();
+		_streamAudio = null;
+	}
+}
 
 const EQ_FREQS = [60, 170, 350, 1000, 3500, 10000];
 

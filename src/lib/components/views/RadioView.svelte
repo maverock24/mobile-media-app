@@ -13,7 +13,6 @@
 	let currentStation = $state<RadioStation | null>(null);
 	let isPlaying      = $state(false);
 	let isBuffering    = $state(false);
-	let audioEl: HTMLAudioElement;
 
 	// ── Search state ─────────────────────────────────────────────
 	let searchQuery   = $state('');
@@ -33,73 +32,43 @@
 	// ── Register stop-callback with media engine ─────────────────
 	$effect(() => {
 		registerAudioSource('radio', () => {
-			if (audioEl && isPlaying) audioEl.pause();
+			mediaEngine.stopStream();
+			isPlaying = false;
+			isBuffering = false;
 		});
 	});
 
-	function claimRadioControls() {
-		if (typeof mediaEngine.setPlaybackHandlers === 'function') {
-			mediaEngine.setPlaybackHandlers(
-				() => { resumePlayback(); },
-				() => { pausePlayback(); },
-				null
-			);
-		}
-
-		if (typeof mediaEngine.setSkipHandlers === 'function') {
-			mediaEngine.setSkipHandlers(null, null);
-		}
-	}
-
-	// ── Audio element event wiring ───────────────────────────────
+	// ── Wire stream callbacks to local state ─────────────────────
 	$effect(() => {
-		if (!audioEl) return;
-		const onPlay    = () => { isPlaying = true;  isBuffering = false; mediaEngine.setPlaying(true);  };
-		const onPause   = () => { isPlaying = false; mediaEngine.setPlaying(false); };
-		const onWaiting = () => { isBuffering = true; };
-		const onPlaying = () => { isBuffering = false; };
-		const onError   = () => {
-			isBuffering = false;
-			isPlaying   = false;
-			const err = audioEl.error;
-			console.error('[Radio] audio error:', err?.code, err?.message);
-			// MediaError code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED (includes mixed content / codec unsupported)
-			addToast({ message: 'Stream unavailable. Try another station.', type: 'error', autoDismissMs: 4000 });
-		};
+		mediaEngine.setStreamCallbacks(
+			(err) => {
+				isBuffering = false;
+				isPlaying = false;
+				if (err && err.code !== MediaError.MEDIA_ERR_ABORTED) {
+					addToast({ message: 'Stream unavailable. Try another station.', type: 'error', autoDismissMs: 4000 });
+				}
+			},
+			() => { isBuffering = true; },
+			() => { isBuffering = false; isPlaying = true; }
+		);
+	});
 
-		audioEl.addEventListener('play',    onPlay);
-		audioEl.addEventListener('pause',   onPause);
-		audioEl.addEventListener('waiting', onWaiting);
-		audioEl.addEventListener('playing', onPlaying);
-		audioEl.addEventListener('error',   onError);
-		return () => {
-			audioEl?.removeEventListener('play',    onPlay);
-			audioEl?.removeEventListener('pause',   onPause);
-			audioEl?.removeEventListener('waiting', onWaiting);
-			audioEl?.removeEventListener('playing', onPlaying);
-			audioEl?.removeEventListener('error',   onError);
-		};
+	// ── Sync isPlaying from mediaEngine when radio is the active source ──
+	$effect(() => {
+		if (currentStation && mediaEngine.source === 'radio') {
+			isPlaying = mediaEngine.isPlaying;
+		}
 	});
 
 	// ── Stop on unmount ──────────────────────────────────────────
-	$effect(() => { return () => { audioEl?.pause(); }; });
+	$effect(() => { return () => { mediaEngine.stopStream(); }; });
 
 	// ── Playback controls ────────────────────────────────────────
 	function playStation(station: RadioStation) {
 		void triggerPlaybackHaptic(true);
-		claimAudio('radio');
 		currentStation = station;
-		// Live streams don't use src attribute directly — set and load
-		audioEl.src = station.url_resolved;
 		isBuffering = true;
-		audioEl.play().catch((err) => {
-			isBuffering = false;
-			if (err?.name !== 'AbortError') {
-				console.error('[Radio] play() failed:', err);
-				addToast({ message: 'Stream unavailable. Try another station.', type: 'error', autoDismissMs: 4000 });
-			}
-		});
-		mediaEngine.setNowPlaying({
+		mediaEngine.playStream(station.url_resolved, {
 			id:         station.stationuuid,
 			source:     'radio',
 			title:      station.name,
@@ -107,19 +76,16 @@
 				.filter(Boolean).join(' · '),
 			audioUrl:   station.url_resolved,
 			artworkUrl: station.favicon || undefined,
-		}, 'radio');
-		claimRadioControls();
+		});
 	}
 
 	function stopPlayback() {
-		audioEl?.pause();
-		audioEl.src = '';
+		mediaEngine.stopStream();
 		currentStation = null;
-		mediaEngine.clear();
 	}
 
 	function togglePlay() {
-		if (isPlaying) {
+		if (mediaEngine.isPlaying) {
 			pausePlayback();
 		} else {
 			resumePlayback();
@@ -127,20 +93,17 @@
 	}
 
 	function pausePlayback() {
-		if (!audioEl || !currentStation || !isPlaying) return;
+		if (!currentStation || !mediaEngine.isPlaying) return;
 		void triggerPlaybackHaptic(false);
-		audioEl.pause();
+		mediaEngine.pauseStream();
 	}
 
 	function resumePlayback() {
-		if (!audioEl || !currentStation || isPlaying) return;
+		if (!currentStation || mediaEngine.isPlaying) return;
 		void triggerPlaybackHaptic(true);
 		claimAudio('radio');
 		isBuffering = true;
-		audioEl.play().catch((err) => {
-			isBuffering = false;
-			console.error('[Radio] resumePlayback() failed:', err);
-		});
+		mediaEngine.resumeStream();
 	}
 
 	// ── Search (radio-browser.info via hosted proxy on Netlify/native) ─────
@@ -234,8 +197,6 @@
 	let activeTab = $state<'favorites' | 'search'>('favorites');
 
 	// ── Featured / well-known stations (HTTPS streams) ──────────
-	// Shown in the search tab before the user has searched.
-	// Stream URLs have been verified to use HTTPS so they work in the WebView.
 	const FEATURED_STATIONS: RadioStation[] = [
 		{ stationuuid: 'featured-bbc-radio4',         name: 'BBC Radio 4',         url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_radio_fourfm',          favicon: '', country: 'UK',  tags: 'news,speech,drama,bbc',       codec: 'MP3', bitrate: 128, votes: 0 },
 		{ stationuuid: 'featured-bbc-radio4-extra',   name: 'BBC Radio 4 Extra',   url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_radio_four_extra',      favicon: '', country: 'UK',  tags: 'comedy,drama,bbc',             codec: 'MP3', bitrate: 128, votes: 0 },
@@ -247,9 +208,6 @@
 		{ stationuuid: 'featured-bbc-radio5',         name: 'BBC Radio 5 Live',    url_resolved: 'https://stream.live.vc.bbcmedia.co.uk/bbc_radio_five_live',       favicon: '', country: 'UK',  tags: 'sport,news,bbc',               codec: 'MP3', bitrate: 128, votes: 0 },
 	];
 </script>
-
-<!-- Hidden audio element -->
-<audio bind:this={audioEl} preload="none"></audio>
 
 <div class="flex flex-col h-full bg-background/85">
 

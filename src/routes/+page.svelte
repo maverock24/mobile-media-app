@@ -162,7 +162,7 @@
 	}
 </script>
 
-<div class="drive-mode-shell flex flex-col h-dvh max-w-md mx-auto overflow-hidden relative" style="z-index:1;">
+<div class="drive-mode-shell flex flex-col h-dvh w-full min-w-0 overflow-hidden relative sm:mx-auto sm:h-[calc(100dvh-2rem)] sm:max-w-3xl sm:rounded-3xl sm:border sm:border-border sm:bg-background/90 sm:shadow-2xl sm:backdrop-blur-xl lg:max-w-5xl" style="z-index:1;">
 	{#if appSettings.mediaControlsPosition === 'top'}
 		<MiniPlayer activeTab={activeTab} position="top" onNavigateTo={navigateToTab} />
 	{/if}
@@ -212,23 +212,23 @@
 
 	<!-- Bottom Tab Bar -->
 	<div class="border-t bg-background/95 backdrop-blur-sm safe-area-inset-bottom" role="tablist">
-		<div class="flex">
+		<div class="flex flex-wrap sm:flex-nowrap">
 			{#each tabs as tab}
 				{@const Icon = tab.icon}
 				<button
 					role="tab"
 					aria-selected="{activeTab === tab.id}"
 					aria-label="{tab.label}"
-					class="nav-tab-button flex-1 flex flex-col items-center justify-center py-3 gap-1.5 transition-colors {activeTab === tab.id ? 'nav-tab-button-active text-primary' : 'text-muted-foreground hover:text-foreground'}"
+					class="nav-tab-button flex-1 basis-1/3 sm:basis-0 flex flex-col items-center justify-center py-3 gap-1.5 transition-colors {activeTab === tab.id ? 'nav-tab-button-active text-primary' : 'text-muted-foreground hover:text-foreground'}"
 					onclick={() => setActiveTab(tab.id)}
 				>
 					<div class="relative">
-						<Icon class="w-7 h-7" />
+						<Icon class="w-6 h-6 sm:w-7 sm:h-7" />
 						{#if activeTab === tab.id}
 							<div class="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary"></div>
 						{/if}
 					</div>
-					<span class="text-[11px] font-semibold tracking-[0.02em] leading-none">{tab.label}</span>
+					<span class="text-[10px] sm:text-[11px] font-semibold tracking-[0.02em] leading-none">{tab.label}</span>
 				</button>
 			{/each}
 		</div>

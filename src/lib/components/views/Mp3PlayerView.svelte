@@ -5,6 +5,22 @@
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
 	import Input from '$lib/components/ui/Input.svelte';
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
+	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
+	import {
+		type StoredAudioFile,
+		type BrowseEntry,
+		type CachedLibrary,
+		type CachedLibraryFile,
+		type CachedWebLibraryFile,
+		type CachedNativeLibraryFile,
+		EQ_FREQS,
+		EQ_LABELS,
+		EQ_PRESETS,
+		getStoredFileKey,
+		getTrackKey,
+		mergeStoredFiles,
+		fmtGain,
+	} from '$lib/models/music';
 	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
@@ -46,38 +62,9 @@
 
 	type FavoriteTrack = (typeof musicSettings.favoriteTracks)[number];
 
-	type StoredAudioFile =
-		| { source: 'web'; name: string; relativePath: string; file: File }
-		| { source: 'native'; name: string; relativePath: string; path: string; mimeType?: string; modifiedAt?: number }
-		| {
-			source: 'drive';
-			name: string;
-			relativePath: string;
-			fileId: string;
-			mimeType?: string;
-			modifiedAt?: number;
-			sizeBytes?: number;
-			webViewLink?: string;
-		};
-
-	type BrowseEntry =
-		| { kind: 'folder'; name: string; count: number }
-		| { kind: 'file'; name: string; file: StoredAudioFile };
-
 	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
 	const googleDriveConfigured = isGoogleDriveConfigured();
 	const googleDriveClientId = getGoogleDriveClientId();
-	type CachedWebLibraryFile = { source: 'web'; name: string; relativePath: string; file: File };
-	type CachedNativeLibraryFile = {
-		source: 'native';
-		name: string;
-		relativePath: string;
-		path: string;
-		mimeType?: string;
-		modifiedAt?: number;
-	};
-	type CachedLibraryFile = CachedWebLibraryFile | CachedNativeLibraryFile;
-	type CachedLibrary = { folderName: string; files: CachedLibraryFile[]; savedAt: number; cacheKey?: string };
 
 	const LAST_LIBRARY_CACHE_KEY = 'last-library';
 	const BACKGROUND_LIBRARY_SCAN_BATCH_SIZE = 120;
@@ -87,25 +74,6 @@
 	const FOLDER_PLAY_PRIME_COUNT = 1;
 	const FOLDER_PLAY_QUEUE_FLUSH_SIZE = 400;
 	const BROWSE_LONG_PRESS_MS = 450;
-
-	function getStoredFileKey(source: StoredAudioFile): string {
-		if (source.source === 'drive') return `d:${source.fileId}`;
-		if (source.source === 'native') return `n:${source.relativePath}`;
-		return `w:${source.relativePath}`;
-	}
-
-	function mergeStoredFiles(existing: StoredAudioFile[], incoming: StoredAudioFile[]): StoredAudioFile[] {
-		if (incoming.length === 0) return existing;
-		const seen = new Set(existing.map((file) => getStoredFileKey(file)));
-		const merged = [...existing];
-		for (const file of incoming) {
-			const key = getStoredFileKey(file);
-			if (seen.has(key)) continue;
-			seen.add(key);
-			merged.push(file);
-		}
-		return merged;
-	}
 
 	function getDeviceLibraryCacheKey(options: { treeUri?: string | null; folderName?: string | null } = {}): string {
 		if (options.treeUri) return `device:${options.treeUri}`;
@@ -313,17 +281,6 @@
 			currentTime = 0;
 		}
 	}
-
-	// EQ constants
-	const EQ_FREQS  = [60, 170, 350, 1000, 3500, 10000];
-	const EQ_LABELS = ['60', '170', '350', '1K', '3.5K', '10K'];
-	const EQ_PRESETS: Record<string, number[]> = {
-		flat:      [ 0,  0,  0,  0,  0,  0],
-		bass:      [ 8,  5,  2,  0, -1, -1],
-		treble:    [-1, -1,  0,  2,  5,  8],
-		vocal:     [-2,  0,  4,  5,  3, -1],
-		classical: [ 4,  3, -1,  0,  2,  4],
-	};
 
 	// ── ephemeral playback state ──
 	let tracks      = $state<Track[]>([]);
@@ -665,7 +622,6 @@
 		musicSettings.eqBands = next;
 		musicSettings.equalizerPreset = 'custom';
 	}
-	function fmtGain(g: number): string { return (g > 0 ? '+' : '') + g; }
 
 	// ─────────────────────────────────────────────────────────────
 	// General helpers
@@ -1101,9 +1057,6 @@
 	}
 
 	// ── Per-track resume helpers ──────────────────────────────────
-	function getTrackKey(source: StoredAudioFile): string {
-		return getStoredFileKey(source);
-	}
 
 	/** Sync both lastTrackIndex and lastTrackKey together */
 	function setCurrentTrack(index: number) {
@@ -3311,33 +3264,13 @@
 
 	<!-- EQ panel -->
 	{#if showPanel === 'eq'}
-	<div class="border-t bg-card/95 px-4 pt-3 pb-3 shrink-0">
-		<div class="flex items-center justify-between mb-2">
-			<p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Equalizer</p>
-			<button class="text-xs text-muted-foreground hover:text-foreground px-2 py-0.5 rounded hover:bg-accent transition-colors"
-				onclick={() => applyEqPreset('flat')}>Reset</button>
-		</div>
-		<div class="flex gap-1.5 flex-wrap mb-3">
-			{#each Object.keys(EQ_PRESETS) as preset}
-				<button
-					class="px-2.5 py-1 rounded-full text-xs capitalize border transition-colors {musicSettings.equalizerPreset === preset ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-accent'}"
-					onclick={() => applyEqPreset(preset)}
-				>{preset}</button>
-			{/each}
-		</div>
-		<div class="space-y-2">
-			{#each EQ_FREQS as _freq, i}
-				<div class="flex items-center gap-2">
-					<span class="text-[10px] text-muted-foreground w-9 text-right shrink-0 tabular-nums">{EQ_LABELS[i]}</span>
-					<input type="range" min="-12" max="12" step="1"
-						value={musicSettings.eqBands[i]}
-						oninput={(e) => setEqBand(i, +(e.target as HTMLInputElement).value)}
-						class="flex-1 h-1.5 rounded-full appearance-none cursor-pointer bg-secondary accent-primary" />
-					<span class="text-[10px] text-muted-foreground w-9 text-right shrink-0 tabular-nums">{fmtGain(musicSettings.eqBands[i])}dB</span>
-				</div>
-			{/each}
-		</div>
-	</div>
+		<MusicEqPanel
+			eqBands={musicSettings.eqBands}
+			equalizerPreset={musicSettings.equalizerPreset}
+			eqAvailable={eqAvailable}
+			onApplyPreset={applyEqPreset}
+			onSetBand={setEqBand}
+		/>
 	{/if}
 
 	<!-- Bottom toolbar -->

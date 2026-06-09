@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
-	import { mediaHubSync } from '$lib/stores/mediaHubSync.svelte';
+	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { Cloud, Download, LogIn, LogOut, RefreshCw, Upload } from 'lucide-svelte';
 
@@ -18,12 +18,14 @@
 		await googleDriveSession.signIn();
 	}
 
-	async function handlePushToMediaHub() {
-		await mediaHubSync.push();
+	async function handlePushToDrive() {
+		await driveConfigSync.connect(false);
+		await driveConfigSync.save();
 	}
 
-	async function handleFetchFromMediaHub() {
-		await mediaHubSync.fetchAndApply();
+	async function handleFetchFromDrive() {
+		await driveConfigSync.connect(false);
+		await driveConfigSync.downloadAndApply();
 	}
 </script>
 
@@ -55,8 +57,8 @@
 			<p class="text-sm text-destructive">{googleDriveSession.error}</p>
 		{/if}
 
-		{#if mediaHubSync.error}
-			<p class="text-sm text-destructive">{mediaHubSync.error}</p>
+		{#if driveConfigSync.errorMessage}
+			<p class="text-sm text-destructive">{driveConfigSync.errorMessage}</p>
 		{/if}
 
 		{#if !googleDriveSession.configured}
@@ -65,13 +67,13 @@
 
 		<div class="flex gap-2">
 			{#if googleDriveSession.user}
-				<Button variant="outline" onclick={handlePushToMediaHub} class="gap-2" disabled={mediaHubSync.state === 'syncing'}>
+				<Button variant="outline" onclick={handlePushToDrive} class="gap-2" disabled={driveConfigSync.status === 'syncing'}>
 					<Upload class="w-4 h-4" />
-					Push to MediaHub
+					Push to Drive
 				</Button>
-				<Button variant="outline" onclick={handleFetchFromMediaHub} class="gap-2" disabled={mediaHubSync.state === 'syncing'}>
+				<Button variant="outline" onclick={handleFetchFromDrive} class="gap-2" disabled={driveConfigSync.status === 'syncing'}>
 					<Download class="w-4 h-4" />
-					Fetch from MediaHub
+					Fetch from Drive
 				</Button>
 				<Button variant="outline" onclick={handleRefreshConnection} class="gap-2" disabled={googleDriveSession.isAuthenticating}>
 					{#if googleDriveSession.isAuthenticating}
@@ -101,13 +103,13 @@
 
 		{#if googleDriveSession.user}
 			<p class="text-xs text-muted-foreground">
-				MediaHub stores podcasts, weather locations, radio favorites, and favorite MP3 references in a visible Google Drive folder.
-				Fetching restores settings only and does not download MP3 files.
+				Sync your settings (podcasts, radio favorites, weather locations, and MP3 preferences) to Google Drive.
+				Fetch restores settings only and does not download MP3 files.
 			</p>
 		{/if}
 
-		{#if mediaHubSync.lastSyncedAt}
-			<p class="text-xs text-muted-foreground">Last MediaHub sync: {mediaHubSync.lastSyncedAt.toLocaleString()}</p>
+		{#if driveConfigSync.lastSyncedAt}
+			<p class="text-xs text-muted-foreground">Last Drive sync: {driveConfigSync.lastSyncedAt.toLocaleString()}</p>
 		{/if}
 	</Card>
 </div>

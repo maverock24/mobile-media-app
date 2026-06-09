@@ -25,7 +25,9 @@ import {
 	podcastData,
 	appSettings,
 	weatherSettings,
+	radioData,
 } from '$lib/stores/settings.svelte';
+import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 import { normalizeListTileTone } from '$lib/utils/listTileTone';
 
 export type SyncStatus = 'idle' | 'syncing' | 'saved' | 'error';
@@ -58,9 +60,17 @@ class DriveConfigSync {
 
 	// ─── Auth ──────────────────────────────────────────────────────────────────
 
-	/** Request an appdata-scoped token (may prompt the user). */
+	/** Request an appdata-scoped token (may prompt the user).
+	 * Prefers reusing the main Google Drive session token if available. */
 	async connect(interactive = true): Promise<boolean> {
 		try {
+			// Reuse main session token if already available
+			const sessionToken = await googleDriveSession.ensureAccessToken(false);
+			if (sessionToken) {
+				this._storeToken(sessionToken, 3600);
+				return true;
+			}
+
 			const response = await requestGoogleDriveAccessToken({
 				prompt: interactive ? '' : 'none',
 				scope: DRIVE_APPDATA_SCOPE,
@@ -76,6 +86,13 @@ class DriveConfigSync {
 	/** Silently refresh the token (no user prompt). Returns true if successful. */
 	async silentRefresh(): Promise<boolean> {
 		try {
+			// Reuse main session token if available
+			const sessionToken = await googleDriveSession.ensureAccessToken(false);
+			if (sessionToken) {
+				this._storeToken(sessionToken, 3600);
+				return true;
+			}
+
 			const response = await requestGoogleDriveAccessToken({
 				prompt: 'none',
 				scope: DRIVE_APPDATA_SCOPE,
@@ -201,6 +218,9 @@ class DriveConfigSync {
 				if (ws.showFeelsLike  !== undefined) weatherSettings.showFeelsLike  = ws.showFeelsLike;
 			}
 
+			// Apply radio favorites
+			if (config.radioFavorites !== undefined) radioData.favorites = config.radioFavorites;
+
 			localSavedAt = config.savedAt;
 			this.lastSyncedAt = new Date();
 			this.status = 'saved';
@@ -284,6 +304,8 @@ class DriveConfigSync {
 					showFeelsLike:   weatherSettings.showFeelsLike,
 				},
 			);
+			// Inject radio favorites into the config
+			config.radioFavorites = [...radioData.favorites];
 			// Override savedAt with the timestamp we computed before the upload
 			config.savedAt = now;
 			await uploadDriveConfig(this.accessToken, config);

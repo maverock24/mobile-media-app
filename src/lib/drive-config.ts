@@ -12,7 +12,7 @@
  *   v2 — added: mp3TrackPositions, appSettings, weatherSettings
  */
 
-import type { PersistedPodcast, SavedCity } from '$lib/stores/settings.svelte';
+import type { PersistedPodcast, RadioStation, SavedCity } from '$lib/stores/settings.svelte';
 import type { ListTileTone } from '$lib/utils/listTileTone';
 
 export const DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
@@ -106,6 +106,8 @@ export interface DriveConfig {
 	mp3TrackPositions?: Record<string, number>;
 	appSettings?: DriveConfigAppSettings;
 	weatherSettings?: DriveConfigWeatherSettings;
+	// v3 additions
+	radioFavorites?: RadioStation[];
 }
 
 // ─── Schema validation ────────────────────────────────────────────────────────
@@ -268,6 +270,7 @@ export function buildDriveConfig(
 	mp3TrackPositions: Record<string, number>,
 	appSettings: DriveConfigAppSettings,
 	weatherSettings: DriveConfigWeatherSettings,
+	radioFavorites?: RadioStation[],
 ): DriveConfig {
 	return {
 		version: CONFIG_VERSION,
@@ -281,5 +284,6 @@ export function buildDriveConfig(
 		mp3TrackPositions,
 		appSettings,
 		weatherSettings,
+		radioFavorites,
 	};
 }
