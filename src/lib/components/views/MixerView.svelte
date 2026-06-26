@@ -30,20 +30,55 @@
 	let revokeA: (() => void) | null = null;
 	let revokeB: (() => void) | null = null;
 
-	// ── Library browser (synced from Music tab via mixerShared) ──
+	// ── Library browser (independent navigation, data from Music tab's allFiles) ──
 	type PickerMode = 'library' | 'favorites';
 	let mode = $state<PickerMode>('library');
 
-	const path = $derived(mixerShared.browsePath);
-	const browseLoading = $derived(mixerShared.browseLoading);
-	const entries = $derived(mixerShared.browseEntries);
-	// Also surface ALL files at the root level (even before the user navigates into a subfolder).
-	const allFiles = $derived(mixerShared.allFiles);
+	// Independent folder path for the mixer — computed from allFiles, not synced from Music tab.
+	let browsePath = $state<string[]>([]);
 
+	const allFiles = $derived(mixerShared.allFiles);
+	const browseLoading = $derived(mixerShared.browseLoading);
+
+	function getRelativePath(file: StoredAudioFile): string {
+		return file.relativePath && file.relativePath.length > 0 ? file.relativePath : file.name;
+	}
+
+	function buildBrowseEntries(files: StoredAudioFile[], path: string[]): BrowseEntry[] {
+		const prefix = path.length > 0 ? path.join('/') + '/' : '';
+		const folderCounts = new Map<string, number>();
+		const directFiles: BrowseEntry[] = [];
+		for (const file of files) {
+			const normalized = getRelativePath(file);
+			if (!normalized.startsWith(prefix)) continue;
+			const remaining = normalized.slice(prefix.length);
+			if (!remaining) continue;
+			const slash = remaining.indexOf('/');
+			if (slash === -1) {
+				directFiles.push({ kind: 'file', name: remaining, file });
+				continue;
+			}
+			const folderName = remaining.slice(0, slash);
+			folderCounts.set(folderName, (folderCounts.get(folderName) ?? 0) + 1);
+		}
+		const folders: BrowseEntry[] = Array.from(folderCounts.entries(), ([name, count]) => ({
+			kind: 'folder', name, count,
+		}));
+		folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+		directFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+		return [...folders, ...directFiles];
+	}
+
+	const entries = $derived(buildBrowseEntries(allFiles, browsePath));
 	const folders = $derived(entries.filter((e): e is Extract<BrowseEntry, { kind: 'folder' }> => e.kind === 'folder'));
 	const files = $derived(entries.filter((e): e is Extract<BrowseEntry, { kind: 'file' }> => e.kind === 'file'));
-	/** Flat list of MP3 files — same as the Music tab's file list, for the root-level picker. */
+
+	/** Flat list of all scanned MP3 files — for the root-level picker when no folders exist. */
 	const rootFiles = $derived(allFiles);
+
+	function openFolder(name: string) { browsePath = [...browsePath, name]; }
+	function goUp() { if (browsePath.length > 0) browsePath = browsePath.slice(0, -1); }
+	function goToCrumb(index: number) { browsePath = browsePath.slice(0, index); }
 
 	const resolvableFavorites = $derived(
 		musicSettings.favoriteTracks.filter((f) => (f.source === 'native' && f.path) || (f.source === 'drive' && f.fileId))
@@ -291,12 +326,12 @@
 	<!-- Picker list -->
 	<div class="flex-1 overflow-y-auto min-h-0 px-3 pb-4">
 		{#if mode === 'library'}
-			<!-- Breadcrumb (read-only — navigation happens in the Music tab) -->
+			<!-- Breadcrumb -->
 			<div class="flex items-center gap-1 flex-wrap text-xs text-muted-foreground py-2">
-				<span>Music</span>
-				{#each path as crumb, i}
+				<button class="hover:text-foreground" onclick={() => goToCrumb(0)}>Music</button>
+				{#each browsePath as crumb, i}
 					<ChevronRight class="w-3 h-3" />
-					<span class="truncate max-w-[40vw]">{crumb}</span>
+					<button class="hover:text-foreground truncate max-w-[40vw]" onclick={() => goToCrumb(i + 1)}>{crumb}</button>
 				{/each}
 			</div>
 
@@ -306,13 +341,17 @@
 					Loading…
 				</div>
 			{:else}
-
+				{#if browsePath.length > 0}
+					<button class="w-full flex items-center gap-3 py-2.5 px-2 rounded-lg hover:bg-accent text-left" onclick={goUp}>
+						<ArrowLeft class="w-4 h-4 text-muted-foreground" /> <span class="text-sm">Up one level</span>
+					</button>
+				{/if}
 				{#each folders as folder}
-					<div class="flex items-center gap-3 py-2.5 px-2 rounded-lg text-muted-foreground text-left">
+					<button class="w-full flex items-center gap-3 py-2.5 px-2 rounded-lg hover:bg-accent text-left" onclick={() => openFolder(folder.name)}>
 						<Folder class="w-4.5 h-4.5 text-primary shrink-0" />
 						<span class="text-sm truncate flex-1 min-w-0">{folder.name}</span>
-						<span class="text-xs text-muted-foreground shrink-0">folder</span>
-					</div>
+						<span class="text-xs text-muted-foreground shrink-0">{folder.count} file{folder.count !== 1 ? 's' : ''}</span>
+					</button>
 				{/each}
 				{#each files as entry}
 					<div class="flex items-center gap-2 py-2 px-2 rounded-lg">
@@ -324,7 +363,7 @@
 					</div>
 				{/each}
 
-				<!-- Flat root-level file list: shown when no folders/files in browse entries, to avoid empty state -->
+				<!-- Flat root-level file list: shown when no folders/files computed, fallback to allFiles -->
 				{#if folders.length === 0 && files.length === 0}
 					{#if rootFiles.length > 0}
 						{#each rootFiles as file}
