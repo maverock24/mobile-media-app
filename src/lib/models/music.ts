@@ -149,6 +149,16 @@ export function formatTime(seconds: number): string {
 	return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/** Clock format with hours when needed: H:MM:SS or M:SS. */
+export function formatClock(seconds: number): string {
+	if (!isFinite(seconds) || seconds < 0) return '0:00';
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
+	const s = Math.floor(seconds % 60);
+	if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+	return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 export function sortFiles(files: StoredAudioFile[], sortOrder: string): StoredAudioFile[] {
 	return [...files].sort((a, b) => {
 		if (sortOrder === 'title')

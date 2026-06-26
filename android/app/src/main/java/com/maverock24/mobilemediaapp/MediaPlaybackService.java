@@ -5,9 +5,12 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.support.v4.media.MediaBrowserCompat;
 import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
@@ -26,12 +29,38 @@ import java.util.List;
 public class MediaPlaybackService extends MediaBrowserServiceCompat {
 	private static final String CHANNEL_ID = "media_playback";
 	private static final int NOTIFICATION_ID = 4242;
+	private static final String WAKELOCK_TAG = "mediaHub:audioPlayback";
 
 	private MediaSessionCompat mediaSession;
+	private AudioManager audioManager;
+	private PowerManager.WakeLock wakeLock;
+	private AudioFocusRequest focusRequest;
+
+	private final AudioManager.OnAudioFocusChangeListener focusListener = focusChange -> {
+		switch (focusChange) {
+			case AudioManager.AUDIOFOCUS_LOSS:
+				// Permanent loss — another app took audio focus
+				MediaControlsPlugin.dispatchAction("pause");
+				break;
+			case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+				// Temporary loss (notification, call) — pause
+				MediaControlsPlugin.dispatchAction("pause");
+				break;
+			case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+				// Short interruption — keep playing at lower volume
+				break;
+			case AudioManager.AUDIOFOCUS_GAIN:
+				// Regained focus — resume if was playing
+				MediaControlsPlugin.dispatchAction("play");
+				break;
+		}
+	};
 
 	@Override
 	public void onCreate() {
 		super.onCreate();
+
+		audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
 
 		mediaSession = new MediaSessionCompat(this, "MediaHubSession");
 		mediaSession.setFlags(
@@ -68,6 +97,7 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 			}
 		});
 
+		acquireWakeLock();
 		MediaControlsPlugin.setServiceInstance(this);
 		createNotificationChannel();
 	}
@@ -80,6 +110,8 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 
 	@Override
 	public void onDestroy() {
+		abandonAudioFocus();
+		releaseWakeLock();
 		mediaSession.release();
 		super.onDestroy();
 	}
@@ -94,6 +126,61 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 	public void onLoadChildren(@NonNull String parentId, @NonNull Result<List<MediaBrowserCompat.MediaItem>> result) {
 		// Return empty list (Android Auto requires non-null result to confirm connection)
 		result.sendResult(new ArrayList<>());
+	}
+
+	public void requestAudioFocus() {
+		if (audioManager == null) return;
+		try {
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+				AudioAttributes attrs = new AudioAttributes.Builder()
+					.setUsage(AudioAttributes.USAGE_MEDIA)
+					.setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+					.build();
+				focusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+					.setAudioAttributes(attrs)
+					.setOnAudioFocusChangeListener(focusListener)
+					.build();
+				audioManager.requestAudioFocus(focusRequest);
+			} else {
+				audioManager.requestAudioFocus(
+					focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+			}
+		} catch (Exception e) {
+			// Audio focus not critical for playback
+		}
+	}
+
+	public void abandonAudioFocus() {
+		if (audioManager == null) return;
+		try {
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && focusRequest != null) {
+				audioManager.abandonAudioFocusRequest(focusRequest);
+			} else {
+				audioManager.abandonAudioFocus(focusListener);
+			}
+		} catch (Exception e) {
+			// Audio focus not critical for playback
+		}
+	}
+
+	private void acquireWakeLock() {
+		PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+		if (pm != null) {
+			wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG);
+			wakeLock.setReferenceCounted(false);
+		}
+	}
+
+	public void holdWakeLock() {
+		if (wakeLock != null && !wakeLock.isHeld()) {
+			wakeLock.acquire();
+		}
+	}
+
+	public void releaseWakeLock() {
+		if (wakeLock != null && wakeLock.isHeld()) {
+			wakeLock.release();
+		}
 	}
 
 	private void createNotificationChannel() {

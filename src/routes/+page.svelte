@@ -5,7 +5,6 @@
 	import RadioView from '$lib/components/views/RadioView.svelte';
 	import WeatherView from '$lib/components/views/WeatherView.svelte';
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
-	import LoginView from '$lib/components/views/LoginView.svelte';
 	import MiniPlayer from '$lib/components/ui/MiniPlayer.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
 	import { initSleepTimer } from '$lib/stores/sleepTimer.svelte';
@@ -18,11 +17,10 @@
 		recordWindowErrorEvent,
 	} from '$lib/stores/runtimeDiagnostics.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
-	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
-	import { Music, Mic2, Radio, Cloud, Settings2, User } from 'lucide-svelte';
+	import { Music, Mic2, Radio, Cloud, Settings2 } from 'lucide-svelte';
 	import { checkForAndroidUpdate } from '$lib/utils/androidUpdate';
 
-	type Tab = 'music' | 'podcasts' | 'radio' | 'login' | 'weather' | 'settings';
+	type Tab = 'music' | 'podcasts' | 'radio' | 'weather' | 'settings';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
 	const RUNTIME_ERROR_NOTICE_KEY = 'runtime-error-notice-shown';
 	const DEFAULT_TAB: Tab = 'music';
@@ -43,7 +41,7 @@
 
 	function isTab(value: unknown): value is Tab {
 		return value === 'music' || value === 'podcasts' || value === 'radio'
-			|| value === 'login' || value === 'weather' || value === 'settings';
+			|| value === 'weather' || value === 'settings';
 	}
 
 	function readSavedTab(): Tab {
@@ -121,14 +119,10 @@
 			];
 		}
 
-		const isDriveConnected = Boolean(googleDriveSession.user)
-			|| googleDriveSession.hasValidToken();
-
 		return [
 			{ id: 'music',    label: 'Music',    icon: Music },
 			{ id: 'podcasts', label: 'Podcasts', icon: Mic2 },
 			{ id: 'radio',    label: 'Radio',    icon: Radio },
-			{ id: 'login',    label: isDriveConnected ? 'Drive' : 'Login', icon: User },
 			{ id: 'weather',  label: 'Weather',  icon: Cloud },
 			{ id: 'settings', label: 'Settings', icon: Settings2 }
 		];
@@ -187,11 +181,7 @@
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'radio'}>
 			<RadioView />
 		</div>
-		{#if activeTab === 'login'}
-			<div class="absolute inset-0 overflow-y-auto">
-				<LoginView />
-			</div>
-		{:else if activeTab === 'weather'}
+		{#if activeTab === 'weather'}
 			<div class="absolute inset-0 overflow-y-auto">
 				<WeatherView />
 			</div>
@@ -212,23 +202,23 @@
 
 	<!-- Bottom Tab Bar -->
 	<div class="border-t bg-background/95 backdrop-blur-sm safe-area-inset-bottom" role="tablist">
-		<div class="flex flex-wrap sm:flex-nowrap">
+		<div class="flex">
 			{#each tabs as tab}
 				{@const Icon = tab.icon}
 				<button
 					role="tab"
 					aria-selected="{activeTab === tab.id}"
 					aria-label="{tab.label}"
-					class="nav-tab-button flex-1 basis-1/3 sm:basis-0 flex flex-col items-center justify-center py-3 gap-1.5 transition-colors {activeTab === tab.id ? 'nav-tab-button-active text-primary' : 'text-muted-foreground hover:text-foreground'}"
+					class="nav-tab-button flex-1 flex flex-col items-center justify-center py-2 gap-1 transition-colors {activeTab === tab.id ? 'nav-tab-button-active text-primary' : 'text-muted-foreground hover:text-foreground'}"
 					onclick={() => setActiveTab(tab.id)}
 				>
 					<div class="relative">
-						<Icon class="w-6 h-6 sm:w-7 sm:h-7" />
+						<Icon class="w-6 h-6" />
 						{#if activeTab === tab.id}
-							<div class="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary"></div>
+							<div class="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary"></div>
 						{/if}
 					</div>
-					<span class="text-[10px] sm:text-[11px] font-semibold tracking-[0.02em] leading-none">{tab.label}</span>
+					<span class="text-xs font-semibold tracking-[0.02em] leading-none">{tab.label}</span>
 				</button>
 			{/each}
 		</div>

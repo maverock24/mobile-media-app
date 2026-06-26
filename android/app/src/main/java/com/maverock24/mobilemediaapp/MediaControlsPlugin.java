@@ -211,7 +211,21 @@ public class MediaControlsPlugin extends Plugin {
 		playbackService.getMediaSession().setPlaybackState(pState);
 		playbackService.getMediaSession().setActive(!title.isEmpty());
 
-		// 3. Update Foreground Notification
+		// 3. Audio Focus — request when playing, abandon when paused
+		if (isPlaying) {
+			playbackService.requestAudioFocus();
+		} else {
+			playbackService.abandonAudioFocus();
+		}
+
+		// 4. WakeLock — hold while playing
+		if (isPlaying) {
+			playbackService.holdWakeLock();
+		} else {
+			playbackService.releaseWakeLock();
+		}
+
+		// 5. Update Foreground Notification
 		playbackService.updateNotification(title, artist, album, isPlaying);
 	}
 

@@ -9,6 +9,7 @@
 		formatSleepTimerRemaining,
 	} from '$lib/stores/sleepTimer.svelte';
 	import { triggerToggleHaptic } from '$lib/native/haptics';
+	import { formatClock as formatTime } from '$lib/models/music';
 	import { Play, Pause, SkipBack, SkipForward, Moon, X } from 'lucide-svelte';
 
 	interface Props {
@@ -50,15 +51,6 @@
 	const sleepTimerLabel = $derived(
 		sleepTimer.isActive ? formatSleepTimerRemaining(sleepTimer.remainingMs) : 'Off'
 	);
-
-	function formatTime(seconds: number): string {
-		if (!seconds || seconds < 0) return '0:00';
-		const hours = Math.floor(seconds / 3600);
-		const minutes = Math.floor((seconds % 3600) / 60);
-		const secs = Math.floor(seconds % 60);
-		if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-		return `${minutes}:${String(secs).padStart(2, '0')}`;
-	}
 
 	function seekTo(time: number) {
 		const target = Math.max(0, Math.min(time, mediaEngine.duration || 0));

@@ -45,7 +45,7 @@
 				isBuffering = false;
 				isPlaying = false;
 				if (err && err.code !== MediaError.MEDIA_ERR_ABORTED) {
-					addToast({ message: 'Stream unavailable. Try another station.', type: 'error', autoDismissMs: 4000 });
+					// Stream error — silently handled (auto-retry in media engine)
 				}
 			},
 			() => { isBuffering = true; },
@@ -248,7 +248,7 @@
 					{#each radioData.favorites as station (station.stationuuid)}
 						<li class="list-row-surface flex items-center gap-3 px-4 py-3 transition-colors {currentStation?.stationuuid === station.stationuuid ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : ''}">
 							{#if station.favicon}
-								<img src={station.favicon} alt="" class="w-10 h-10 rounded-lg object-cover shrink-0" />
+								<img src={station.favicon} alt="" loading="lazy" decoding="async" width="40" height="40" class="w-10 h-10 rounded-lg object-cover shrink-0" />
 							{:else}
 								<div class="w-10 h-10 rounded-lg bg-muted flex items-center justify-center shrink-0">
 									<Radio class="w-5 h-5 text-muted-foreground" />
@@ -366,7 +366,7 @@
 						{#each searchResults as station (station.stationuuid)}
 							<li class="list-row-surface flex items-center gap-3 px-4 py-3 transition-colors {currentStation?.stationuuid === station.stationuuid ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : ''}">
 								{#if station.favicon}
-									<img src={station.favicon} alt="" class="w-10 h-10 rounded-lg object-cover shrink-0" onerror={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
+									<img src={station.favicon} alt="" loading="lazy" decoding="async" width="40" height="40" class="w-10 h-10 rounded-lg object-cover shrink-0" onerror={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
 								{:else}
 									<div class="w-10 h-10 rounded-lg bg-muted flex items-center justify-center shrink-0">
 										<Radio class="w-5 h-5 text-muted-foreground" />

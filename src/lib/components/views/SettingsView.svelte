@@ -6,6 +6,8 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { appSettings, musicSettings, podcastSettings, sleepTimerSettings, weatherSettings } from '$lib/stores/settings.svelte';
+	import { mediaEngine, updateGlobalEq, initGlobalAudioContext } from '$lib/stores/mediaEngine.svelte';
+	import { EQ_PRESETS } from '$lib/models/music';
 	import { LIST_TILE_TONE_OPTIONS } from '$lib/utils/listTileTone';
 	import {
 		clearStoredRuntimeError,
@@ -570,7 +572,17 @@
 							{#each ['flat', 'bass', 'treble', 'vocal', 'classical'] as preset}
 								<button
 									class="px-3 py-1.5 rounded-lg text-xs border capitalize transition-colors {musicSettings.equalizerPreset === preset ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
-									onclick={() => (musicSettings.equalizerPreset = preset as typeof musicSettings.equalizerPreset)}
+									onclick={() => {
+									const gains = EQ_PRESETS[preset];
+									if (gains) {
+										musicSettings.eqBands = [...gains];
+										mediaEngine.eqBands = [...gains];
+										// Force-init AudioContext if not already done, then apply
+										initGlobalAudioContext();
+										updateGlobalEq(gains);
+										musicSettings.equalizerPreset = preset as typeof musicSettings.equalizerPreset;
+									}
+								}}
 								>
 									{preset}
 								</button>

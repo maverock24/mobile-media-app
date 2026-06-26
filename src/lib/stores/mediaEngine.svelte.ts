@@ -12,6 +12,7 @@
 import { Capacitor } from '@capacitor/core';
 import type { MediaItem, MediaSource } from '$lib/models/media';
 import { MediaControls } from '$lib/native/media-controls';
+import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 import { addToHistory } from './history.svelte';
 import { addToast } from './toastStore.svelte';
 
@@ -79,11 +80,12 @@ export const mediaEngine = $state<NowPlayingState & {
 	_streamError: ((err: MediaError | null) => void) | null;
 	_streamWaiting: (() => void) | null;
 	_streamPlaying: (() => void) | null;
+	_streamEnded: (() => void) | null;
 	playStream(url: string, item: MediaItem): void;
 	pauseStream(): void;
 	resumeStream(): void;
 	stopStream(): void;
-	setStreamCallbacks(error: (err: MediaError | null) => void, waiting: () => void, playing: () => void): void;
+	setStreamCallbacks(error: (err: MediaError | null) => void, waiting: () => void, playing: () => void, ended?: () => void): void;
 
 	// --- Callbacks for views to override behavior ---
 	_onPlay: (() => void) | null;
@@ -163,6 +165,7 @@ export const mediaEngine = $state<NowPlayingState & {
 			void _audioCtx.resume();
 		} else if (!_audioCtx) {
 			initGlobalAudioContext();
+			updateGlobalEq(mediaEngine.eqBands);
 		}
 
 		newSlot.play().then(() => {
@@ -306,6 +309,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	_streamError: null as ((err: MediaError | null) => void) | null,
 	_streamWaiting: null as (() => void) | null,
 	_streamPlaying: null as (() => void) | null,
+	_streamEnded: null as (() => void) | null,
 
 	/** Begin playing a live stream URL through the shared audio pipeline. */
 	playStream(url: string, item: MediaItem) {
@@ -318,34 +322,36 @@ export const mediaEngine = $state<NowPlayingState & {
 		_streamAudio.addEventListener('pause', () => { this.setPlaying(false); });
 		_streamAudio.addEventListener('waiting', () => { this._streamWaiting?.(); });
 		_streamAudio.addEventListener('playing', () => { this._streamPlaying?.(); });
+		_streamAudio.addEventListener('timeupdate', () => {
+			// Heartbeat: keep the stream alive and track buffering state
+		});
 		_streamAudio.addEventListener('error', () => {
 			this.setPlaying(false);
 			this._streamError?.(_streamAudio?.error ?? null);
 		});
+		_streamAudio.addEventListener('ended', () => {
+			// Stream ended unexpectedly (server disconnect / Android resource kill)
+			// Auto-reconnect the same stream URL
+			this.setPlaying(false);
+			this._streamEnded?.();
+			reconnectStream(url, item);
+		});
 
+		_streamReconnectUrl = url;
+		_streamReconnectItem = item;
 		this.item = item;
 		this.source = 'radio';
 		this.duration = 0;
 
-		// Route through Web Audio filters if available, otherwise init them
-		if (_audioCtx && _filters.length > 0) {
-			try {
-				const src = _audioCtx.createMediaElementSource(_streamAudio);
-				src.connect(_filters[0]);
-			} catch { /* filter routing unavailable — stream plays direct */ }
-		} else if (!_audioCtx) {
-			// Init context lazily (filters get created when slots exist too)
-			try {
-				_audioCtx = new AudioContext();
-			} catch { /* AudioContext unavailable */ }
-		}
-
+		// NOTE: Cross-origin streams (radio/podcast) CANNOT be processed by the Web
+		// Audio API. The browser outputs SILENCE for tainted cross-origin media unless
+		// the server sends CORS headers (which public radio/podcast servers do not).
+		// Routing them through createMediaElementSource() mutes them, and setting
+		// crossOrigin='anonymous' makes them fail to load. So we play streams DIRECTLY.
+		// EQ for radio/podcast requires proxying the stream through our own origin.
 		_streamAudio.src = url;
 		_streamAudio.play().catch((err) => {
-			if (err?.name !== 'AbortError') {
-				this.setPlaying(false);
-				addToast({ message: 'Stream unavailable. Try another station.', type: 'error', autoDismissMs: 4000 });
-			}
+			if (err?.name !== 'AbortError') this.setPlaying(false);
 		});
 	},
 
@@ -368,6 +374,7 @@ export const mediaEngine = $state<NowPlayingState & {
 
 	/** Stop the live stream and tear down its audio element. */
 	stopStream() {
+		cancelStreamReconnect();
 		stopStreamAudio();
 		if (this.source === 'radio') {
 			this.clear();
@@ -377,11 +384,13 @@ export const mediaEngine = $state<NowPlayingState & {
 	setStreamCallbacks(
 		error: (err: MediaError | null) => void,
 		waiting: () => void,
-		playing: () => void
+		playing: () => void,
+		ended?: () => void
 	) {
 		this._streamError = error;
 		this._streamWaiting = waiting;
 		this._streamPlaying = playing;
+		this._streamEnded = ended ?? null;
 	},
 });
 
@@ -406,6 +415,33 @@ let _activeSlot = 0;
 let _audioCtx: AudioContext | null = null;
 let _filters: BiquadFilterNode[] = [];
 let _streamAudio: HTMLAudioElement | null = null;
+let _streamReconnectUrl: string | null = null;
+let _streamReconnectItem: MediaItem | null = null;
+let _streamReconnectTimer: number | null = null;
+let _streamReconnectAttempts = 0;
+const STREAM_MAX_RECONNECT_ATTEMPTS = 5;
+
+function cancelStreamReconnect() {
+	_streamReconnectAttempts = 0;
+	if (_streamReconnectTimer != null) {
+		clearTimeout(_streamReconnectTimer);
+		_streamReconnectTimer = null;
+	}
+}
+
+function reconnectStream(url: string, item: MediaItem) {
+	cancelStreamReconnect();
+	if (_streamReconnectAttempts >= STREAM_MAX_RECONNECT_ATTEMPTS) {
+		return;
+	}
+	_streamReconnectAttempts++;
+	const delay = Math.min(1000 * Math.pow(2, _streamReconnectAttempts - 1), 16000);
+	_streamReconnectTimer = window.setTimeout(() => {
+		if (mediaEngine.source === 'radio' && !mediaEngine.isPlaying) {
+			mediaEngine.playStream(url, item);
+		}
+	}, delay);
+}
 
 function stopStreamAudio() {
 	if (_streamAudio) {
@@ -415,8 +451,6 @@ function stopStreamAudio() {
 		_streamAudio = null;
 	}
 }
-
-const EQ_FREQS = [60, 170, 350, 1000, 3500, 10000];
 
 function getAudioSlots(): [HTMLAudioElement, HTMLAudioElement] {
 	if (typeof window === 'undefined') return [] as any;
@@ -436,6 +470,9 @@ function getAudioSlots(): [HTMLAudioElement, HTMLAudioElement] {
 			audio.addEventListener('error', () => {
 				const err = audio.error;
 				if (!audio.src || audio.src === 'about:blank') return;
+				// MEDIA_ERR_SRC_NOT_SUPPORTED (4) is often a transient race on slot reuse —
+				// don't show a toast for it since the actual playback element is unaffected
+				if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) return;
 				console.error(`Audio slot ${i} error:`, err?.code, err?.message);
 				if (i === _activeSlot) {
 					mediaEngine.setPlaying(false);
@@ -444,6 +481,17 @@ function getAudioSlots(): [HTMLAudioElement, HTMLAudioElement] {
 				}
 			});
 		});
+
+		// Connect newly created slots to existing filter chain (when AudioContext was
+		// already initialized, e.g. by an EQ preset change before any playback started)
+		if (_audioCtx && _filters.length > 0) {
+			_audioSlots.forEach(audio => {
+				try {
+					const src = _audioCtx!.createMediaElementSource(audio);
+					src.connect(_filters[0]);
+				} catch { /* already connected or unavailable */ }
+			});
+		}
 
 		// Sync volume, speed, and EQ reactively
 		$effect.root(() => {
@@ -488,31 +536,28 @@ function fadeAudio(audio: HTMLAudioElement, targetVol: number, duration: number,
 }
 
 export function initGlobalAudioContext() {
-	if (!_audioSlots || _audioCtx) return;
+	if (_audioCtx) return;
 	try {
 		_audioCtx = new AudioContext();
+
+		// Auto-resume AudioContext when Android suspends it in background
+		_audioCtx.addEventListener('statechange', () => {
+			if (_audioCtx?.state === 'suspended' && mediaEngine.isPlaying) {
+				void _audioCtx.resume().catch(() => {});
+			}
+		});
 		
-		// Create a shared node chain
-		_filters = EQ_FREQS.map((freq, i) => {
-			const f = _audioCtx!.createBiquadFilter();
-			f.type = (i === 0 ? 'lowshelf' : i === EQ_FREQS.length - 1 ? 'highshelf' : 'peaking') as BiquadFilterType;
-			f.frequency.value = freq;
-			if (f.type === 'peaking') f.Q.value = 1.4;
-			f.gain.value = 0;
-			return f;
-		});
-
-		// Connect BOTH slots to the entry of the filter chain
-		_audioSlots.forEach(audio => {
-			const src = _audioCtx!.createMediaElementSource(audio);
-			src.connect(_filters[0]);
-		});
-
-		// Pipe filters together
-		for (let i = 0; i < _filters.length - 1; i++) {
-			_filters[i].connect(_filters[i+1]);
-		}
+		// Create a shared filter chain
+		_filters = createEqFilterChain(_audioCtx, mediaEngine.eqBands);
 		_filters[_filters.length - 1].connect(_audioCtx.destination);
+
+		// Connect audio slots if they exist (created before AudioContext init)
+		if (_audioSlots) {
+			_audioSlots.forEach(audio => {
+				const src = _audioCtx!.createMediaElementSource(audio);
+				src.connect(_filters[0]);
+			});
+		}
 	} catch (e) {
 		console.error('Failed to init global audio context:', e);
 	}
@@ -520,9 +565,7 @@ export function initGlobalAudioContext() {
 
 export function updateGlobalEq(gains: number[]) {
 	if (!_filters.length) initGlobalAudioContext();
-	_filters.forEach((f, i) => {
-		if (gains[i] !== undefined) f.gain.value = gains[i];
-	});
+	applyEqGains(_filters, gains);
 }
 
 
@@ -583,6 +626,41 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 			});
 		});
 	});
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WakeLock — keep CPU/WebView alive during background playback (Android)
+// ─────────────────────────────────────────────────────────────────────────────
+let _wakeLock: WakeLockSentinel | null = null;
+let _wakelockReleaseTimer: number | null = null;
+
+async function acquireWakeLock() {
+	if (!('wakeLock' in navigator)) return;
+	try {
+		_wakeLock = await navigator.wakeLock.request('screen');
+		_wakeLock.addEventListener('release', () => {
+			// Re-acquire if still playing
+			if (mediaEngine.isPlaying && _wakelockReleaseTimer == null) {
+				_wakelockReleaseTimer = window.setTimeout(() => {
+					_wakelockReleaseTimer = null;
+					void acquireWakeLock();
+				}, 200);
+			}
+		});
+	} catch {
+		// WakeLock may be denied by browser policy
+	}
+}
+
+async function releaseWakeLock() {
+	if (_wakelockReleaseTimer != null) {
+		clearTimeout(_wakelockReleaseTimer);
+		_wakelockReleaseTimer = null;
+	}
+	if (_wakeLock) {
+		try { await _wakeLock.release(); } catch { /* already released */ }
+		_wakeLock = null;
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -694,8 +772,19 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 			}).catch(() => {});
 		});
 
+		// WakeLock: acquire when playing, release when paused
+		$effect(() => {
+			if (mediaEngine.isPlaying) {
+				void acquireWakeLock();
+			} else {
+				void releaseWakeLock();
+			}
+		});
+
 		return () => {
 			clearBackgroundResume();
+			cancelStreamReconnect();
+			void releaseWakeLock();
 			document.removeEventListener('pause', handleDocumentPause);
 			document.removeEventListener('resume', handleDocumentResume);
 		};

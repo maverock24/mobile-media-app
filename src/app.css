@@ -132,18 +132,18 @@
   }
 
   body.drive-mode .drive-mode-shell [role='tab'] {
-    min-height: 5.5rem;
-    gap: 0.45rem;
+    min-height: 4rem;
+    gap: 0.3rem;
   }
 
   body.drive-mode .drive-mode-shell [role='tab'] svg {
-    width: 2rem;
-    height: 2rem;
+    width: 1.5rem;
+    height: 1.5rem;
   }
 
   body.drive-mode .drive-mode-shell [role='tab'] span {
-    font-size: 0.85rem;
-    font-weight: 700;
+    font-size: 0.7rem;
+    font-weight: 600;
   }
 
   body.drive-mode .mini-player-root {
@@ -592,3 +592,34 @@
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: hsl(190 60% 30%); border-radius: 9999px; }
 ::-webkit-scrollbar-thumb:hover { background: hsl(190 100% 52%); }
+
+/* ── Marquee title scroll for active/playing items ── */
+@keyframes title-marquee-scroll {
+	0%   { transform: translateX(0); }
+	100% { transform: translateX(-50%); }
+}
+
+.title-marquee {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.title-marquee-inner {
+	display: inline-block;
+	white-space: nowrap;
+}
+
+.title-marquee.is-active {
+	text-overflow: clip;
+}
+
+.title-marquee.is-active > .title-marquee-inner {
+	animation: title-marquee-scroll 8s linear infinite;
+	padding-right: 2rem;
+}
+
+.title-marquee.is-active > .title-marquee-inner::after {
+	content: attr(data-text);
+	padding-left: 2rem;
+}

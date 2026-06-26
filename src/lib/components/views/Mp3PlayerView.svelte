@@ -6,6 +6,7 @@
 	import Input from '$lib/components/ui/Input.svelte';
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
+	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import {
 		type StoredAudioFile,
 		type BrowseEntry,
@@ -13,15 +14,16 @@
 		type CachedLibraryFile,
 		type CachedWebLibraryFile,
 		type CachedNativeLibraryFile,
-		EQ_FREQS,
 		EQ_LABELS,
 		EQ_PRESETS,
+		formatTime,
 		getStoredFileKey,
 		getTrackKey,
 		mergeStoredFiles,
 		fmtGain,
 	} from '$lib/models/music';
 	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
+	import { marqueeTitle } from '$lib/actions/marqueeTitle';
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
 		checkFolderHasSubfolders,
@@ -572,9 +574,9 @@
 
 	// ── Sync EQ gains ──
 	$effect(() => {
-		musicSettings.eqBands.forEach((gain, i) => {
-			if (filters[i]) filters[i].gain.value = gain;
-		});
+		// Explicitly track eqBands array for reactivity
+		void musicSettings.eqBands.length;
+		applyEqGains(filters, musicSettings.eqBands);
 	});
 
 	// ─────────────────────────────────────────────────────────────
@@ -589,17 +591,9 @@
 			// in 'suspended' state even within a user gesture when created after an await.
 			void ctx.resume();
 			const src = ctx.createMediaElementSource(audioEl);
-			const bands = EQ_FREQS.map((freq, i) => {
-				const f = ctx.createBiquadFilter();
-				f.type = (i === 0 ? 'lowshelf' : i === EQ_FREQS.length - 1 ? 'highshelf' : 'peaking') as BiquadFilterType;
-				f.frequency.value = freq;
-				if (f.type === 'peaking') f.Q.value = 1.4;
-				f.gain.value = musicSettings.eqBands[i] ?? 0;
-				return f;
-			});
-			let node: AudioNode = src;
-			for (const b of bands) { node.connect(b); node = b; }
-			node.connect(ctx.destination);
+			const bands = createEqFilterChain(ctx, musicSettings.eqBands);
+			src.connect(bands[0]);
+			bands[bands.length - 1].connect(ctx.destination);
 			filters = bands;
 			audioCtx = ctx;
 		} catch (e) {
@@ -626,11 +620,6 @@
 	// ─────────────────────────────────────────────────────────────
 	// General helpers
 	// ─────────────────────────────────────────────────────────────
-	function formatTime(seconds: number): string {
-		if (!isFinite(seconds) || seconds < 0) return '0:00';
-		const m = Math.floor(seconds / 60), s = Math.floor(seconds % 60);
-		return `${m}:${s.toString().padStart(2, '0')}`;
-	}
 	function parseFilename(filename: string): { title: string; artist: string } {
 		const name = filename.replace(/\.mp3$/i, '').replace(/_/g, ' ');
 		const sep = name.indexOf(' - ');
@@ -2864,81 +2853,6 @@
 			</div>
 		</div>
 
-		{#if musicSettings.librarySource === 'drive'}
-			<div class="ui-panel-surface mx-3 mt-3 px-4 py-3 border space-y-3 shrink-0 rounded-2xl">
-				<div class="flex items-center justify-between gap-3">
-					<div class="min-w-0">
-						<p class="text-sm font-medium truncate">{driveUser?.displayName || 'Google Drive'}</p>
-						<p class="text-xs text-muted-foreground truncate">
-							{driveUser?.emailAddress || 'Connected account'}
-							{#if allFiles.length > 0}
-								· {allFiles.length} MP3 file{allFiles.length === 1 ? '' : 's'}
-							{/if}
-						</p>
-						{#if musicSettings.driveFolderName}
-							<p class="text-xs text-primary truncate mt-0.5">
-								<Folder class="w-3 h-3 inline mr-0.5 -mt-0.5" />{musicSettings.driveFolderName}
-							</p>
-						{:else}
-							<p class="text-xs text-muted-foreground truncate mt-0.5">All files</p>
-						{/if}
-					</div>
-					<div class="flex items-center gap-1 shrink-0">
-						<Button variant="ghost" size="sm" class="text-xs h-10 px-3" onclick={changeDriveFolder} title="Change folder">
-							<FolderOpen class="w-5 h-5" />
-						</Button>
-						<Button variant="ghost" size="sm" class={`text-xs h-10 px-2 ${isCurrentFolderFavorited() ? 'text-yellow-400' : ''}`} onclick={toggleCurrentFolderFavorite} title={isCurrentFolderFavorited() ? 'Remove from favorites' : 'Add to favorites'}>
-							<Star class="w-5 h-5" fill={isCurrentFolderFavorited() ? 'currentColor' : 'none'} />
-						</Button>
-						<!-- Config sync indicator -->
-						{#if driveConfigSync.isConnected}
-							<button
-								class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent transition-colors shrink-0"
-								onclick={() => driveConfigSync.save()}
-								title={driveConfigSync.lastSyncedAt ? `Config synced ${driveConfigSync.lastSyncedAt.toLocaleTimeString()}` : 'Sync settings to Drive'}
-							>
-								{#if driveConfigSync.status === 'syncing'}
-									<RefreshCw class="w-4 h-4 text-primary animate-spin" />
-								{:else if driveConfigSync.status === 'saved'}
-									<Cloud class="w-4 h-4 text-green-500" />
-								{:else if driveConfigSync.status === 'error'}
-									<Cloud class="w-4 h-4 text-destructive" />
-								{:else}
-									<Cloud class="w-4 h-4 text-primary" />
-								{/if}
-							</button>
-						{:else}
-							<Cloud class="w-5 h-5 text-primary shrink-0" />
-						{/if}
-					</div>
-				</div>
-				<div class="relative">
-					<Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-					<Input bind:value={driveSearch} placeholder="Search Google Drive MP3s" class="pl-9" />
-				</div>
-				{#if isDriveLoading}
-					<div class="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
-						<div class="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin shrink-0"></div>
-						<span class="flex-1 min-w-0 truncate">
-							{#if driveLoadProgress.foldersScanned > 0}
-								{driveLoadProgress.filesFound} file{driveLoadProgress.filesFound === 1 ? '' : 's'} found
-								· {driveLoadProgress.foldersScanned} folder{driveLoadProgress.foldersScanned === 1 ? '' : 's'} scanned
-								{#if driveLoadProgress.foldersQueued > 0}
-									· {driveLoadProgress.foldersQueued} remaining
-								{/if}
-							{:else}
-								Scanning Drive…
-							{/if}
-						</span>
-						<button class="text-xs underline hover:text-foreground shrink-0" onclick={cancelDriveLoad}>Cancel</button>
-					</div>
-				{/if}
-				{#if driveError}
-					<p class="text-xs text-destructive">{driveError}</p>
-				{/if}
-			</div>
-		{/if}
-
 		<!-- Index scan progress bar (shown while building the in-memory folder index) -->
 		{#if scanProgress !== null && musicSettings.librarySource !== 'drive'}
 		<div class="px-4 py-2 border-b shrink-0 bg-muted/20">
@@ -2984,20 +2898,6 @@
 
 		<!-- Entry list -->
 		<div class="flex-1 overflow-y-auto min-h-0">
-			{#if showFavoriteTracks || browseEntries.length > 0}
-				<div class="px-4 pt-3 pb-1">
-					<div class="relative">
-						<Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-						<input
-							type="search"
-							placeholder={showFavoriteTracks ? 'Filter favorite tracks…' : 'Filter files…'}
-							bind:value={fileSearchQuery}
-							class="w-full pl-9 pr-3 py-2 rounded-lg border bg-muted/40 text-sm outline-none focus:ring-2 focus:ring-primary/50"
-							aria-label="Filter files"
-						/>
-					</div>
-				</div>
-			{/if}
 			{#if selectedBrowseCount > 0 && !showFavoriteTracks}
 				<div class="px-4 pb-2">
 					<div class="flex items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/10 px-3 py-2">
@@ -3043,7 +2943,7 @@
 								aria-current={isCurrentTrack ? 'true' : undefined}
 							>
 								<div class="flex-1 min-w-0">
-									<p class="font-semibold text-[0.95rem] leading-tight truncate">{entry.favorite.title}</p>
+									<p class="font-semibold text-[0.95rem] leading-tight title-marquee"><span class="title-marquee-inner" data-text={entry.favorite.title}>{entry.favorite.title}</span></p>
 									<p class="text-xs text-muted-foreground truncate">
 										{entry.favorite.artist}
 										{#if !entry.file}
@@ -3095,7 +2995,7 @@
 							<Folder class="w-4.5 h-4.5 text-primary" />
 						</div>
 						<button class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}" onclick={() => navigateInto(entry.name)}>
-							<p class="font-semibold text-[0.95rem] leading-tight truncate">{entry.name}</p>
+							<p class="font-semibold text-[0.95rem] leading-tight title-marquee"><span class="title-marquee-inner" data-text={entry.name}>{entry.name}</span></p>
 							<p class="text-xs text-muted-foreground">{entry.count > 0 ? entry.count + ' MP3 file' + (entry.count !== 1 ? 's' : '') : 'folder'}</p>
 						</button>
 						<!-- Play all in this subfolder -->
@@ -3147,7 +3047,7 @@
 							aria-current={isCurrentTrack ? 'true' : undefined}
 						>
 							<div class="flex-1 min-w-0">
-								<p class="font-semibold text-[0.95rem] leading-tight truncate">{parseFilename(entry.name).title}</p>
+								<p class="font-semibold text-[0.95rem] leading-tight title-marquee {isCurrentTrack ? 'is-active' : ''}"><span class="title-marquee-inner" data-text={parseFilename(entry.name).title}>{parseFilename(entry.name).title}</span></p>
 								<p class="text-xs text-muted-foreground truncate">{parseFilename(entry.name).artist}</p>
 							</div>
 							{#if isSelected}

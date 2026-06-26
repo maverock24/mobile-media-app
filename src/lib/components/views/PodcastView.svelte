@@ -2,6 +2,7 @@
 <script lang="ts">
 	import { env } from '$env/dynamic/public';
 	import { Capacitor } from '@capacitor/core';
+	import { marqueeTitle } from '$lib/actions/marqueeTitle';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
 	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
@@ -60,11 +61,15 @@
 	let searchResults      = $state<ItunesResult[]>([]);
 	let searchLoading      = $state(false);
 	let episodesLoading    = $state(false);
+	let episodesLoadingMore = $state(false);
 	let episodesRefreshing = $state(false); // background refresh while episodes already shown
+	let episodesPage      = $state(1);
+	let hasMoreEpisodes   = $state(false);
 	let isRefreshingAll    = $state(false); // pull-to-refresh: background refresh of all subscribed
 	let pullDistance       = $state(0);     // pull-to-refresh: current drag distance (px)
 	let listScrollEl       = $state<HTMLElement | null>(null);
 	let episodeScrollEl    = $state<HTMLElement | null>(null);
+	let loadMoreSentinelEl = $state<HTMLElement | null>(null);
 	let episodePullDist    = $state(0);
 	let episodesError      = $state<string | null>(null);
 	let hasRestoredSelectedPodcast = false;
@@ -246,13 +251,15 @@
 		const onError = () => {
 			const err = audioEl.error;
 			isBuffering = false;
-			// MEDIA_ERR_NETWORK (2): stream interrupted by a connectivity drop.
-			// Register an 'online' listener to automatically resume from the same position.
 			if (err?.code === 2 && currentEpisode) {
 				scheduleReconnectResume(audioEl.src, audioEl.currentTime);
 				addToast({ message: 'Connection lost — will resume when reconnected.', type: 'warning', autoDismissMs: 6000 });
 			} else {
-				console.error('[Podcast] audio error:', err?.code, err?.message, 'url:', audioEl.src);
+				isPlaying = false;
+				mediaEngine.setPlaying(false);
+				if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+					addToast({ message: 'This audio format is not supported.', type: 'error', autoDismissMs: 4000 });
+				}
 			}
 		};
 		// stalled = browser requested audio data but received nothing (common on network drop).
@@ -393,6 +400,24 @@
 		};
 	});
 
+	// ── Lazy loading: IntersectionObserver on sentinel element ──
+	$effect(() => {
+		const el = loadMoreSentinelEl;
+		if (!el || !selectedPodcast) return;
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries[0]?.isIntersecting && hasMoreEpisodes && !episodesLoadingMore && selectedPodcast) {
+					void loadMoreEpisodes(selectedPodcast);
+				}
+			},
+			{ rootMargin: '200px' }
+		);
+		observer.observe(el);
+		return () => observer.disconnect();
+	});
+
+	
+	// ── Marquee overflow detection ──
 	// ── Derived ─────────────────────────────────────────────────
 	// Sort subscribed podcasts by newest unplayed episode — podcasts with fresh
 	// unheard content bubble to the top. Fully-played / unloaded podcasts sink.
@@ -523,7 +548,7 @@
 		return fallback;
 	}
 
-	async function fetchRss(feedUrl: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+	async function fetchRss(feedUrl: string, signal?: AbortSignal, page?: number): Promise<Record<string, unknown>> {
 		// Validate that the feed URL is a legitimate HTTP(S) address
 		try {
 			const parsed = new URL(feedUrl);
@@ -533,13 +558,16 @@
 		} catch (e) {
 			throw new Error('Invalid feed URL.');
 		}
-		const cached = rssCache.get(feedUrl);
+		const cacheKey = page ? `${feedUrl}::page${page}` : feedUrl;
+		const cached = rssCache.get(cacheKey);
 		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data;
+		let query = `url=${encodeURIComponent(feedUrl)}`;
+		if (page) query += `&page=${page}&perPage=50`;
 		const requestUrl = useHostedPodcastProxy
-			? resolvePodcastApiUrl(`/api/podcast/feed?url=${encodeURIComponent(feedUrl)}`)
-			: `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`;
+			? resolvePodcastApiUrl(`/api/podcast/feed?${query}`)
+			: `/api/podcast/feed?${query}`;
 		const data = await readPodcastJson<Record<string, unknown>>(requestUrl, signal);
-		if (data.status === 'ok') rssCache.set(feedUrl, { data, ts: Date.now() });
+		if (data.status === 'ok') rssCache.set(cacheKey, { data, ts: Date.now() });
 		return data;
 	}
 
@@ -762,27 +790,32 @@
 		}
 	}
 
-	// ── Load episodes from RSS2JSON ──────────────────────────────
+	// ── Load episodes (lazy loading with pagination) ──────────────
 	async function loadEpisodes(podcast: Podcast, force = false) {
 		if (!force && podcast.episodesLoaded) return;
-		// Abort any previous in-flight load (TASK-2.1: race condition fix)
+		// Abort any previous in-flight load
 		episodeLoadController?.abort();
 		const controller = new AbortController();
 		episodeLoadController = controller;
 		episodeLoadPodcastId = podcast.id;
 		const signal = controller.signal;
-		// Bust the RSS cache on manual force-refresh so we always get fresh data
-		if (force && podcast.feedUrl) rssCache.delete(podcast.feedUrl);
-		// Background refresh: show subtle spinner without blocking the episode list
+		// Bust the RSS cache on manual force-refresh
+		if (force && podcast.feedUrl) {
+			// Clear all cached pages for this feed
+			for (const key of rssCache.keys()) {
+				if (key.startsWith(podcast.feedUrl)) rssCache.delete(key);
+			}
+		}
 		if (force && podcast.episodesLoaded) {
 			episodesRefreshing = true;
 		} else {
 			episodesLoading = true;
+			episodesPage = 1;
 		}
 		episodesError = null;
 		try {
 			if (!podcast.feedUrl) {
-				// Resolve feedUrl via iTunes lookup (no &entity param — gets the podcast object)
+				// Resolve feedUrl via iTunes lookup
 				const lookupUrl = useHostedPodcastProxy
 					? resolvePodcastApiUrl(`/api/podcast/lookup?id=${podcast.itunesId}`)
 					: `https://itunes.apple.com/lookup?id=${podcast.itunesId}`;
@@ -800,18 +833,17 @@
 					selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
 				}
 			}
-			const data = await fetchRss(podcast.feedUrl, signal) as Record<string, unknown>;
+			const data = await fetchRss(podcast.feedUrl, signal, force ? undefined : 1) as Record<string, unknown>;
 			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
 			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
 				const enc = item.enclosure as { link?: string; length?: number } | null;
-				// itunes_duration is a string like "1:23:45" or seconds as number
 				const rawDur = item.itunes_duration ?? item.duration ?? 0;
 				return {
-				id:          buildEpisodeId(podcast, item, i, enc),
-				title:       String(item.title ?? 'Untitled'),
-				description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
-				duration:    parseDuration(rawDur as string | number),
-				positionSec: 0,
+					id:          buildEpisodeId(podcast, item, i, enc),
+					title:       String(item.title ?? 'Untitled'),
+					description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
+					duration:    parseDuration(rawDur as string | number),
+					positionSec: 0,
 					publishedAt: String(item.pubDate ?? ''),
 					played:      false,
 					progress:    0,
@@ -821,25 +853,22 @@
 			const feedImage = typeof (data.feed as Record<string, unknown> | undefined)?.image === 'string'
 				? (data.feed as Record<string, unknown>).image as string
 				: '';
-			// Merge: preserve played/progress/positionSec from already-known episodes
 			const mergedEps = mergeEpisodeHistory(podcast.id, eps);
 			podcastData.podcasts = podcastData.podcasts.map(p =>
 				p.id === podcast.id
-					? { ...p, episodes: mergedEps, episodesLoaded: true, artworkUrl: p.artworkUrl || feedImage }
+					? { ...p, episodes: force ? mergedEps : mergedEps, episodesLoaded: true, artworkUrl: p.artworkUrl || feedImage }
 					: p
 			);
 			if (selectedPodcast?.id === podcast.id) {
 				selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
 			}
+			hasMoreEpisodes = (data.hasMore as boolean) ?? false;
 		} catch (e: unknown) {
-			// Ignore aborted requests (TASK-2.1: user navigated away or new load started)
 			if (signal.aborted) return;
 			const msg = describePodcastRequestError(e, 'Unable to load this podcast right now. Please try again.');
-			// Suppress errors on background refresh — episodes already shown
 			if (!force || !podcast.episodesLoaded) {
 				episodesError = msg;
 			}
-			// TASK-2.4: Show toast with retry action
 			addToast({
 				message: msg,
 				type: 'error',
@@ -853,6 +882,46 @@
 				episodesLoading = false;
 				episodesRefreshing = false;
 			}
+		}
+	}
+
+	async function loadMoreEpisodes(podcast: Podcast) {
+		if (episodesLoadingMore || !hasMoreEpisodes) return;
+		episodesLoadingMore = true;
+		const nextPage = episodesPage + 1;
+		try {
+			const data = await fetchRss(podcast.feedUrl, undefined, nextPage) as Record<string, unknown>;
+			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
+			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
+				const enc = item.enclosure as { link?: string; length?: number } | null;
+				const rawDur = item.itunes_duration ?? item.duration ?? 0;
+				return {
+					id:          buildEpisodeId(podcast, item, (nextPage - 1) * 50 + i, enc),
+					title:       String(item.title ?? 'Untitled'),
+					description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
+					duration:    parseDuration(rawDur as string | number),
+					positionSec: 0,
+					publishedAt: String(item.pubDate ?? ''),
+					played:      false,
+					progress:    0,
+					audioUrl:    enc?.link ?? (String(item.link ?? '').match(/\.(mp3|m4a|ogg|aac|wav|flac)(\?|$)/i) ? String(item.link) : ''),
+				};
+			});
+			const mergedEps = mergeEpisodeHistory(podcast.id, eps);
+			podcastData.podcasts = podcastData.podcasts.map(p =>
+				p.id === podcast.id
+					? { ...p, episodes: [...p.episodes, ...mergedEps], episodesLoaded: true }
+					: p
+			);
+			if (selectedPodcast?.id === podcast.id) {
+				selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
+			}
+			episodesPage = nextPage;
+			hasMoreEpisodes = (data.hasMore as boolean) ?? false;
+		} catch (e: unknown) {
+			console.error('Failed to load more episodes:', e);
+		} finally {
+			episodesLoadingMore = false;
 		}
 	}
 
@@ -1163,8 +1232,8 @@
 											Played
 										</span>
 									{/if}
-									<p class="font-semibold text-[0.95rem] leading-tight truncate {episode.played ? 'text-muted-foreground' : newEpisode ? 'text-primary text-base' : ''}">
-										{episode.title}
+									<p use:marqueeTitle={{ active: activeEpisode }} class="font-semibold text-[0.95rem] leading-tight title-marquee {episode.played ? 'text-muted-foreground' : newEpisode ? 'text-primary text-base' : ''}">
+										<span class="title-marquee-inner" data-text={episode.title}>{episode.title}</span>
 									</p>
 								</div>
 								{#if episode.description}
@@ -1215,6 +1284,22 @@
 						</div>
 					</div>
 				{/each}
+			<!-- Lazy loading sentinel: triggers loadMoreEpisodes when scrolled into view -->
+			{#if hasMoreEpisodes && selectedPodcast}
+				<div
+					bind:this={loadMoreSentinelEl}
+					class="flex items-center justify-center py-6"
+				>
+					{#if episodesLoadingMore}
+						<div class="flex items-center gap-2 text-sm text-muted-foreground">
+							<div class="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></div>
+							Loading more episodes…
+						</div>
+					{:else}
+						<span class="text-xs text-muted-foreground">Scroll for more</span>
+					{/if}
+				</div>
+			{/if}
 			{/if}
 		</div>
 	</div>
@@ -1284,8 +1369,8 @@
 						onkeydown={(e) => e.key === 'Enter' && openPodcast(podcast)}
 					>
 						{#if podcast.artworkUrl}
-							<img src={podcast.artworkUrl} alt={podcast.title}
-								class="w-13 h-13 rounded-xl object-cover shrink-0 w-[52px] h-[52px]" />
+							<img src={podcast.artworkUrl} alt={podcast.title} loading="lazy" decoding="async" width="52" height="52"
+								class="rounded-xl object-cover shrink-0 w-[52px] h-[52px]" />
 						{:else}
 							<div class="w-[52px] h-[52px] rounded-xl bg-gradient-to-br {artGradient} flex items-center justify-center text-2xl shrink-0">
 								🎙
@@ -1339,7 +1424,7 @@
 							onkeydown={(e) => e.key === 'Enter' && localPodcast && openPodcast(localPodcast)}
 						>
 							{#if item.artworkUrl600}
-								<img src={item.artworkUrl600} alt={item.trackName}
+								<img src={item.artworkUrl600} alt={item.trackName} loading="lazy" decoding="async" width="52" height="52"
 									class="w-[52px] h-[52px] rounded-xl object-cover shrink-0" />
 							{:else}
 								<div class="w-[52px] h-[52px] rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-2xl shrink-0">
