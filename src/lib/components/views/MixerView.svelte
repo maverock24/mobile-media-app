@@ -147,6 +147,8 @@
 	}
 
 	function playBoth() {
+		// Stop the main player so mixer and main media don't overlap.
+		mediaEngine.pause();
 		if (deckA.hasTrack) audioA?.play().catch(() => {});
 		if (deckB.hasTrack) audioB?.play().catch(() => {});
 	}
