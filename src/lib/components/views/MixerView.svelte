@@ -126,6 +126,48 @@
 
 	const anyPlaying = $derived(deckA.playing || deckB.playing);
 
+	// ── WakeLock: keep CPU / audio alive when screen is locked ────
+	let _mixerWakeLock: WakeLockSentinel | null = null;
+
+	async function acquireMixerWakeLock() {
+		if (!('wakeLock' in navigator)) return;
+		try {
+			_mixerWakeLock = await navigator.wakeLock.request('screen');
+			_mixerWakeLock.addEventListener('release', () => {
+				// Re-acquire if we're still playing (OS may release it on visibility loss)
+				if (anyPlaying && document.visibilityState === 'visible') {
+					void acquireMixerWakeLock();
+				}
+			});
+		} catch { /* denied by browser policy */ }
+	}
+
+	async function releaseMixerWakeLock() {
+		if (_mixerWakeLock) {
+			try { await _mixerWakeLock.release(); } catch { /* already released */ }
+			_mixerWakeLock = null;
+		}
+	}
+
+	$effect(() => {
+		if (active && anyPlaying) {
+			void acquireMixerWakeLock();
+		} else {
+			void releaseMixerWakeLock();
+		}
+	});
+
+	// Re-acquire wake lock when the page becomes visible again while mixer is playing
+	$effect(() => {
+		if (typeof document !== 'undefined') {
+			const onVisible = () => {
+				if (active && anyPlaying && !_mixerWakeLock) void acquireMixerWakeLock();
+			};
+			document.addEventListener('visibilitychange', onVisible);
+			return () => document.removeEventListener('visibilitychange', onVisible);
+		}
+	});
+
 	onMount(() => {
 		return () => {
 			audioA?.pause();
