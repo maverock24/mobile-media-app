@@ -182,6 +182,9 @@
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'radio'}>
 			<RadioView />
 		</div>
+		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'mixer'}>
+			<MixerView active={activeTab === 'mixer'} onBack={() => setActiveTab('music')} />
+		</div>
 		{#if activeTab === 'weather'}
 			<div class="absolute inset-0 overflow-y-auto">
 				<WeatherView />
@@ -189,10 +192,6 @@
 		{:else if activeTab === 'settings'}
 			<div class="absolute inset-0 overflow-y-auto">
 				<SettingsView />
-			</div>
-		{:else if activeTab === 'mixer'}
-			<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'mixer'}>
-				<MixerView active={activeTab === 'mixer'} onBack={() => setActiveTab('music')} />
 			</div>
 		{/if}
 	</main>
