@@ -119,26 +119,26 @@
 				<p class="mini-player-info-subtitle text-xs text-muted-foreground leading-tight truncate mt-0.5">{mediaEngine.item?.subtitle}</p>
 			</button>
 
-			<div class="relative min-h-[3.75rem]">
+			<div class="relative min-h-[3.5rem]">
 				<div class="absolute left-0 top-1/2 -translate-y-1/2">
 					<button
-						class="mini-player-action mini-player-sleep mini-player-control-surface w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+						class="mini-player-action mini-player-sleep mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
 						onclick={toggleSleepTimerOptions}
 						aria-label="Sleep timer"
 						title={sleepTimer.isActive ? `Sleep timer ${sleepTimerLabel}` : 'Set sleep timer'}
 					>
-						<Moon class="w-5 h-5 {sleepTimer.isActive ? 'text-primary' : ''}" />
+						<Moon class="w-4 h-4 {sleepTimer.isActive ? 'text-primary' : ''}" />
 					</button>
 				</div>
 
-				<div class="flex items-center justify-center gap-4">
+				<div class="flex items-center justify-center gap-3">
 					{#if canSkipPrevious}
 						<button
-							class="mini-player-action mini-player-control-surface w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+							class="mini-player-action mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
 							onclick={skipPrevious}
 							aria-label="Previous"
 						>
-							<SkipBack class="w-5 h-5" />
+							<SkipBack class="w-4 h-4" />
 						</button>
 					{/if}
 
@@ -156,22 +156,22 @@
 
 					{#if canSkipNext}
 						<button
-							class="mini-player-action mini-player-control-surface w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+							class="mini-player-action mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
 							onclick={skipNext}
 							aria-label="Next"
 						>
-							<SkipForward class="w-5 h-5" />
+							<SkipForward class="w-4 h-4" />
 						</button>
 					{/if}
 
 					{#if activeTab === 'music'}
 						<button
-							class="mini-player-action mini-player-control-surface w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+							class="mini-player-action mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
 							onclick={() => onNavigateTo?.('mixer')}
 							aria-label="Open mixer"
 							title="Mixer — play two tracks at once"
 						>
-							<SlidersHorizontal class="w-5 h-5" />
+							<SlidersHorizontal class="w-4 h-4" />
 						</button>
 					{/if}
 				</div>
@@ -179,7 +179,7 @@
 				{#if showPodcastSpeedPreset}
 					<div class="absolute right-0 top-1/2 -translate-y-1/2">
 						<button
-							class="mini-player-action mini-player-control-surface h-11 min-w-[3.5rem] px-3 inline-flex items-center justify-center rounded-full text-sm font-semibold {podcastOneAndHalfActive ? 'border-primary bg-primary/18 text-primary' : 'text-muted-foreground hover:text-foreground'}"
+							class="mini-player-action mini-player-control-surface h-8 min-w-[3rem] px-2 inline-flex items-center justify-center rounded-full text-xs font-semibold {podcastOneAndHalfActive ? 'border-primary bg-primary/18 text-primary' : 'text-muted-foreground hover:text-foreground'}"
 							onclick={setPodcastMiniPlayerSpeed}
 							aria-label="Play podcast at 1.5x speed"
 							aria-pressed={podcastOneAndHalfActive}
