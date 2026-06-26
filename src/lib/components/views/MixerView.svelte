@@ -243,6 +243,12 @@
 			if (deckA.playing || deckB.playing) pauseBoth();
 			else playBoth();
 		};
+
+		// Keep Android foreground service alive while mixer is playing.
+		// Without it the OS will kill the WebView, losing loaded tracks.
+		if (deckA.playing || deckB.playing) {
+			mediaEngine.setPlaying(true);
+		}
 	});
 
 	// ── WakeLock: keep CPU / audio alive when screen is locked ────
