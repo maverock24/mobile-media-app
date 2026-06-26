@@ -304,8 +304,22 @@
 						<button class="w-8 h-8 rounded-full border border-primary/40 text-primary text-xs font-bold hover:bg-primary/10 shrink-0" onclick={() => loadIntoDeck('B', entry.file, prettyTitle(entry.name))} aria-label="Load into deck B">B</button>
 					</div>
 				{/each}
+
+				<!-- Flat root-level file list: shown when no folders/files in browse entries, to avoid empty state -->
 				{#if folders.length === 0 && files.length === 0}
-					<p class="text-sm text-muted-foreground text-center py-8">Navigate into a folder in the Music tab to browse files here.</p>
+					{#if rootFiles.length > 0}
+						{#each rootFiles as file}
+							<div class="flex items-center gap-2 py-2 px-2 rounded-lg">
+								<div class="flex-1 min-w-0">
+									<p class="text-sm truncate">{prettyTitle(file.name)}</p>
+								</div>
+								<button class="w-8 h-8 rounded-full border border-primary/40 text-primary text-xs font-bold hover:bg-primary/10 shrink-0" onclick={() => loadIntoDeck('A', file, prettyTitle(file.name))} aria-label="Load into deck A">A</button>
+								<button class="w-8 h-8 rounded-full border border-primary/40 text-primary text-xs font-bold hover:bg-primary/10 shrink-0" onclick={() => loadIntoDeck('B', file, prettyTitle(file.name))} aria-label="Load into deck B">B</button>
+							</div>
+						{/each}
+					{:else}
+						<p class="text-sm text-muted-foreground text-center py-8">No MP3 files in library. Add files in the Music tab first.</p>
+					{/if}
 				{/if}
 			{/if}
 		{:else}
