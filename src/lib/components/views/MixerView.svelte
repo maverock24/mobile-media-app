@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ArrowLeft, Folder, Play, Pause, Square, Volume2, ListMusic, Star, ChevronRight } from 'lucide-svelte';
+	import { ArrowLeft, Folder, Play, Pause, Square, Volume2, ListMusic, Star, ChevronRight, Repeat } from 'lucide-svelte';
 	import { type BrowseEntry, type StoredAudioFile } from '$lib/stores/library.svelte';
 	import { mixerShared } from '$lib/stores/mixerShared.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
@@ -23,9 +23,10 @@
 		loading: boolean;
 		playing: boolean;
 		volume: number; // 0..1
+		loop: boolean;
 	}
-	let deckA = $state<DeckState>({ name: '', hasTrack: false, loading: false, playing: false, volume: 0.85 });
-	let deckB = $state<DeckState>({ name: '', hasTrack: false, loading: false, playing: false, volume: 0.85 });
+	let deckA = $state<DeckState>({ name: '', hasTrack: false, loading: false, playing: false, volume: 0.85, loop: false });
+	let deckB = $state<DeckState>({ name: '', hasTrack: false, loading: false, playing: false, volume: 0.85, loop: false });
 	let revokeA: (() => void) | null = null;
 	let revokeB: (() => void) | null = null;
 
@@ -91,6 +92,14 @@
 		if (!el || !deck.hasTrack) return;
 		if (el.paused) el.play().catch(() => {});
 		else el.pause();
+	}
+
+	function toggleLoop(which: 'A' | 'B') {
+		const el = which === 'A' ? audioA : audioB;
+		const deck = which === 'A' ? deckA : deckB;
+		if (!el) return;
+		deck.loop = !deck.loop;
+		el.loop = deck.loop;
 	}
 
 	function stopDeck(which: 'A' | 'B') {
@@ -228,6 +237,16 @@
 						aria-label={deck.playing ? `Pause deck ${id}` : `Play deck ${id}`}
 					>
 						{#if deck.playing}<Pause class="w-5 h-5" />{:else}<Play class="w-5 h-5 ml-0.5" />{/if}
+					</button>
+					<button
+						class="w-11 h-11 flex items-center justify-center rounded-full transition-colors disabled:opacity-40 {deck.loop ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}"
+						onclick={() => toggleLoop(id)}
+						disabled={!deck.hasTrack}
+						aria-label={`Loop deck ${id}`}
+						aria-pressed={deck.loop}
+						title={deck.loop ? 'Loop on' : 'Loop off'}
+					>
+						<Repeat class="w-4.5 h-4.5" />
 					</button>
 					<button
 						class="w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-40 transition-colors"
