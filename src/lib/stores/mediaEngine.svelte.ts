@@ -188,12 +188,24 @@ export const mediaEngine = $state<NowPlayingState & {
 	},
 
 	pause() {
+		// Radio plays through _streamAudio (not an audio slot), so pause it directly.
+		if (this.source === 'radio' && _streamAudio) {
+			_streamAudio.pause();
+			this.isPlaying = false;
+			return;
+		}
 		const slots = getAudioSlots();
 		slots.forEach(s => s.pause());
 		this.isPlaying = false;
 	},
 
 	resume() {
+		if (this.source === 'radio' && _streamAudio) {
+			if (_audioCtx?.state === 'suspended') void _audioCtx.resume();
+			_streamAudio.play().catch(() => {});
+			this.isPlaying = true;
+			return;
+		}
 		const slots = getAudioSlots();
 		const current = slots[_activeSlot];
 		if (current) {
@@ -314,6 +326,14 @@ export const mediaEngine = $state<NowPlayingState & {
 	/** Begin playing a live stream URL through the shared audio pipeline. */
 	playStream(url: string, item: MediaItem) {
 		claimAudio('radio');
+		_streamShouldPlay = true;
+		// Route MiniPlayer / web mediaSession / native transport controls to the live
+		// stream so pause/resume act on _streamAudio instead of the (silent) audio slots.
+		this.setPlaybackHandlers(
+			() => this.resumeStream(),
+			() => this.pauseStream(),
+			null,
+		);
 		stopStreamAudio();
 		_streamAudio = new Audio();
 		_streamAudio.preload = 'none';
@@ -330,11 +350,12 @@ export const mediaEngine = $state<NowPlayingState & {
 			this._streamError?.(_streamAudio?.error ?? null);
 		});
 		_streamAudio.addEventListener('ended', () => {
-			// Stream ended unexpectedly (server disconnect / Android resource kill)
-			// Auto-reconnect the same stream URL
+			// Stream ended unexpectedly (server disconnect / Android resource kill).
+			// Only auto-reconnect if the user still wants playback — a deliberate pause
+			// can also surface as 'ended' on live streams and must NOT restart audio.
 			this.setPlaying(false);
 			this._streamEnded?.();
-			reconnectStream(url, item);
+			if (_streamShouldPlay) reconnectStream(url, item);
 		});
 
 		_streamReconnectUrl = url;
@@ -357,6 +378,9 @@ export const mediaEngine = $state<NowPlayingState & {
 
 	/** Pause the live stream without tearing down the audio element. */
 	pauseStream() {
+		// User intent = paused: cancel any pending reconnect so the stream stays stopped.
+		_streamShouldPlay = false;
+		cancelStreamReconnect();
 		if (_streamAudio) {
 			_streamAudio.pause();
 			this.setPlaying(false);
@@ -366,6 +390,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	/** Resume the live stream if paused. */
 	resumeStream() {
 		if (_streamAudio && this.source === 'radio') {
+			_streamShouldPlay = true;
 			if (_audioCtx?.state === 'suspended') void _audioCtx.resume();
 			_streamAudio.play().catch(() => {});
 			this.setPlaying(true);
@@ -374,6 +399,7 @@ export const mediaEngine = $state<NowPlayingState & {
 
 	/** Stop the live stream and tear down its audio element. */
 	stopStream() {
+		_streamShouldPlay = false;
 		cancelStreamReconnect();
 		stopStreamAudio();
 		if (this.source === 'radio') {
@@ -415,6 +441,9 @@ let _activeSlot = 0;
 let _audioCtx: AudioContext | null = null;
 let _filters: BiquadFilterNode[] = [];
 let _streamAudio: HTMLAudioElement | null = null;
+/** User intent: true while the listener wants the stream playing. Gates auto-reconnect
+ *  so a deliberate pause/stop is never undone by the reconnect-on-drop logic. */
+let _streamShouldPlay = false;
 let _streamReconnectUrl: string | null = null;
 let _streamReconnectItem: MediaItem | null = null;
 let _streamReconnectTimer: number | null = null;
@@ -437,7 +466,7 @@ function reconnectStream(url: string, item: MediaItem) {
 	_streamReconnectAttempts++;
 	const delay = Math.min(1000 * Math.pow(2, _streamReconnectAttempts - 1), 16000);
 	_streamReconnectTimer = window.setTimeout(() => {
-		if (mediaEngine.source === 'radio' && !mediaEngine.isPlaying) {
+		if (_streamShouldPlay && mediaEngine.source === 'radio' && !mediaEngine.isPlaying) {
 			mediaEngine.playStream(url, item);
 		}
 	}, delay);
