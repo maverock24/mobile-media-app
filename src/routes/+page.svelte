@@ -5,6 +5,7 @@
 	import RadioView from '$lib/components/views/RadioView.svelte';
 	import WeatherView from '$lib/components/views/WeatherView.svelte';
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
+	import MixerView from '$lib/components/views/MixerView.svelte';
 	import MiniPlayer from '$lib/components/ui/MiniPlayer.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
 	import { initSleepTimer } from '$lib/stores/sleepTimer.svelte';
@@ -20,11 +21,11 @@
 	import { Music, Mic2, Radio, Cloud, Settings2 } from 'lucide-svelte';
 	import { checkForAndroidUpdate } from '$lib/utils/androidUpdate';
 
-	type Tab = 'music' | 'podcasts' | 'radio' | 'weather' | 'settings';
+	type Tab = 'music' | 'podcasts' | 'radio' | 'weather' | 'settings' | 'mixer';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
 	const RUNTIME_ERROR_NOTICE_KEY = 'runtime-error-notice-shown';
 	const DEFAULT_TAB: Tab = 'music';
-	const DRIVE_MODE_TABS: Tab[] = ['music', 'podcasts', 'radio', 'settings'];
+	const DRIVE_MODE_TABS: Tab[] = ['music', 'podcasts', 'radio', 'settings', 'mixer'];
 
 	let activeTab = $state<Tab>(DEFAULT_TAB);
 
@@ -41,7 +42,7 @@
 
 	function isTab(value: unknown): value is Tab {
 		return value === 'music' || value === 'podcasts' || value === 'radio'
-			|| value === 'weather' || value === 'settings';
+			|| value === 'weather' || value === 'settings' || value === 'mixer';
 	}
 
 	function readSavedTab(): Tab {
@@ -188,6 +189,10 @@
 		{:else if activeTab === 'settings'}
 			<div class="absolute inset-0 overflow-y-auto">
 				<SettingsView />
+			</div>
+		{:else if activeTab === 'mixer'}
+			<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'mixer'}>
+				<MixerView active={activeTab === 'mixer'} onBack={() => setActiveTab('music')} />
 			</div>
 		{/if}
 	</main>

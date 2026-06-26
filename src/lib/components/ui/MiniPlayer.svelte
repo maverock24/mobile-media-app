@@ -10,7 +10,7 @@
 	} from '$lib/stores/sleepTimer.svelte';
 	import { triggerToggleHaptic } from '$lib/native/haptics';
 	import { formatClock as formatTime } from '$lib/models/music';
-	import { Play, Pause, SkipBack, SkipForward, Moon, X } from 'lucide-svelte';
+	import { Play, Pause, SkipBack, SkipForward, Moon, X, SlidersHorizontal } from 'lucide-svelte';
 
 	interface Props {
 		/** The currently selected tab. */
@@ -161,6 +161,17 @@
 							aria-label="Next"
 						>
 							<SkipForward class="w-5 h-5" />
+						</button>
+					{/if}
+
+					{#if activeTab === 'music'}
+						<button
+							class="mini-player-action mini-player-control-surface w-11 h-11 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+							onclick={() => onNavigateTo?.('mixer')}
+							aria-label="Open mixer"
+							title="Mixer — play two tracks at once"
+						>
+							<SlidersHorizontal class="w-5 h-5" />
 						</button>
 					{/if}
 				</div>

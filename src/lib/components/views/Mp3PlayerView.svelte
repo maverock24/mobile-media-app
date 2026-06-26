@@ -47,6 +47,7 @@
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
+	import { mixerShared } from '$lib/stores/mixerShared.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
@@ -338,6 +339,14 @@
 	let browseEntries    = $state<BrowseEntry[]>([]);
 	let fileSearchQuery  = $state('');
 	let browseLoading    = $state(false);
+
+	// ── Sync browse state to Mixer's shared store (reactive $effect) ────
+	$effect(() => {
+		mixerShared.allFiles       = allFiles;
+		mixerShared.browseEntries  = browseEntries;
+		mixerShared.browsePath     = browsePath;
+		mixerShared.browseLoading  = browseLoading;
+	});
 	let browseVersion    = $state(0);                          // bump to force reload
 	let selectedBrowseFileKeys = $state<string[]>([]);
 	let selectionLoopActive = $state(false);
