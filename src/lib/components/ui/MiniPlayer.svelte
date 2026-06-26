@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	import { mixerShared } from '$lib/stores/mixerShared.svelte';
 	import { podcastSettings } from '$lib/stores/settings.svelte';
 	import {
 		sleepTimer,
@@ -32,9 +33,13 @@
 		}
 	});
 
+	const isPlaying = $derived(
+		activeTab === 'mixer' ? mixerShared.anyPlaying : mediaEngine.isPlaying
+	);
+
 	const visible = $derived(
-		mediaEngine.item !== null &&
-		ownerTab !== null
+		(mediaEngine.item !== null && ownerTab !== null) ||
+		(activeTab === 'mixer' && mixerShared.anyDeckLoaded)
 	);
 
 	const progress = $derived(
@@ -63,6 +68,10 @@
 	}
 
 	function togglePlayback() {
+		if (activeTab === 'mixer') {
+			mixerShared.playBoth?.();
+			return;
+		}
 		if (mediaEngine.isPlaying) {
 			mediaEngine._onPause?.() ?? mediaEngine.pause();
 			return;
@@ -145,9 +154,9 @@
 					<button
 						class="mini-player-action mini-player-primary mini-player-control-surface mini-player-control-primary w-14 h-14 flex items-center justify-center rounded-full text-primary"
 						onclick={togglePlayback}
-						aria-label={mediaEngine.isPlaying ? 'Pause' : 'Play'}
+						aria-label={isPlaying ? 'Pause' : 'Play'}
 					>
-						{#if mediaEngine.isPlaying}
+						{#if isPlaying}
 							<Pause class="w-7 h-7" />
 						{:else}
 							<Play class="w-7 h-7 ml-1" />

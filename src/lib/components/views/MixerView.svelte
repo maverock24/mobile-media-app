@@ -8,11 +8,6 @@
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 
-	interface Props {
-		onBack: () => void;
-	}
-	let { onBack }: Props = $props();
-
 	// ── Audio elements (one per deck) ────────────────────────────
 	let audioA: HTMLAudioElement | null = $state(null);
 	let audioB: HTMLAudioElement | null = $state(null);
@@ -172,6 +167,16 @@
 
 	const anyPlaying = $derived(deckA.playing || deckB.playing);
 
+	// ── Sync mixer hooks to MiniPlayer via mixerShared ──────────
+	$effect(() => {
+		mixerShared.anyDeckLoaded = deckA.hasTrack || deckB.hasTrack;
+		mixerShared.anyPlaying = deckA.playing || deckB.playing;
+		mixerShared.playBoth = () => {
+			if (deckA.playing || deckB.playing) pauseBoth();
+			else playBoth();
+		};
+	});
+
 	// ── WakeLock: keep CPU / audio alive when screen is locked ────
 	let _mixerWakeLock: WakeLockSentinel | null = null;
 
@@ -225,32 +230,6 @@
 </script>
 
 <div class="flex flex-col h-full w-full min-w-0 overflow-hidden">
-	<!-- Header -->
-	<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0">
-		<button
-			class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-accent transition-colors shrink-0"
-			onclick={onBack}
-			aria-label="Back to music"
-		>
-			<ArrowLeft class="w-5 h-5" />
-		</button>
-		<div class="min-w-0 flex-1">
-			<h1 class="text-base font-semibold leading-tight">Mixer</h1>
-			<p class="text-xs text-muted-foreground leading-tight">Play two tracks at once with independent volume</p>
-		</div>
-		<button
-			class="px-3 h-10 inline-flex items-center gap-1.5 rounded-full text-sm font-medium border transition-colors {anyPlaying ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-accent'}"
-			onclick={() => (anyPlaying ? pauseBoth() : playBoth())}
-			disabled={!deckA.hasTrack && !deckB.hasTrack}
-		>
-			{#if anyPlaying}
-				<Pause class="w-4 h-4" /> Pause both
-			{:else}
-				<Play class="w-4 h-4" /> Play both
-			{/if}
-		</button>
-	</div>
-
 	<!-- Decks -->
 	<div class="grid grid-cols-2 gap-2 px-3 py-3 shrink-0">
 		{#each [{ id: 'A' as const, deck: deckA }, { id: 'B' as const, deck: deckB }] as { id, deck }}

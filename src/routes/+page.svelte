@@ -183,7 +183,7 @@
 			<RadioView />
 		</div>
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'mixer'}>
-			<MixerView onBack={() => setActiveTab('music')} />
+			<MixerView />
 		</div>
 		{#if activeTab === 'weather'}
 			<div class="absolute inset-0 overflow-y-auto">
