@@ -17,11 +17,13 @@
 		hasTrack: boolean;
 		loading: boolean;
 		playing: boolean;
-		volume: number; // 0..1
+		volume: number;
 		loop: boolean;
+		/** Serializable file reference for persistence across component recreation. */
+		_savedFile: TrackRef | null;
 	}
-	let deckA = $state<DeckState>({ name: '', hasTrack: false, loading: false, playing: false, volume: 0.85, loop: false });
-	let deckB = $state<DeckState>({ name: '', hasTrack: false, loading: false, playing: false, volume: 0.85, loop: false });
+	let deckA = $state<DeckState>({ name: '', hasTrack: false, loading: false, playing: false, volume: 0.85, loop: false, _savedFile: null });
+	let deckB = $state<DeckState>({ name: '', hasTrack: false, loading: false, playing: false, volume: 0.85, loop: false, _savedFile: null });
 	let revokeA: (() => void) | null = null;
 	let revokeB: (() => void) | null = null;
 
@@ -93,7 +95,64 @@
 		return null;
 	}
 
+	// ── Deck persistence (survives component recreation on Android) ──
+	const DECK_STATE_KEY = 'mixer-deck-state';
+
+	interface SavedDeck {
+		file: { source: 'native' | 'drive'; name: string; relativePath: string; path?: string; fileId?: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number; webViewLink?: string };
+		displayName: string;
+		currentTime: number;
+		volume: number;
+		loop: boolean;
+	}
+
+	function saveDeckState() {
+		if (typeof localStorage === 'undefined') return;
+		const state: { A: SavedDeck | null; B: SavedDeck | null } = { A: null, B: null };
+		if (deckA.hasTrack && deckA._savedFile) {
+			state.A = { file: deckA._savedFile, displayName: deckA.name, currentTime: audioA?.currentTime ?? 0, volume: deckA.volume, loop: deckA.loop };
+		}
+		if (deckB.hasTrack && deckB._savedFile) {
+			state.B = { file: deckB._savedFile, displayName: deckB.name, currentTime: audioB?.currentTime ?? 0, volume: deckB.volume, loop: deckB.loop };
+		}
+		try { localStorage.setItem(DECK_STATE_KEY, JSON.stringify(state)); } catch { /* quota */ }
+	}
+
+	async function restoreDeckState() {
+		if (typeof localStorage === 'undefined') return;
+		const raw = localStorage.getItem(DECK_STATE_KEY);
+		if (!raw) return;
+		let parsed: { A: SavedDeck | null; B: SavedDeck | null };
+		try { parsed = JSON.parse(raw); } catch { return; }
+		if (parsed.A) {
+			const file = savedToStoredFile(parsed.A.file);
+			if (file) await loadIntoDeck('A', file, parsed.A.displayName);
+			deckA.volume = parsed.A.volume;
+			deckA.loop = parsed.A.loop;
+			if (audioA) { audioA.volume = parsed.A.volume; audioA.loop = parsed.A.loop; audioA.currentTime = parsed.A.currentTime; }
+		}
+		if (parsed.B) {
+			const file = savedToStoredFile(parsed.B.file);
+			if (file) await loadIntoDeck('B', file, parsed.B.displayName);
+			deckB.volume = parsed.B.volume;
+			deckB.loop = parsed.B.loop;
+			if (audioB) { audioB.volume = parsed.B.volume; audioB.loop = parsed.B.loop; audioB.currentTime = parsed.B.currentTime; }
+		}
+	}
+
+	function savedToStoredFile(s: SavedDeck['file']): StoredAudioFile | null {
+		if (s.source === 'native' && s.path) {
+			return { source: 'native', name: s.name, relativePath: s.relativePath, path: s.path, mimeType: s.mimeType, modifiedAt: s.modifiedAt };
+		}
+		if (s.source === 'drive' && s.fileId) {
+			return { source: 'drive', name: s.name, relativePath: s.relativePath, fileId: s.fileId, mimeType: s.mimeType, modifiedAt: s.modifiedAt, sizeBytes: s.sizeBytes, webViewLink: s.webViewLink };
+		}
+		return null;
+	}
+
 	// ── Deck loading / playback ──────────────────────────────────
+	interface TrackRef { source: 'native' | 'drive'; name: string; relativePath: string; path?: string; fileId?: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number; webViewLink?: string }
+
 	async function loadIntoDeck(which: 'A' | 'B', file: StoredAudioFile, displayName: string) {
 		const deck = which === 'A' ? deckA : deckB;
 		const el = which === 'A' ? audioA : audioB;
@@ -109,6 +168,11 @@
 			deck.name = displayName;
 			deck.hasTrack = true;
 			deck.playing = false;
+			// Save serializable file reference for persistence.
+			if (file.source !== 'web') {
+				deck._savedFile = { source: file.source as 'native' | 'drive', name: file.name, relativePath: file.relativePath, path: (file as any).path, fileId: (file as any).fileId, mimeType: (file as any).mimeType, modifiedAt: (file as any).modifiedAt, sizeBytes: (file as any).sizeBytes, webViewLink: (file as any).webViewLink };
+			}
+			saveDeckState();
 		} catch (e) {
 			addToast({ message: e instanceof Error ? e.message : 'Failed to load track.', type: 'error' });
 		} finally {
@@ -130,6 +194,7 @@
 		if (!el) return;
 		deck.loop = !deck.loop;
 		el.loop = deck.loop;
+		saveDeckState();
 	}
 
 	function stopDeck(which: 'A' | 'B') {
@@ -144,6 +209,7 @@
 		const deck = which === 'A' ? deckA : deckB;
 		deck.volume = value;
 		if (el) el.volume = value;
+		saveDeckState();
 	}
 
 	function playBoth() {
@@ -222,6 +288,7 @@
 	});
 
 	onMount(() => {
+		restoreDeckState();
 		return () => {
 			audioA?.pause();
 			audioB?.pause();
