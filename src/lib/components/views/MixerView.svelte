@@ -5,13 +5,13 @@
 	import { mixerShared } from '$lib/stores/mixerShared.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { resolveStoredFileToUrl } from '$lib/audio/fileResolver';
+	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 
 	interface Props {
 		onBack: () => void;
-		active: boolean;
 	}
-	let { onBack, active }: Props = $props();
+	let { onBack }: Props = $props();
 
 	// ── Audio elements (one per deck) ────────────────────────────
 	let audioA: HTMLAudioElement | null = $state(null);
@@ -116,12 +116,14 @@
 		audioB?.pause();
 	}
 
-	// ── Pause both decks when leaving the mixer view ─────────────
+	// ── Pause mixer decks when the main player (music/podcast/radio) starts ──
+	let _mediaWasPlaying = false;
 	$effect(() => {
-		if (!active) {
+		if (mediaEngine.isPlaying && !_mediaWasPlaying && (deckA.playing || deckB.playing)) {
 			audioA?.pause();
 			audioB?.pause();
 		}
+		_mediaWasPlaying = mediaEngine.isPlaying;
 	});
 
 	const anyPlaying = $derived(deckA.playing || deckB.playing);
@@ -150,7 +152,7 @@
 	}
 
 	$effect(() => {
-		if (active && anyPlaying) {
+		if (anyPlaying) {
 			void acquireMixerWakeLock();
 		} else {
 			void releaseMixerWakeLock();
@@ -161,7 +163,7 @@
 	$effect(() => {
 		if (typeof document !== 'undefined') {
 			const onVisible = () => {
-				if (active && anyPlaying && !_mixerWakeLock) void acquireMixerWakeLock();
+				if (anyPlaying && !_mixerWakeLock) void acquireMixerWakeLock();
 			};
 			document.addEventListener('visibilitychange', onVisible);
 			return () => document.removeEventListener('visibilitychange', onVisible);
