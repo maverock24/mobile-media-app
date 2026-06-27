@@ -33,9 +33,11 @@
 		}
 	});
 
-	const isPlaying = $derived(
-		activeTab === 'mixer' ? mixerShared.anyPlaying : mediaEngine.isPlaying
-	);
+	// Sound is playing if either the mixer decks or the main media engine is active.
+	// The two are mutually exclusive — playBoth() claims audio exclusivity and pauses
+	// main media — so at most one is true at a time, but checking both keeps the
+	// button correct when switching tabs (e.g. opening the mixer while music plays).
+	const isPlaying = $derived(mixerShared.anyPlaying || mediaEngine.isPlaying);
 
 	const visible = $derived(
 		(mediaEngine.item !== null && ownerTab !== null) ||
@@ -68,15 +70,22 @@
 	}
 
 	function togglePlayback() {
-		if (activeTab === 'mixer') {
-			mixerShared.playBoth?.();
+		// Act on whatever is currently producing sound. Mixer decks take precedence
+		// when playing, since starting them pauses the main media engine.
+		if (mixerShared.anyPlaying) {
+			mixerShared.playBoth?.(); // playBoth toggles: playing → pauseBoth
 			return;
 		}
 		if (mediaEngine.isPlaying) {
 			mediaEngine._onPause?.() ?? mediaEngine.pause();
 			return;
 		}
-
+		// Nothing is playing — start the appropriate source. On the mixer tab with a
+		// deck loaded, that's the decks; otherwise resume the main media engine.
+		if (activeTab === 'mixer' && mixerShared.anyDeckLoaded) {
+			mixerShared.playBoth?.();
+			return;
+		}
 		mediaEngine._onPlay?.() ?? mediaEngine.resume();
 	}
 

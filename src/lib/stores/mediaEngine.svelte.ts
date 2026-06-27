@@ -20,7 +20,7 @@ import { addToast } from './toastStore.svelte';
 // Audio exclusivity — only one source (music / podcast) plays at a time.
 // Views register a stop-callback; calling claimAudio pauses the others.
 // ─────────────────────────────────────────────────────────────────────────────
-type AudioSourceId = MediaSource | 'essay';
+type AudioSourceId = MediaSource | 'essay' | 'mixer';
 const _stopFns: Partial<Record<AudioSourceId, () => void>> = {};
 
 export function registerAudioSource(id: AudioSourceId, stopFn: () => void): void {

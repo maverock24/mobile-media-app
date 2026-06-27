@@ -7,7 +7,7 @@
 	import { getJSON, setJSON } from '$lib/utils/storage';
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { resolveStoredFileToUrl } from '$lib/audio/fileResolver';
-	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 
 	// ── Audio elements (one per deck) ────────────────────────────
@@ -183,8 +183,10 @@
 	}
 
 	function playBoth() {
-		// Stop the main player so mixer and main media don't overlap.
-		mediaEngine.pause();
+		// Claim audio exclusivity so the main player (music/podcast/radio) pauses and
+		// cannot overlap the mixer decks. This also lets other sources stop the decks
+		// via claimAudio() when they start.
+		claimAudio('mixer');
 		if (deckA.hasTrack) audioA?.play().catch(() => {});
 		if (deckB.hasTrack) audioB?.play().catch(() => {});
 	}
@@ -193,19 +195,30 @@
 		audioB?.pause();
 	}
 
-	// ── Pause mixer decks when the main player (music/podcast/radio) starts ──
-	let _mediaWasPlaying = false;
-	$effect(() => {
-		if (mediaEngine.isPlaying && !_mediaWasPlaying && (deckA.playing || deckB.playing)) {
-			audioA?.pause();
-			audioB?.pause();
-		}
-		_mediaWasPlaying = mediaEngine.isPlaying;
-	});
-
 	const anyPlaying = $derived(deckA.playing || deckB.playing);
 
+	// ── Register mixer decks in the audio-exclusivity system ─────────────────
+	// When another source (music/podcast/radio) calls claimAudio(), the decks pause
+	// so mixer and main media never overlap. This replaces the old _mediaWasPlaying
+	// heuristic and makes the global playing-flag ownership unambiguous.
+	$effect(() => {
+		// Read audioA/audioB so the registered callback always closes over the
+		// current elements (bind:this assigns them after mount).
+		const a = audioA;
+		const b = audioB;
+		registerAudioSource('mixer', () => {
+			a?.pause();
+			b?.pause();
+		});
+	});
+
 	// ── Sync mixer hooks to MiniPlayer via mixerShared ──────────
+	// The mixer mirrors deck playback into mediaEngine.isPlaying so the Android
+	// foreground media service stays alive while decks are playing. Because the
+	// decks are now part of the exclusivity system, main media is always paused
+	// while decks play, so releasing the flag on the play→stop transition is safe
+	// and never clobbers an independently playing source.
+	let _decksWerePlaying = false;
 	$effect(() => {
 		mixerShared.anyDeckLoaded = deckA.hasTrack || deckB.hasTrack;
 		mixerShared.anyPlaying = deckA.playing || deckB.playing;
@@ -214,11 +227,15 @@
 			else playBoth();
 		};
 
-		// Keep Android foreground service alive while mixer is playing.
-		// Without it the OS will kill the WebView, losing loaded tracks.
-		if (deckA.playing || deckB.playing) {
+		const decksPlaying = deckA.playing || deckB.playing;
+		if (decksPlaying) {
 			mediaEngine.setPlaying(true);
+		} else if (_decksWerePlaying) {
+			// Decks just stopped and main media was paused by exclusivity — release
+			// the global playing flag so the UI reflects the stopped state.
+			mediaEngine.setPlaying(false);
 		}
+		_decksWerePlaying = decksPlaying;
 	});
 
 	// ── WakeLock: keep CPU / audio alive when screen is locked ────
