@@ -14,8 +14,7 @@ Validation notes:
 ## AI Context Check
 
 - [ ] No AI context updates were needed
-- [ ] Updated `.github/copilot-instructions.md`
-- [ ] Updated relevant file in `.github/instructions/`
+- [ ] Updated `AGENTS.md`
 - [ ] Updated `guardrails.md`
 - [ ] Updated `README.md` or `CONTRIBUTING.md`
 - [ ] Updated `.mcp.json`
