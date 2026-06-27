@@ -284,7 +284,7 @@
 		const deck = which === 'A' ? deckA : deckB;
 		if (!el || !deck.hasTrack) return;
 		if (el.paused) el.play().catch(() => {});
-		else el.pause();
+		else { el.pause(); syncMixerPlayingFlag(); }
 	}
 
 	function toggleLoop(which: 'A' | 'B') {
@@ -302,6 +302,7 @@
 		if (!el) return;
 		el.pause();
 		el.currentTime = 0;
+		syncMixerPlayingFlag();
 		persistActiveSession();
 	}
 
@@ -317,6 +318,7 @@
 		deck._savedFile = null;
 		if (which === 'A') { revokeA?.(); revokeA = null; }
 		else { revokeB?.(); revokeB = null; }
+		syncMixerPlayingFlag();
 	}
 
 	function setVolume(which: 'A' | 'B', value: number) {
@@ -339,6 +341,18 @@
 	function pauseBoth() {
 		audioA?.pause();
 		audioB?.pause();
+		syncMixerPlayingFlag();
+	}
+
+	/** Release the global playing flag when the mixer decks stop on user action,
+	 *  but ONLY if no other source (music/podcast/radio) is currently playing.
+	 *  claimAudio() from another source pauses the decks too, and in that case
+	 *  mediaEngine.isPlaying reflects the new source — we must not clear it. */
+	function syncMixerPlayingFlag() {
+		const decksPlaying = deckA.playing || deckB.playing;
+		if (!decksPlaying && !mediaEngine.isPlaying) {
+			mediaEngine.setPlaying(false);
+		}
 	}
 
 	const anyPlaying = $derived(deckA.playing || deckB.playing);
@@ -382,7 +396,6 @@
 	// decks are now part of the exclusivity system, main media is always paused
 	// while decks play, so releasing the flag on the play→stop transition is safe
 	// and never clobbers an independently playing source.
-	let _decksWerePlaying = false;
 	$effect(() => {
 		mixerShared.anyDeckLoaded = deckA.hasTrack || deckB.hasTrack;
 		mixerShared.anyPlaying = deckA.playing || deckB.playing;
@@ -390,16 +403,6 @@
 			if (deckA.playing || deckB.playing) pauseBoth();
 			else playBoth();
 		};
-
-		const decksPlaying = deckA.playing || deckB.playing;
-		if (decksPlaying) {
-			mediaEngine.setPlaying(true);
-		} else if (_decksWerePlaying) {
-			// Decks just stopped and main media was paused by exclusivity — release
-			// the global playing flag so the UI reflects the stopped state.
-			mediaEngine.setPlaying(false);
-		}
-		_decksWerePlaying = decksPlaying;
 	});
 
 	// ── WakeLock: keep CPU / audio alive when screen is locked ────
@@ -694,6 +697,6 @@
 	</div>
 
 	<!-- Hidden audio elements -->
-	<audio bind:this={audioA} onplay={() => (deckA.playing = true)} onpause={() => (deckA.playing = false)} onended={() => (deckA.playing = false)} preload="none"></audio>
-	<audio bind:this={audioB} onplay={() => (deckB.playing = true)} onpause={() => (deckB.playing = false)} onended={() => (deckB.playing = false)} preload="none"></audio>
+	<audio bind:this={audioA} onplay={() => { deckA.playing = true; mediaEngine.setPlaying(true); }} onpause={() => { deckA.playing = false; }} onended={() => { deckA.playing = false; }} preload="none"></audio>
+	<audio bind:this={audioB} onplay={() => { deckB.playing = true; mediaEngine.setPlaying(true); }} onpause={() => { deckB.playing = false; }} onended={() => { deckB.playing = false; }} preload="none"></audio>
 </div>
