@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ArrowLeft, Folder, Play, Pause, Square, Volume2, ListMusic, Star, ChevronRight, Repeat } from 'lucide-svelte';
+	import { ArrowLeft, Folder, Play, Pause, Square, Volume2, ListMusic, Star, ChevronRight, Repeat, Save, Download, Trash2, Clock } from 'lucide-svelte';
 	import { type BrowseEntry, type StoredAudioFile } from '$lib/stores/library.svelte';
 	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
+	import { formatClock as formatTime } from '$lib/models/music';
 	import { mixerShared } from '$lib/stores/mixerShared.svelte';
 	import { getJSON, setJSON } from '$lib/utils/storage';
 	import { musicSettings } from '$lib/stores/settings.svelte';
@@ -30,7 +31,7 @@
 	let revokeB: (() => void) | null = null;
 
 	// ── Library browser (independent navigation, data from Music tab's allFiles) ──
-	type PickerMode = 'library' | 'favorites';
+	type PickerMode = 'library' | 'favorites' | 'sessions';
 	let mode = $state<PickerMode>('library');
 
 	// Independent folder path for the mixer — computed from allFiles, not synced from Music tab.
@@ -73,7 +74,7 @@
 	const DECK_STATE_KEY = 'mixer-deck-state';
 
 	interface SavedDeck {
-		file: { source: 'native' | 'drive'; name: string; relativePath: string; path?: string; fileId?: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number; webViewLink?: string };
+		file: { source: 'native' | 'drive' | 'web'; name: string; relativePath: string; path?: string; fileId?: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number; webViewLink?: string };
 		displayName: string;
 		currentTime: number;
 		volume: number;
@@ -91,23 +92,62 @@
 		setJSON(DECK_STATE_KEY, state);
 	}
 
+	/** Snapshot the current decks (file, position, volume, loop) into a {A,B} pair. */
+	function captureDeckSnapshot(): { A: SavedDeck | null; B: SavedDeck | null } {
+		const A = deckA.hasTrack && deckA._savedFile
+			? { file: deckA._savedFile, displayName: deckA.name, currentTime: audioA?.currentTime ?? 0, volume: deckA.volume, loop: deckA.loop }
+			: null;
+		const B = deckB.hasTrack && deckB._savedFile
+			? { file: deckB._savedFile, displayName: deckB.name, currentTime: audioB?.currentTime ?? 0, volume: deckB.volume, loop: deckB.loop }
+			: null;
+		return { A, B };
+	}
+
+	/** Resolve a saved deck file reference back to a playable StoredAudioFile.
+	 *  Native and Drive refs carry enough to resolve directly. Web refs can't
+	 *  serialise the File object, so we match against the currently-loaded library
+	 *  by path/name (the library must be loaded for web sessions to restore). */
+	function resolveSessionFile(ref: SavedDeck['file']): StoredAudioFile | null {
+		if (ref.source === 'web') {
+			const byPath = mixerShared.allFiles.find((f) => f.relativePath === ref.relativePath && f.name === ref.name);
+			if (byPath) return byPath;
+			const byName = mixerShared.allFiles.find((f) => f.name === ref.name);
+			return byName ?? null;
+		}
+		return savedToStoredFile(ref);
+	}
+
+	/** Apply a deck snapshot (file, position, volume, loop) to both decks. Used both for
+	 *  restoring on mount and for loading a saved session. Replaces the current decks. */
+	async function loadDeckSnapshot(snapshot: { A: SavedDeck | null; B: SavedDeck | null }) {
+		// Pause current playback before swapping decks
+		audioA?.pause();
+		audioB?.pause();
+		if (!snapshot.A && deckA.hasTrack) clearDeck('A');
+		if (!snapshot.B && deckB.hasTrack) clearDeck('B');
+		if (snapshot.A) {
+			const file = resolveSessionFile(snapshot.A.file);
+			if (file) await loadIntoDeck('A', file, snapshot.A.displayName);
+			else addToast({ message: `Deck A track “${snapshot.A.displayName}” is not in the loaded library.`, type: 'warning' });
+			deckA.volume = snapshot.A.volume;
+			deckA.loop = snapshot.A.loop;
+			if (audioA) { audioA.volume = snapshot.A.volume; audioA.loop = snapshot.A.loop; audioA.currentTime = snapshot.A.currentTime; }
+		}
+		if (snapshot.B) {
+			const file = resolveSessionFile(snapshot.B.file);
+			if (file) await loadIntoDeck('B', file, snapshot.B.displayName);
+			else addToast({ message: `Deck B track “${snapshot.B.displayName}” is not in the loaded library.`, type: 'warning' });
+			deckB.volume = snapshot.B.volume;
+			deckB.loop = snapshot.B.loop;
+			if (audioB) { audioB.volume = snapshot.B.volume; audioB.loop = snapshot.B.loop; audioB.currentTime = snapshot.B.currentTime; }
+		}
+		saveDeckState();
+	}
+
 	async function restoreDeckState() {
 		const parsed = getJSON<{ A: SavedDeck | null; B: SavedDeck | null }>(DECK_STATE_KEY, { A: null, B: null });
 		if (!parsed.A && !parsed.B) return;
-		if (parsed.A) {
-			const file = savedToStoredFile(parsed.A.file);
-			if (file) await loadIntoDeck('A', file, parsed.A.displayName);
-			deckA.volume = parsed.A.volume;
-			deckA.loop = parsed.A.loop;
-			if (audioA) { audioA.volume = parsed.A.volume; audioA.loop = parsed.A.loop; audioA.currentTime = parsed.A.currentTime; }
-		}
-		if (parsed.B) {
-			const file = savedToStoredFile(parsed.B.file);
-			if (file) await loadIntoDeck('B', file, parsed.B.displayName);
-			deckB.volume = parsed.B.volume;
-			deckB.loop = parsed.B.loop;
-			if (audioB) { audioB.volume = parsed.B.volume; audioB.loop = parsed.B.loop; audioB.currentTime = parsed.B.currentTime; }
-		}
+		await loadDeckSnapshot(parsed);
 	}
 
 	function savedToStoredFile(s: SavedDeck['file']): StoredAudioFile | null {
@@ -120,8 +160,92 @@
 		return null;
 	}
 
+	// ── Mixer sessions — save / load full deck snapshots ─────────────
+	const SESSIONS_KEY = 'mixer-sessions';
+	/** localStorage key for the id of the session currently loaded into the decks,
+	 *  so live deck changes (position/volume/loop) auto-persist back into it. */
+	const ACTIVE_SESSION_KEY = 'mixer-active-session';
+
+	interface MixerSession {
+		id: string;
+		name: string;
+		createdAt: number;
+		updatedAt: number;
+		A: SavedDeck | null;
+		B: SavedDeck | null;
+	}
+
+	let sessions = $state<MixerSession[]>([]);
+	/** Id of the session whose decks are currently loaded. Null when the decks don't
+	 *  correspond to any saved session (e.g. fresh load, or after clearing). */
+	let activeSessionId = $state<string | null>(null);
+	let newSessionName = $state('');
+
+	function loadSessions() {
+		sessions = getJSON<MixerSession[]>(SESSIONS_KEY, []);
+		activeSessionId = getJSON<string | null>(ACTIVE_SESSION_KEY, null);
+	}
+
+	function persistSessions() {
+		setJSON(SESSIONS_KEY, sessions);
+	}
+
+	function persistActiveSessionId() {
+		setJSON(ACTIVE_SESSION_KEY, activeSessionId);
+	}
+
+	/** Write the current live deck state (position, volume, loop, tracks) back into the
+	 *  active session, if any. Called on deck mutations and when another audio source
+	 *  (podcast/radio/music) takes over so the session always reflects the last state. */
+	function persistActiveSession() {
+		if (!activeSessionId) return;
+		const snapshot = captureDeckSnapshot();
+		sessions = sessions.map((s) =>
+			s.id === activeSessionId
+				? { ...s, A: snapshot.A, B: snapshot.B, updatedAt: Date.now() }
+				: s
+		);
+		persistSessions();
+	}
+
+	function saveCurrentSession() {
+		const snapshot = captureDeckSnapshot();
+		if (!snapshot.A && !snapshot.B) {
+			addToast({ message: 'Load at least one track into the mixer before saving a session.', type: 'info' });
+			return;
+		}
+		const name = newSessionName.trim() || `Session ${sessions.length + 1}`;
+		const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+		const now = Date.now();
+		sessions = [{ id, name, createdAt: now, updatedAt: now, ...snapshot }, ...sessions];
+		persistSessions();
+		// The freshly saved session becomes the active one.
+		activeSessionId = id;
+		persistActiveSessionId();
+		newSessionName = '';
+		addToast({ message: `Saved session “${name}”`, type: 'info' });
+	}
+
+	async function loadSession(session: MixerSession) {
+		// Persist the outgoing session's live state before swapping decks.
+		persistActiveSession();
+		await loadDeckSnapshot({ A: session.A, B: session.B });
+		activeSessionId = session.id;
+		persistActiveSessionId();
+		addToast({ message: `Loaded session “${session.name}”`, type: 'info' });
+	}
+
+	function deleteSession(session: MixerSession) {
+		sessions = sessions.filter((s) => s.id !== session.id);
+		persistSessions();
+		if (activeSessionId === session.id) {
+			activeSessionId = null;
+			persistActiveSessionId();
+		}
+	}
+
 	// ── Deck loading / playback ──────────────────────────────────
-	interface TrackRef { source: 'native' | 'drive'; name: string; relativePath: string; path?: string; fileId?: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number; webViewLink?: string }
+	interface TrackRef { source: 'native' | 'drive' | 'web'; name: string; relativePath: string; path?: string; fileId?: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number; webViewLink?: string }
 
 	async function loadIntoDeck(which: 'A' | 'B', file: StoredAudioFile, displayName: string) {
 		const deck = which === 'A' ? deckA : deckB;
@@ -138,11 +262,16 @@
 			deck.name = displayName;
 			deck.hasTrack = true;
 			deck.playing = false;
-			// Save serializable file reference for persistence.
-			if (file.source !== 'web') {
+			// Save a serializable file reference for persistence. Web File objects
+			// cannot be serialised, so for web sources we store only name/relativePath
+			// and re-resolve the actual file from the loaded library at load time.
+			if (file.source === 'web') {
+				deck._savedFile = { source: 'web', name: file.name, relativePath: file.relativePath };
+			} else {
 				deck._savedFile = { source: file.source as 'native' | 'drive', name: file.name, relativePath: file.relativePath, path: (file as any).path, fileId: (file as any).fileId, mimeType: (file as any).mimeType, modifiedAt: (file as any).modifiedAt, sizeBytes: (file as any).sizeBytes, webViewLink: (file as any).webViewLink };
 			}
 			saveDeckState();
+			persistActiveSession();
 		} catch (e) {
 			addToast({ message: e instanceof Error ? e.message : 'Failed to load track.', type: 'error' });
 		} finally {
@@ -165,6 +294,7 @@
 		deck.loop = !deck.loop;
 		el.loop = deck.loop;
 		saveDeckState();
+		persistActiveSession();
 	}
 
 	function stopDeck(which: 'A' | 'B') {
@@ -172,6 +302,21 @@
 		if (!el) return;
 		el.pause();
 		el.currentTime = 0;
+		persistActiveSession();
+	}
+
+	/** Unload a deck entirely, releasing its object URL. */
+	function clearDeck(which: 'A' | 'B') {
+		const el = which === 'A' ? audioA : audioB;
+		const deck = which === 'A' ? deckA : deckB;
+		if (el) { el.pause(); el.removeAttribute('src'); el.load(); }
+		deck.hasTrack = false;
+		deck.name = '';
+		deck.playing = false;
+		deck.loop = false;
+		deck._savedFile = null;
+		if (which === 'A') { revokeA?.(); revokeA = null; }
+		else { revokeB?.(); revokeB = null; }
 	}
 
 	function setVolume(which: 'A' | 'B', value: number) {
@@ -180,6 +325,7 @@
 		deck.volume = value;
 		if (el) el.volume = value;
 		saveDeckState();
+		persistActiveSession();
 	}
 
 	function playBoth() {
@@ -199,17 +345,35 @@
 
 	// ── Register mixer decks in the audio-exclusivity system ─────────────────
 	// When another source (music/podcast/radio) calls claimAudio(), the decks pause
-	// so mixer and main media never overlap. This replaces the old _mediaWasPlaying
-	// heuristic and makes the global playing-flag ownership unambiguous.
+	// so mixer and main media never overlap. We also persist the active session's
+	// live state here — the decks are about to be paused/stopped, so capture the
+	// latest position/volume/loop before that happens.
 	$effect(() => {
 		// Read audioA/audioB so the registered callback always closes over the
 		// current elements (bind:this assigns them after mount).
 		const a = audioA;
 		const b = audioB;
 		registerAudioSource('mixer', () => {
+			persistActiveSession();
 			a?.pause();
 			b?.pause();
 		});
+	});
+
+	// ── Periodically persist the active session's playback position ──────────
+	// position changes continuously during playback; save it every few seconds so a
+	// sudden handoff (another source starting, app backgrounded) doesn't lose it.
+	$effect(() => {
+		if (!activeSessionId) return;
+		const timer = window.setInterval(persistActiveSession, 3000);
+		return () => window.clearInterval(timer);
+	});
+
+	// Persist the active session when the mixer view is torn down (tab hidden does
+	// not unmount, but Android may kill the WebView; onMount cleanup runs on real
+	// unmount / route change).
+	onMount(() => {
+		// Ensure sessions and the active id are loaded before restoring.
 	});
 
 	// ── Sync mixer hooks to MiniPlayer via mixerShared ──────────
@@ -281,8 +445,10 @@
 	});
 
 	onMount(() => {
+		loadSessions();
 		restoreDeckState();
 		return () => {
+			persistActiveSession();
 			audioA?.pause();
 			audioB?.pause();
 			revokeA?.();
@@ -362,6 +528,12 @@
 		>
 			<Star class="w-4 h-4" /> Favorites
 		</button>
+		<button
+			class="flex-1 py-2 rounded-lg text-sm border transition-colors inline-flex items-center justify-center gap-1.5 {mode === 'sessions' ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
+			onclick={() => (mode = 'sessions')}
+		>
+			<Save class="w-4 h-4" /> Sessions
+		</button>
 	</div>
 
 	<!-- Picker list -->
@@ -421,7 +593,7 @@
 					{/if}
 				{/if}
 			{/if}
-		{:else}
+		{:else if mode === 'favorites'}
 			{#if resolvableFavorites.length === 0}
 				<p class="text-sm text-muted-foreground text-center py-8">No favorite tracks yet. Star tracks in the Music tab to mix them quickly.</p>
 			{:else}
@@ -435,6 +607,86 @@
 						</div>
 						<button class="w-8 h-8 rounded-full border border-primary/40 text-primary text-xs font-bold hover:bg-primary/10 shrink-0 disabled:opacity-40" disabled={!stored} onclick={() => stored && loadIntoDeck('A', stored, fav.title || prettyTitle(fav.name))} aria-label="Load into deck A">A</button>
 						<button class="w-8 h-8 rounded-full border border-primary/40 text-primary text-xs font-bold hover:bg-primary/10 shrink-0 disabled:opacity-40" disabled={!stored} onclick={() => stored && loadIntoDeck('B', stored, fav.title || prettyTitle(fav.name))} aria-label="Load into deck B">B</button>
+					</div>
+				{/each}
+			{/if}
+		{:else}
+			<!-- Sessions: save / load full mixer deck snapshots -->
+			<div class="flex items-center gap-2 py-2">
+				<input
+					type="text"
+					bind:value={newSessionName}
+					placeholder="Session name (optional)"
+					class="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:border-primary"
+					onkeydown={(e) => e.key === 'Enter' && saveCurrentSession()}
+					aria-label="Session name"
+				/>
+				<button
+					class="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+					onclick={saveCurrentSession}
+					aria-label="Save current mixer session"
+				>
+					<Save class="w-4 h-4" /> Save
+				</button>
+			</div>
+
+			{#if sessions.length === 0}
+				<p class="text-sm text-muted-foreground text-center py-8">No saved sessions yet. Load tracks into the decks above, then save them to switch between mixes.</p>
+			{:else}
+				{#each sessions as session (session.id)}
+					<div class="rounded-lg border bg-card p-3 mb-2 space-y-2 {activeSessionId === session.id ? 'border-primary' : ''}">
+						<div class="flex items-center justify-between gap-2">
+							<p class="text-sm font-semibold truncate flex-1 min-w-0">
+								{session.name}
+								{#if activeSessionId === session.id}<span class="text-xs text-primary font-normal ml-1">· active</span>{/if}
+							</p>
+							<div class="flex items-center gap-1 shrink-0">
+								<button
+									class="w-8 h-8 inline-flex items-center justify-center rounded-full text-primary hover:bg-primary/10 transition-colors"
+									onclick={() => loadSession(session)}
+									aria-label={`Load session ${session.name}`}
+									title="Load session"
+								>
+									<Download class="w-4 h-4" />
+								</button>
+								<button
+									class="w-8 h-8 inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-accent transition-colors"
+									onclick={() => deleteSession(session)}
+									aria-label={`Delete session ${session.name}`}
+									title="Delete session"
+								>
+									<Trash2 class="w-4 h-4" />
+								</button>
+							</div>
+						</div>
+						<div class="space-y-1 text-xs text-muted-foreground">
+							{#if session.A}
+								<div class="flex items-center gap-2">
+									<span class="font-bold text-primary w-4">A</span>
+									<span class="truncate flex-1 min-w-0">{session.A.displayName}</span>
+									<span class="tabular-nums shrink-0">{formatTime(session.A.currentTime)}</span>
+									<span class="shrink-0">vol {Math.round(session.A.volume * 100)}</span>
+									{#if session.A.loop}<Repeat class="w-3 h-3 text-primary shrink-0" />{/if}
+								</div>
+							{:else}
+								<div class="flex items-center gap-2"><span class="font-bold text-muted-foreground w-4">A</span><span>empty</span></div>
+							{/if}
+							{#if session.B}
+								<div class="flex items-center gap-2">
+									<span class="font-bold text-primary w-4">B</span>
+									<span class="truncate flex-1 min-w-0">{session.B.displayName}</span>
+									<span class="tabular-nums shrink-0">{formatTime(session.B.currentTime)}</span>
+									<span class="shrink-0">vol {Math.round(session.B.volume * 100)}</span>
+									{#if session.B.loop}<Repeat class="w-3 h-3 text-primary shrink-0" />{/if}
+								</div>
+							{:else}
+								<div class="flex items-center gap-2"><span class="font-bold text-muted-foreground w-4">B</span><span>empty</span></div>
+							{/if}
+						</div>
+						<div class="flex items-center gap-1 text-[11px] text-muted-foreground">
+							<Clock class="w-3 h-3" />
+							<span>{new Date(session.updatedAt).toLocaleString()}</span>
+						</div>
 					</div>
 				{/each}
 			{/if}
