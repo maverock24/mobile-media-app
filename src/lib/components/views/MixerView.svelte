@@ -2,7 +2,9 @@
 	import { onMount } from 'svelte';
 	import { ArrowLeft, Folder, Play, Pause, Square, Volume2, ListMusic, Star, ChevronRight, Repeat } from 'lucide-svelte';
 	import { type BrowseEntry, type StoredAudioFile } from '$lib/stores/library.svelte';
+	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
 	import { mixerShared } from '$lib/stores/mixerShared.svelte';
+	import { getJSON, setJSON } from '$lib/utils/storage';
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { resolveStoredFileToUrl } from '$lib/audio/fileResolver';
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
@@ -37,34 +39,6 @@
 	const allFiles = $derived(mixerShared.allFiles);
 	const browseLoading = $derived(mixerShared.browseLoading);
 
-	function getRelativePath(file: StoredAudioFile): string {
-		return file.relativePath && file.relativePath.length > 0 ? file.relativePath : file.name;
-	}
-
-	function buildBrowseEntries(files: StoredAudioFile[], path: string[]): BrowseEntry[] {
-		const prefix = path.length > 0 ? path.join('/') + '/' : '';
-		const folderCounts = new Map<string, number>();
-		const directFiles: BrowseEntry[] = [];
-		for (const file of files) {
-			const normalized = getRelativePath(file);
-			if (!normalized.startsWith(prefix)) continue;
-			const remaining = normalized.slice(prefix.length);
-			if (!remaining) continue;
-			const slash = remaining.indexOf('/');
-			if (slash === -1) {
-				directFiles.push({ kind: 'file', name: remaining, file });
-				continue;
-			}
-			const folderName = remaining.slice(0, slash);
-			folderCounts.set(folderName, (folderCounts.get(folderName) ?? 0) + 1);
-		}
-		const folders: BrowseEntry[] = Array.from(folderCounts.entries(), ([name, count]) => ({
-			kind: 'folder', name, count,
-		}));
-		folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-		directFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-		return [...folders, ...directFiles];
-	}
 
 	const entries = $derived(buildBrowseEntries(allFiles, browsePath));
 	const folders = $derived(entries.filter((e): e is Extract<BrowseEntry, { kind: 'folder' }> => e.kind === 'folder'));
@@ -107,7 +81,6 @@
 	}
 
 	function saveDeckState() {
-		if (typeof localStorage === 'undefined') return;
 		const state: { A: SavedDeck | null; B: SavedDeck | null } = { A: null, B: null };
 		if (deckA.hasTrack && deckA._savedFile) {
 			state.A = { file: deckA._savedFile, displayName: deckA.name, currentTime: audioA?.currentTime ?? 0, volume: deckA.volume, loop: deckA.loop };
@@ -115,15 +88,12 @@
 		if (deckB.hasTrack && deckB._savedFile) {
 			state.B = { file: deckB._savedFile, displayName: deckB.name, currentTime: audioB?.currentTime ?? 0, volume: deckB.volume, loop: deckB.loop };
 		}
-		try { localStorage.setItem(DECK_STATE_KEY, JSON.stringify(state)); } catch { /* quota */ }
+		setJSON(DECK_STATE_KEY, state);
 	}
 
 	async function restoreDeckState() {
-		if (typeof localStorage === 'undefined') return;
-		const raw = localStorage.getItem(DECK_STATE_KEY);
-		if (!raw) return;
-		let parsed: { A: SavedDeck | null; B: SavedDeck | null };
-		try { parsed = JSON.parse(raw); } catch { return; }
+		const parsed = getJSON<{ A: SavedDeck | null; B: SavedDeck | null }>(DECK_STATE_KEY, { A: null, B: null });
+		if (!parsed.A && !parsed.B) return;
 		if (parsed.A) {
 			const file = savedToStoredFile(parsed.A.file);
 			if (file) await loadIntoDeck('A', file, parsed.A.displayName);

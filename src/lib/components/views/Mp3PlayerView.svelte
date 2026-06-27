@@ -7,6 +7,8 @@
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
+	import { bytesFromBase64, arrayBufferFromBytes, blobFromNativePath } from '$lib/audio/fileResolver';
+	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
 	import {
 		type StoredAudioFile,
 		type BrowseEntry,
@@ -716,11 +718,6 @@
 	function pathToString(path: string[]): string | undefined {
 		return path.length > 0 ? path.join('/') : undefined;
 	}
-
-	function getRelativePath(file: StoredAudioFile): string {
-		return file.relativePath && file.relativePath.length > 0 ? file.relativePath : file.name;
-	}
-
 	function createFavoriteTrack(file: StoredAudioFile): FavoriteTrack {
 		const parsed = parseFilename(file.name);
 		const baseFavorite = {
@@ -917,38 +914,6 @@
 			return prefix ? relativePath.startsWith(prefix) : true;
 		}));
 	}
-
-	function buildBrowseEntriesFromSnapshot(files: StoredAudioFile[], path: string[]): BrowseEntry[] {
-		const prefix = path.length > 0 ? path.join('/') + '/' : '';
-		const folderCounts = new Map<string, number>();
-		const directFiles: BrowseEntry[] = [];
-
-		for (const file of files) {
-			const normalized = getRelativePath(file);
-			if (!normalized.startsWith(prefix)) continue;
-			const remaining = normalized.slice(prefix.length);
-			if (!remaining) continue;
-			const slash = remaining.indexOf('/');
-			if (slash === -1) {
-				directFiles.push({ kind: 'file', name: remaining, file });
-				continue;
-			}
-
-			const folderName = remaining.slice(0, slash);
-			folderCounts.set(folderName, (folderCounts.get(folderName) ?? 0) + 1);
-		}
-
-		const folders: BrowseEntry[] = Array.from(folderCounts.entries(), ([name, count]) => ({
-			kind: 'folder',
-			name,
-			count,
-		}));
-
-		folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-		directFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-		return [...folders, ...directFiles];
-	}
-
 	async function yieldScanToUi(): Promise<void> {
 		if (typeof window === 'undefined') return;
 		await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
@@ -1061,54 +1026,6 @@
 		musicSettings.lastTrackIndex = index;
 		musicSettings.lastTrackKey = tracks[index] ? getTrackKey(tracks[index].source) : '';
 	}
-
-	function bytesFromBase64(data: string): Uint8Array {
-		const base64 = data.includes(',') ? (data.split(',').pop() ?? '') : data;
-		const normalized = base64.replace(/\s/g, '');
-		const binary = atob(normalized);
-		const bytes = new Uint8Array(binary.length);
-
-		for (let index = 0; index < binary.length; index += 1) {
-			bytes[index] = binary.charCodeAt(index);
-		}
-
-		return bytes;
-	}
-
-	function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
-		return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-	}
-
-	async function blobFromNativePath(path: string, mimeType?: string): Promise<Blob> {
-		try {
-			const result = await Filesystem.readFile({ path });
-			if (result.data instanceof Blob) {
-				return result.data;
-			}
-
-			return new Blob([arrayBufferFromBytes(bytesFromBase64(result.data))], {
-				type: mimeType ?? 'audio/mpeg',
-			});
-		} catch {
-			// Fall back to HTTP bridge reads for file:// paths if native read fails.
-		}
-
-		const candidates = [Capacitor.convertFileSrc(path), path];
-
-		for (const candidate of candidates) {
-			try {
-				const response = await fetch(candidate);
-				if (response.ok) {
-					return await response.blob();
-				}
-			} catch {
-				// try next candidate
-			}
-		}
-
-		throw new Error(`Unable to read selected file at ${path}`);
-	}
-
 	const formatDriveAuthError = formatGoogleDriveAuthError;
 
 	function hasPendingDriveFolderPickerIntent(): boolean {
@@ -1702,7 +1619,7 @@
 			});
 			browseEntries = files.map((file) => ({ kind: 'file', name: file.name, file }));
 		} else if (allFiles.length > 0) {
-			const snapshot = buildBrowseEntriesFromSnapshot(allFiles, path);
+			const snapshot = buildBrowseEntries(allFiles, path);
 			if (snapshot.length > 0 || libraryScanPromise === null) {
 				// Index is complete or partial but has entries for this path — use it instantly
 				browseEntries = snapshot;

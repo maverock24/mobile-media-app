@@ -59,11 +59,22 @@ public class MediaControlsPlugin extends Plugin {
 		playbackServiceRequested = true;
 		Context context = getContext();
 		Intent intent = new Intent(context, MediaPlaybackService.class);
-		context.startService(intent);
-		
-		// In a real production app, we'd use bindService to get the instance.
-		// For this MVP, we'll use a static setter in the service or just a singleton pattern.
-		// But let's assume we can get it via a static reference for simplicity in this bridge.
+		// Android Auto sends the first play command while the app is backgrounded.
+		// context.startService() throws BackgroundServiceStartNotAllowedException on
+		// Android 8+ when started from the background. A MediaBrowserService is an
+		// allowed background start target via startForegroundService(), so use it.
+		try {
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+				context.startForegroundService(intent);
+			} else {
+				context.startService(intent);
+			}
+		} catch (Exception e) {
+			// If even startForegroundService() is rejected (OEM background-start
+			// limits), the MediaSession is still updated via updateService() once the
+			// app returns to foreground. Don't crash.
+			playbackServiceRequested = false;
+		}
 	}
 
 	public static void setServiceInstance(MediaPlaybackService service) {
@@ -71,6 +82,14 @@ public class MediaControlsPlugin extends Plugin {
 			instance.playbackService = service;
 			instance.playbackServiceRequested = false;
 			instance.updateService();
+		}
+	}
+
+	/** Detach a destroyed service so the plugin never calls into a dead instance. */
+	public static void clearServiceInstance(MediaPlaybackService service) {
+		if (instance != null && instance.playbackService == service) {
+			instance.playbackService = null;
+			instance.playbackServiceRequested = false;
 		}
 	}
 
@@ -158,8 +177,13 @@ public class MediaControlsPlugin extends Plugin {
 		hasPrevious = false;
 		
 		if (playbackService != null) {
-			playbackService.updateNotification("", "", "", false);
-			playbackService.getMediaSession().setActive(false);
+			// Tear down the foreground service entirely — this is the only path that
+			// should drop foreground state. Keeping it foreground while a track is
+			// loaded (even paused) is what stops Android from killing the process
+			// when the screen is locked.
+			playbackService.stopPlayback();
+			playbackService = null;
+			playbackServiceRequested = false;
 		}
 		call.resolve();
 	}
@@ -183,7 +207,18 @@ public class MediaControlsPlugin extends Plugin {
 			startPlaybackService();
 			return;
 		}
+		try {
+			updateServiceInternal();
+		} catch (Exception e) {
+			// Any failure touching the service (IllegalStateException on a dead
+			// service, SecurityException, …) must not crash the WebView. Detach the
+			// bad reference so the next call re-binds a fresh service.
+			playbackService = null;
+			playbackServiceRequested = false;
+		}
+	}
 
+	private void updateServiceInternal() {
 		// 1. Update MediaSession Metadata
 		MediaMetadataCompat.Builder metaBuilder = new MediaMetadataCompat.Builder()
 			.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)

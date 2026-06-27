@@ -11,18 +11,20 @@ export interface ResolvedAudio {
 	revoke: () => void;
 }
 
-function bytesFromBase64(data: string): Uint8Array {
-	const binary = atob(data);
+export function bytesFromBase64(data: string): Uint8Array {
+	const base64 = data.includes(',') ? (data.split(',').pop() ?? '') : data;
+	const normalized = base64.replace(/\s/g, '');
+	const binary = atob(normalized);
 	const bytes = new Uint8Array(binary.length);
 	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 	return bytes;
 }
 
-function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
+export function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
 	return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-async function blobFromNativePath(path: string, mimeType?: string): Promise<Blob> {
+export async function blobFromNativePath(path: string, mimeType?: string): Promise<Blob> {
 	try {
 		const result = await Filesystem.readFile({ path });
 		if (result.data instanceof Blob) return result.data;

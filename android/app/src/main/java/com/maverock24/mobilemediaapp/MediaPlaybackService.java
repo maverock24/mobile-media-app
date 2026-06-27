@@ -98,20 +98,41 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 		});
 
 		acquireWakeLock();
-		MediaControlsPlugin.setServiceInstance(this);
 		createNotificationChannel();
+		// Mark the session active early so Android 14+ accepts foreground promotion
+		// for a mediaPlayback service even before the first track's metadata arrives.
+		try { mediaSession.setActive(true); } catch (Exception ignored) {}
+		MediaControlsPlugin.setServiceInstance(this);
 	}
 
 	@Override
 	public int onStartCommand(Intent intent, int flags, int startId) {
+		// Satisfy the startForegroundService() contract: promote to foreground
+		// IMMEDIATELY with a placeholder notification. If startForeground() isn't
+		// called within ~5s of startForegroundService(), the system throws
+		// ForegroundServiceDidNotStartInTimeException and kills the process — a
+		// primary cause of the app dying when the screen is locked. The real
+		// metadata/notification is refreshed shortly after by updateNotification().
+		promoteToForeground();
 		MediaButtonReceiver.handleIntent(mediaSession, intent);
-		return super.onStartCommand(intent, flags, startId);
+		// Re-create the plugin link in case the OS killed and restarted the service
+		// while the plugin still held a stale reference. Ensures updateService()
+		// dispatches to this live instance instead of a destroyed one.
+		MediaControlsPlugin.setServiceInstance(this);
+		// START_STICKY: if the system kills the process under memory pressure, ask
+		// Android to recreate the service so playback state can be restored.
+		return START_STICKY;
 	}
 
 	@Override
 	public void onDestroy() {
 		abandonAudioFocus();
 		releaseWakeLock();
+		// Detach from the plugin so it doesn't call into a destroyed service.
+		// The OS kills background media services under memory pressure (common in
+		// the car with Maps + Android Auto running); without this the plugin keeps a
+		// stale reference and crashes on the next updateService() call.
+		MediaControlsPlugin.clearServiceInstance(this);
 		mediaSession.release();
 		super.onDestroy();
 	}
@@ -231,19 +252,65 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 		}
 
 		Notification notification = builder.build();
-		if (isPlaying) {
+		// Keep the service in FOREGROUND state whether playing OR paused, as long as
+		// a track is loaded. Calling stopForeground() on pause (the old behaviour)
+		// instantly makes the process killable — locking the phone while paused was
+		// killing the WebView. Only stopPlayback() (triggered by clear()) drops
+		// foreground state. Re-calling startForeground() with an updated notification
+		// is the documented way to refresh a foreground service's notification.
+		try {
 			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
 				startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
 			} else {
 				startForeground(NOTIFICATION_ID, notification);
 			}
-		} else {
-			stopForeground(false);
-			NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-			if (manager != null) {
-				manager.notify(NOTIFICATION_ID, notification);
+		} catch (Exception e) {
+			// Foreground promotion denied (ForegroundServiceStartNotAllowedException,
+			// ForegroundServiceTypeNotAllowedException, …). Fall back to posting the
+			// notification without promoting the service to foreground.
+			try {
+				NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+				if (manager != null) manager.notify(NOTIFICATION_ID, notification);
+			} catch (Exception ignored) {
+				// NotificationManager can also fail in edge cases; nothing more to do.
 			}
 		}
+	}
+
+	/** Promote to foreground with a minimal notification. Used at service start to
+	 *  satisfy the startForegroundService() 5-second contract before real metadata
+	 *  arrives. Safe to call repeatedly. */
+	private void promoteToForeground() {
+		Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
+			.setSmallIcon(R.mipmap.ic_launcher)
+			.setContentTitle("Media Hub")
+			.setContentText("Ready")
+			.setOngoing(true)
+			.setShowWhen(false)
+			.build();
+		try {
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+				startForeground(NOTIFICATION_ID, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+			} else {
+				startForeground(NOTIFICATION_ID, n);
+			}
+		} catch (Exception ignored) {
+			// If the system rejects foreground promotion here there is nothing more we
+			// can do; updateNotification() will retry once metadata arrives.
+		}
+	}
+
+	/** Explicitly stop playback and tear down the foreground service. Called by
+	 *  the plugin's clear() when the user stops/empties the queue — this is the
+	 *  ONLY path that should drop foreground state. */
+	public void stopPlayback() {
+		try {
+			mediaSession.setActive(false);
+		} catch (Exception ignored) {}
+		try {
+			stopForeground(true);
+		} catch (Exception ignored) {}
+		stopSelf();
 	}
 
 	private PendingIntent buildActionIntent(String action, int requestCode) {
