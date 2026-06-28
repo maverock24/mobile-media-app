@@ -12,6 +12,7 @@
 	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
+	import { formatDuration } from '$lib/models/music';
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
@@ -572,14 +573,6 @@
 	}
 
 	// ── Helpers ─────────────────────────────────────────────────
-	function formatTime(seconds: number): string {
-		if (!seconds || seconds < 0) return '–';
-		const h = Math.floor(seconds / 3600);
-		const m = Math.floor((seconds % 3600) / 60);
-		const s = Math.floor(seconds % 60);
-		if (h > 0) return `${h}h ${m}m`;
-		return `${m}:${s.toString().padStart(2, '0')}`;
-	}
 	function formatDate(dateStr: string): string {
 		if (!dateStr) return '';
 		const d = new Date(dateStr);
@@ -624,10 +617,10 @@
 
 		const liveDuration = duration > 0 ? duration : episode.duration;
 		if (liveDuration <= 0) {
-			return `Playing ${formatTime(progressPosition)}`;
+			return `Playing ${formatDuration(progressPosition)}`;
 		}
 
-		return `${formatTime(progressPosition)} of ${formatTime(liveDuration)}`;
+		return `${formatDuration(progressPosition)} of ${formatDuration(liveDuration)}`;
 	}
 	function artworkFallback(podcast: Podcast): string {
 		// Use a nice gradient placeholder if no artwork
@@ -1242,7 +1235,7 @@
 								<div class="flex items-center gap-3 text-xs text-muted-foreground">
 									{#if episode.duration > 0}
 										<span class="flex items-center gap-1">
-											<Clock class="w-3 h-3" />{formatTime(episode.duration)}
+											<Clock class="w-3 h-3" />{formatDuration(episode.duration)}
 										</span>
 									{/if}
 									{#if episode.publishedAt}

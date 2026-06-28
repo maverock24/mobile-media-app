@@ -89,10 +89,6 @@ export const mediaEngine = $state<NowPlayingState & {
 	setNowPlaying(item: MediaItem, source: MediaSource): void;
 
 	// ─── Live stream playback (radio) ───
-	_streamError: ((err: MediaError | null) => void) | null;
-	_streamWaiting: (() => void) | null;
-	_streamPlaying: (() => void) | null;
-	_streamEnded: (() => void) | null;
 	playStream(url: string, item: MediaItem): void;
 	pauseStream(): void;
 	resumeStream(): void;
@@ -130,11 +126,18 @@ export const mediaEngine = $state<NowPlayingState & {
 	_onPrev: null,
 
 	/** Last-resort pause fallback. Radio is engine-owned (_streamAudio); other
-	 *  sources own their own <audio> element and must register a _onPause handler. */
+	 *  sources own their own <audio> element and MUST register a _onPause handler.
+	 *  In dev, a missing handler for a non-radio source logs a warning so stale
+	 *  transport wiring surfaces immediately instead of silently no-op'ing. */
 	pause() {
 		if (this.source === 'radio' && _streamAudio) {
 			_streamAudio.pause();
 			this.radioPlaying = false;
+			return;
+		}
+		if (this._onPause) { this._onPause(); return; }
+		if (import.meta.env && import.meta.env.DEV) {
+			console.warn('[mediaEngine] pause() with no handler for source', this.source);
 		}
 	},
 
@@ -142,22 +145,36 @@ export const mediaEngine = $state<NowPlayingState & {
 	resume() {
 		if (this.source === 'radio' && _streamAudio) {
 			resumeStreamAudio(this);
+			return;
+		}
+		if (this._onPlay) { this._onPlay(); return; }
+		if (import.meta.env && import.meta.env.DEV) {
+			console.warn('[mediaEngine] resume() with no handler for source', this.source);
 		}
 	},
 
 	/** No engine-owned queue — next/prev delegate entirely to the active source's
-	 *  registered _onNext/_onPrev. No-op if unset. */
+	 *  registered _onNext/_onPrev. No-op if unset (warns in dev). */
 	next() {
-		this._onNext?.();
+		if (this._onNext) { this._onNext(); return; }
+		if (import.meta.env && import.meta.env.DEV) {
+			console.warn('[mediaEngine] next() with no _onNext handler');
+		}
 	},
 
 	prev() {
-		this._onPrev?.();
+		if (this._onPrev) { this._onPrev(); return; }
+		if (import.meta.env && import.meta.env.DEV) {
+			console.warn('[mediaEngine] prev() with no _onPrev handler');
+		}
 	},
 
 	/** Last-resort seek fallback. Radio has no seek (live); other sources need _onSeek. */
-	seek(_time: number) {
-		// No engine-owned audio element to seek for non-radio sources.
+	seek(time: number) {
+		if (this._onSeek) { this._onSeek(time); return; }
+		if (import.meta.env && import.meta.env.DEV && this.source !== 'radio') {
+			console.warn('[mediaEngine] seek() with no _onSeek handler for source', this.source);
+		}
 	},
 
 	updateTime(currentTime: number, duration: number) {
@@ -197,12 +214,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.source = null;
 	},
 
-	// ─── Live stream playback (radio) ────────────────────────────────────
-	_streamError: null as ((err: MediaError | null) => void) | null,
-	_streamWaiting: null as (() => void) | null,
-	_streamPlaying: null as (() => void) | null,
-	_streamEnded: null as (() => void) | null,
-
+	// ─── Live stream playback (radio) ──────────────────────────────────
 	/** Begin playing a live stream URL through a dedicated audio element. */
 	playStream(url: string, item: MediaItem) {
 		claimAudio('radio');
@@ -218,20 +230,20 @@ export const mediaEngine = $state<NowPlayingState & {
 		_streamAudio = new Audio();
 		_streamAudio.preload = 'none';
 
-		_streamAudio.addEventListener('play', () => { this.radioPlaying = true; this._streamPlaying?.(); });
+		_streamAudio.addEventListener('play', () => { this.radioPlaying = true; _streamCallbacks.playing?.(); });
 		_streamAudio.addEventListener('pause', () => { this.radioPlaying = false; });
-		_streamAudio.addEventListener('waiting', () => { this._streamWaiting?.(); });
-		_streamAudio.addEventListener('playing', () => { this._streamPlaying?.(); });
+		_streamAudio.addEventListener('waiting', () => { _streamCallbacks.waiting?.(); });
+		_streamAudio.addEventListener('playing', () => { _streamCallbacks.playing?.(); });
 		_streamAudio.addEventListener('error', () => {
 			this.radioPlaying = false;
-			this._streamError?.(_streamAudio?.error ?? null);
+			_streamCallbacks.error?.(_streamAudio?.error ?? null);
 		});
 		_streamAudio.addEventListener('ended', () => {
 			// Stream ended unexpectedly (server disconnect / Android resource kill).
 			// Only auto-reconnect if the user still wants playback — a deliberate pause
 			// can also surface as 'ended' on live streams and must NOT restart audio.
 			this.radioPlaying = false;
-			this._streamEnded?.();
+			_streamCallbacks.ended?.();
 			if (_streamShouldPlay) reconnectStream(url, item);
 		});
 
@@ -285,10 +297,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		playing: () => void,
 		ended?: () => void
 	) {
-		this._streamError = error;
-		this._streamWaiting = waiting;
-		this._streamPlaying = playing;
-		this._streamEnded = ended ?? null;
+		_streamCallbacks = { error, waiting, playing, ended: ended ?? null };
 	},
 });
 
@@ -304,6 +313,16 @@ let _streamReconnectItem: MediaItem | null = null;
 let _streamReconnectTimer: number | null = null;
 let _streamReconnectAttempts = 0;
 const STREAM_MAX_RECONNECT_ATTEMPTS = 5;
+
+/** Stream lifecycle callbacks registered by RadioView (collapses the former
+ *  _streamError/_streamWaiting/_streamPlaying/_streamEnded fields into one object). */
+interface StreamCallbacks {
+	error:   ((err: MediaError | null) => void) | null;
+	waiting: (() => void) | null;
+	playing: (() => void) | null;
+	ended:   (() => void) | null;
+}
+let _streamCallbacks: StreamCallbacks = { error: null, waiting: null, playing: null, ended: null };
 
 function cancelStreamReconnect() {
 	_streamReconnectAttempts = 0;
@@ -403,12 +422,16 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WakeLock — keep CPU/WebView alive during background playback (Android)
+// WakeLock (web only) — keep the screen/CPU awake while playing in a browser.
+// On Android native, MediaPlaybackService already holds a PARTIAL_WAKE_LOCK
+// (the correct type for background audio), so this JS 'screen' wakelock is
+// redundant there and just adds churn on the play/pause hot path.
 // ─────────────────────────────────────────────────────────────────────────────
 let _wakeLock: WakeLockSentinel | null = null;
 let _wakelockReleaseTimer: number | null = null;
 
 async function acquireWakeLock() {
+	if (Capacitor.isNativePlatform()) return;     // native service holds PARTIAL_WAKE_LOCK
 	if (!('wakeLock' in navigator)) return;
 	try {
 		_wakeLock = await navigator.wakeLock.request('screen');
@@ -427,6 +450,7 @@ async function acquireWakeLock() {
 }
 
 async function releaseWakeLock() {
+	if (Capacitor.isNativePlatform()) return;
 	if (_wakelockReleaseTimer != null) {
 		clearTimeout(_wakelockReleaseTimer);
 		_wakelockReleaseTimer = null;

@@ -159,6 +159,17 @@ export function formatClock(seconds: number): string {
 	return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/** Compact human duration for list/tile contexts: `Hh Mm`, `M:SS`, or `–` when empty.
+ *  Use for episode/card durations where clock format (`H:MM:SS`) is too wide. */
+export function formatDuration(seconds: number): string {
+	if (!seconds || seconds < 0 || !isFinite(seconds)) return '–';
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
+	const s = Math.floor(seconds % 60);
+	if (h > 0) return `${h}h ${m}m`;
+	return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 export function sortFiles(files: StoredAudioFile[], sortOrder: string): StoredAudioFile[] {
 	return [...files].sort((a, b) => {
 		if (sortOrder === 'title')
