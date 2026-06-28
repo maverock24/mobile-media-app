@@ -61,7 +61,7 @@
 	});
 
 	// ── Stop on unmount ──────────────────────────────────────────
-	$effect(() => { return () => { mediaEngine.stopStream(); }; });
+	$effect(() => { return () => { mediaEngine.clear(); }; });
 
 	// ── Playback controls ────────────────────────────────────────
 	function playStation(station: RadioStation) {
@@ -80,7 +80,7 @@
 	}
 
 	function stopPlayback() {
-		mediaEngine.stopStream();
+		mediaEngine.clear();
 		currentStation = null;
 	}
 

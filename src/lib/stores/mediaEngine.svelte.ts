@@ -322,8 +322,13 @@ export const mediaEngine = $state<NowPlayingState & {
 	},
 
 	/** Stop all playback and reset now-playing state. Resets every per-source
-	 *  playing flag so no stale `isPlaying=true` lingers after teardown. */
+	 *  playing flag so no stale `isPlaying=true` lingers after teardown.
+	 *  Use this for explicit stop / unmount — NOT for source switches, where
+	 *  nulling `item` would tear down the foreground MediaSession service and
+	 *  immediately rebuild it, churning that dispatches a pause to the
+	 *  just-started source (the Android 'stops immediately' bug). */
 	clear() {
+		cancelStreamReconnect();
 		const slots = getAudioSlots();
 		slots.forEach(s => { s.pause(); s.src = ''; });
 		stopStreamAudio();
@@ -417,14 +422,15 @@ export const mediaEngine = $state<NowPlayingState & {
 		}
 	},
 
-	/** Stop the live stream and tear down its audio element. */
+	/** Stop the live stream's audio without resetting now-playing state.
+	 *  Safe to call during a source switch: the radioPlaying flag is cleared by
+	 *  the stream's 'pause' event, and `item`/`source` are left untouched so the
+	 *  incoming source's setNowPlaying() simply overwrites them — no
+	 *  MediaControls.clear() blip, no foreground-service teardown/rebuild. */
 	stopStream() {
 		_streamShouldPlay = false;
 		cancelStreamReconnect();
 		stopStreamAudio();
-		if (this.source === 'radio') {
-			this.clear();
-		}
 	},
 
 	setStreamCallbacks(
