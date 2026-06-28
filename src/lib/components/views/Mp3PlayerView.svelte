@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { swipeBack } from '$lib/actions/touch';
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
@@ -301,29 +302,12 @@
 	let showFavoriteTracks = $state(false);
 
 	// ── Swipe left in full player → go back to browse list ───────
-	let _playerSwipeStartX = 0;
-	let _playerSwipeStartY = 0;
-	function onPlayerTouchStart(e: TouchEvent) {
-		_playerSwipeStartX = e.touches[0].clientX;
-		_playerSwipeStartY = e.touches[0].clientY;
-	}
-	function onPlayerTouchEnd(e: TouchEvent) {
-		const dx = e.changedTouches[0].clientX - _playerSwipeStartX;
-		const dy = e.changedTouches[0].clientY - _playerSwipeStartY;
-		// Only respond to predominantly left swipe (not vertical scroll)
-		if (dx < -60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-			void triggerSwipeBackHaptic();
-			showQueue = true;
-		}
-	}
+	// Wired via use:swipeBack on the player container in the template below.
 
 	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
 	let isRestoring = $state(true);  // true until IDB check finishes (prevents empty-state flash)
 	let preloadedTrackIndex = $state<number | null>(null);
 	let preloadRequestId = 0;
-	let browseGestureEl = $state<HTMLElement | null>(null);
-	let browseSwipeStartX = 0;
-	let browseSwipeStartY = 0;
 	// Prevents background folder scans from overwriting the track list after the user has
 	// explicitly selected a song via playBrowseFile / playCurrentFolder / playFolderPath.
 	let trackListLockedByUser = false;
@@ -2306,32 +2290,6 @@
 		else showQueue = false;
 	}
 
-	function onBrowseTouchStart(e: TouchEvent) {
-		browseSwipeStartX = e.touches[0].clientX;
-		browseSwipeStartY = e.touches[0].clientY;
-	}
-
-	function onBrowseTouchEnd(e: TouchEvent) {
-		if (browsePath.length === 0) return;
-		const dx = e.changedTouches[0].clientX - browseSwipeStartX;
-		const dy = e.changedTouches[0].clientY - browseSwipeStartY;
-		if (dx >= -60 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
-		e.stopPropagation();
-		void triggerSwipeBackHaptic();
-		navigateToParentFolderFromSwipe();
-	}
-
-	$effect(() => {
-		const el = browseGestureEl;
-		if (!el) return;
-		el.addEventListener('touchstart', onBrowseTouchStart, { passive: true });
-		el.addEventListener('touchend', onBrowseTouchEnd, { passive: true });
-		return () => {
-			el.removeEventListener('touchstart', onBrowseTouchStart);
-			el.removeEventListener('touchend', onBrowseTouchEnd);
-		};
-	});
-
 	// ─────────────────────────────────────────────────────────────
 	// Playback controls
 	// ─────────────────────────────────────────────────────────────
@@ -2719,7 +2677,15 @@
 
 	<!-- ════════════════════════════════ BROWSE VIEW ════════════════════════════════ -->
 	{:else if showQueue}
-	<div class="flex flex-col h-full" bind:this={browseGestureEl}>
+	<div class="flex flex-col h-full"
+		use:swipeBack={{
+			onBack: () => {
+				if (browsePath.length === 0) return;
+				void triggerSwipeBackHaptic();
+				navigateToParentFolderFromSwipe();
+			},
+		}}
+	>
 
 		<!-- Header -->
 		<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0">
@@ -3010,8 +2976,7 @@
 	<div class="flex flex-col items-center px-6 pt-5 pb-4 gap-4 flex-1 overflow-y-auto"
 		role="region"
 		aria-label="Music player"
-		ontouchstart={onPlayerTouchStart}
-		ontouchend={onPlayerTouchEnd}
+		use:swipeBack={{ onBack: () => { void triggerSwipeBackHaptic(); showQueue = true; } }}
 	>
 
 		<!-- Folder badge -->
