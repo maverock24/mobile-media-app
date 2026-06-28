@@ -7,7 +7,6 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import SleepTimerSettings from '$lib/components/settings/SleepTimerSettings.svelte';
 	import { appSettings, musicSettings, podcastSettings, sleepTimerSettings, weatherSettings } from '$lib/stores/settings.svelte';
-	import { mediaEngine, updateGlobalEq, initGlobalAudioContext } from '$lib/stores/mediaEngine.svelte';
 	import { EQ_PRESETS } from '$lib/models/music';
 	import { LIST_TILE_TONE_OPTIONS } from '$lib/utils/listTileTone';
 	import {
@@ -547,10 +546,6 @@
 									const gains = EQ_PRESETS[preset];
 									if (gains) {
 										musicSettings.eqBands = [...gains];
-										mediaEngine.eqBands = [...gains];
-										// Force-init AudioContext if not already done, then apply
-										initGlobalAudioContext();
-										updateGlobalEq(gains);
 										musicSettings.equalizerPreset = preset as typeof musicSettings.equalizerPreset;
 									}
 								}}

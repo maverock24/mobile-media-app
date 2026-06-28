@@ -448,8 +448,8 @@
 			);
 		}
 
-		if (typeof mediaEngine.setCallbacks === 'function') {
-			mediaEngine.setCallbacks(
+		if (typeof mediaEngine.setSkipHandlers === 'function') {
+			mediaEngine.setSkipHandlers(
 				() => { void advanceTrack(isPlaying || isBuffering); },
 				() => { void prevTrack(); }
 			);

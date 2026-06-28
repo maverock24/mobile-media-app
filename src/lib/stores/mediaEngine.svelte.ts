@@ -1,24 +1,29 @@
 /**
- * Global media engine — single source of truth for playback state across
- * Music and Podcasts. 
- * 
- * This store owns the singleton HTMLAudioElement and manages all playback
- * events (MediaSession, Capacitor MediaControls, time tracking).
- * 
- * Individual views (Music, Podcasts) connect to this engine to start
- * playback and update their UI state.
+ * Global media engine — shared now-playing state hub across Music, Podcast,
+ * Radio, and the Mixer.
+ *
+ * The engine does NOT own any <audio> element. Each view drives its own audio
+ * element and reports state here via setNowPlaying()/updateTime() and the
+ * per-source playing flags. The engine exists so the MiniPlayer, the browser
+ * MediaSession, and the native Android MediaControls can observe a single
+ * source of truth for what is playing, who owns it, and the transport
+ * (play/pause/seek/skip) handlers of the active source.
+ *
+ * Audio exclusivity is enforced via registerAudioSource()/claimAudio(): each
+ * source registers a stop-callback; starting a new source claims audio, which
+ * invokes every other source's stop-callback so only one plays at a time.
  */
 
 import { Capacitor } from '@capacitor/core';
 import type { MediaItem, MediaSource } from '$lib/models/media';
 import { MediaControls } from '$lib/native/media-controls';
-import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
-import { addToHistory } from './history.svelte';
 import { addToast } from './toastStore.svelte';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Audio exclusivity — only one source (music / podcast) plays at a time.
-// Views register a stop-callback; calling claimAudio pauses the others.
+// Audio exclusivity — only one source (music / podcast / radio / mixer) plays
+// at a time. Views register a stop-callback; calling claimAudio pauses the
+// others. Radio is special-cased: its stream lives in _streamAudio (below),
+// which claimAudio tears down directly for non-radio claims.
 // ─────────────────────────────────────────────────────────────────────────────
 type AudioSourceId = MediaSource | 'essay' | 'mixer';
 const _stopFns: Partial<Record<AudioSourceId, () => void>> = {};
@@ -52,41 +57,37 @@ export interface NowPlayingState {
 // Reactive state — read anywhere via `import { mediaEngine } from …`
 // ─────────────────────────────────────────────────────────────────────────────
 export const mediaEngine = $state<NowPlayingState & {
-	// --- State & Config ---
-	queue:       MediaItem[];
-	currentIndex: number;
-	volume:      number;
-	playbackRate: number;
-	isShuffle:    boolean;
-	isRepeat:     boolean;
-	isTransitioning: boolean;
-	crossfadeDuration: number; // seconds
-	eqBands: number[];
-
 	// --- Per-source playing flags (isPlaying is derived from these) ---
 	musicPlaying:   boolean;
 	podcastPlaying: boolean;
 	radioPlaying:   boolean;
 	mixerPlaying:   boolean;
 
-	// --- Central Commands ---
-	play(item: MediaItem, source: MediaSource): void;
-	playFromQueue(index: number): void;
-	setQueue(items: MediaItem[], startIndex?: number): void;
+	// --- Transport fallbacks ---
+	// Views register handlers via setPlaybackHandlers()/setSkipHandlers() so the
+	// MiniPlayer, MediaSession, and native MediaControls can drive the active
+	// source. The bare methods below are last-resort fallbacks used only when no
+	// handler is registered; for radio they operate on _streamAudio, otherwise
+	// they no-op (no engine-owned audio element exists for music/podcast/mixer).
 	pause(): void;
 	resume(): void;
-	toggle(): void;
-	next(manual?: boolean): void;
+	next(): void;
 	prev(): void;
 	seek(time: number): void;
 
-	// --- Internal Hookups (called by audio listeners) ---
+	// --- Internal Hookups (called by view audio listeners) ---
 	updateTime(currentTime: number, duration: number): void;
+	/** Full reset: null now-playing state, stop the radio stream, clear all
+	 *  playing flags. Use for explicit stop / unmount — NOT for source switches,
+	 *  where nulling `item` would tear down the foreground MediaSession service
+	 *  and immediately rebuild it, churning that dispatches a pause to the
+	 *  just-started source (the Android 'stops immediately' bug). For a source
+	 *  switch, use stopStream() (radio audio only, state preserved). */
 	clear(): void;
-	/** Metadata-only update — sets now-playing info without starting audio playback. */
+	/** Metadata-only update — sets now-playing info without starting audio. */
 	setNowPlaying(item: MediaItem, source: MediaSource): void;
 
-	// ─── Live stream methods (radio) ───
+	// ─── Live stream playback (radio) ───
 	_streamError: ((err: MediaError | null) => void) | null;
 	_streamWaiting: (() => void) | null;
 	_streamPlaying: (() => void) | null;
@@ -97,7 +98,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	stopStream(): void;
 	setStreamCallbacks(error: (err: MediaError | null) => void, waiting: () => void, playing: () => void, ended?: () => void): void;
 
-	// --- Callbacks for views to override behavior ---
+	// --- Callbacks for views to override transport behavior ---
 	_onPlay: (() => void) | null;
 	_onPause: (() => void) | null;
 	_onSeek: ((time: number) => void) | null;
@@ -105,7 +106,6 @@ export const mediaEngine = $state<NowPlayingState & {
 	_onPrev: (() => void) | null;
 	setPlaybackHandlers(play: (() => void) | null, pause: (() => void) | null, seek: ((time: number) => void) | null): void;
 	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null): void;
-	setCallbacks(next: (() => void) | null, prev: (() => void) | null): void;
 }>({
 	item:        null,
 	musicPlaying:   false,
@@ -122,179 +122,46 @@ export const mediaEngine = $state<NowPlayingState & {
 	duration:    0,
 	source:      null,
 
-	queue:       [],
-	currentIndex: -1,
-	volume:      100,
-	playbackRate: 1,
-	isShuffle:    false,
-	isRepeat:     false,
-	isTransitioning: false,
-	crossfadeDuration: 0,
-	eqBands: [0, 0, 0, 0, 0, 0],
-
 	_onPlay: null,
 	_onPause: null,
 	_onSeek: null,
 	_onNext: null,
 	_onPrev: null,
 
-	/** Core Playback: starts a new track immediately. */
-	async play(item: MediaItem, source: MediaSource) {
-		const isFirstPlay = !this.item;
-		this.item = item;
-		this.source = source;
-		this.musicPlaying = true;
-
-		// Resolve dynamic URL if needed
-		let url = item.audioUrl;
-		if (item.resolveUrl) {
-			this.isTransitioning = true;
-			try {
-				const resolved = await item.resolveUrl();
-				if (resolved) url = resolved;
-			} catch (e) {
-				console.error('Failed to resolve track URL:', e);
-			} finally {
-				this.isTransitioning = false;
-			}
-		}
-
-		if (!url) {
-			this.musicPlaying = false;
-			return;
-		}
-
-		this.currentTime = 0;
-		this.duration = item.duration ?? 0;
-
-		// Orchestrate Slot Switch
-		const xf = this.crossfadeDuration;
-		const useCrossfade = !isFirstPlay && xf > 0;
-		
-		const slots = getAudioSlots();
-		const oldSlot = slots[_activeSlot];
-		_activeSlot = (_activeSlot + 1) % 2;
-		const newSlot = slots[_activeSlot];
-
-		newSlot.src = url;
-		newSlot.load();
-		
-		// Ensure AudioContext is ready (required for EQ/Filter chain to work)
-		if (_audioCtx?.state === 'suspended') {
-			void _audioCtx.resume();
-		} else if (!_audioCtx) {
-			initGlobalAudioContext();
-			updateGlobalEq(mediaEngine.eqBands);
-		}
-
-		newSlot.play().then(() => {
-			if (this.item) addToHistory(this.item);
-		}).catch(() => {
-			this.musicPlaying = false;
-		});
-	},
-
-	playFromQueue(index: number) {
-		if (index < 0 || index >= this.queue.length) return;
-		this.currentIndex = index;
-		const track = this.queue[index];
-		this.play(track, track.source);
-	},
-
-	setQueue(items: MediaItem[], startIndex = 0) {
-		this.queue = items;
-		this.currentIndex = startIndex;
-	},
-
+	/** Last-resort pause fallback. Radio is engine-owned (_streamAudio); other
+	 *  sources own their own <audio> element and must register a _onPause handler. */
 	pause() {
-		// Radio plays through _streamAudio (not an audio slot), so pause it directly.
 		if (this.source === 'radio' && _streamAudio) {
 			_streamAudio.pause();
 			this.radioPlaying = false;
-			return;
 		}
-		const slots = getAudioSlots();
-		slots.forEach(s => s.pause());
-		this.musicPlaying = false;
 	},
 
+	/** Last-resort resume fallback. Radio only; other sources need _onPlay. */
 	resume() {
 		if (this.source === 'radio' && _streamAudio) {
-			if (_audioCtx?.state === 'suspended') void _audioCtx.resume();
-			_streamAudio.play().catch(() => {});
-			this.radioPlaying = true;
-			return;
-		}
-		const slots = getAudioSlots();
-		const current = slots[_activeSlot];
-		if (current) {
-			if (_audioCtx?.state === 'suspended') void _audioCtx.resume();
-			current.play().catch(() => {});
-			this.musicPlaying = true;
+			resumeStreamAudio(this);
 		}
 	},
 
-	toggle() {
-		if (this.isPlaying) this.pause();
-		else this.resume();
-	},
-
-	next(manual = true) {
-		if (manual && this._onNext) {
-			this._onNext();
-			return;
-		}
-
-		if (this.queue.length === 0) return;
-
-		let nextIndex = this.currentIndex;
-		if (this.isRepeat && !manual) {
-			nextIndex = this.currentIndex;
-		} else if (this.isShuffle) {
-			nextIndex = Math.floor(Math.random() * this.queue.length);
-		} else {
-			nextIndex = this.currentIndex + 1;
-		}
-
-		if (nextIndex >= 0 && nextIndex < this.queue.length) {
-			this.playFromQueue(nextIndex);
-		} else {
-			this.clear(); // End of queue
-		}
+	/** No engine-owned queue — next/prev delegate entirely to the active source's
+	 *  registered _onNext/_onPrev. No-op if unset. */
+	next() {
+		this._onNext?.();
 	},
 
 	prev() {
-		if (this.currentTime > 3) {
-			this.seek(0);
-			return;
-		}
-		if (this._onPrev) {
-			this._onPrev();
-		} else if (this.currentIndex > 0) {
-			this.playFromQueue(this.currentIndex - 1);
-		}
+		this._onPrev?.();
 	},
 
-	seek(time: number) {
-		const slots = getAudioSlots();
-		const current = slots[_activeSlot];
-		if (current) {
-			const target = Math.max(0, Math.min(time, this.duration));
-			current.currentTime = target;
-			this.currentTime = target;
-		}
+	/** Last-resort seek fallback. Radio has no seek (live); other sources need _onSeek. */
+	seek(_time: number) {
+		// No engine-owned audio element to seek for non-radio sources.
 	},
 
 	updateTime(currentTime: number, duration: number) {
 		this.currentTime = currentTime;
 		if (duration > 0) this.duration = duration;
-		
-		// Preload next track if near end
-		const xf = this.crossfadeDuration;
-		if (this.duration > 0 && this.currentTime > this.duration - (xf + 2)) {
-			// Preload logic could go here, but since 'play' handles slot swapping,
-			// we'll just let the 'ended' event trigger next() and crossfade.
-		}
 	},
 
 	setPlaybackHandlers(play, pause, seek) {
@@ -308,12 +175,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		this._onPrev = prev;
 	},
 
-	setCallbacks(next, prev) {
-		this._onNext = next;
-		this._onPrev = prev;
-	},
-
-	/** Metadata-only: update now-playing state without triggering audio slot playback. */
+	/** Metadata-only: update now-playing state without starting audio. */
 	setNowPlaying(item: MediaItem, source: MediaSource) {
 		this.item = item;
 		this.source = source;
@@ -321,16 +183,8 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.duration = item.duration ?? 0;
 	},
 
-	/** Stop all playback and reset now-playing state. Resets every per-source
-	 *  playing flag so no stale `isPlaying=true` lingers after teardown.
-	 *  Use this for explicit stop / unmount — NOT for source switches, where
-	 *  nulling `item` would tear down the foreground MediaSession service and
-	 *  immediately rebuild it, churning that dispatches a pause to the
-	 *  just-started source (the Android 'stops immediately' bug). */
 	clear() {
 		cancelStreamReconnect();
-		const slots = getAudioSlots();
-		slots.forEach(s => { s.pause(); s.src = ''; });
 		stopStreamAudio();
 		this.item = null;
 		this.musicPlaying = false;
@@ -348,12 +202,12 @@ export const mediaEngine = $state<NowPlayingState & {
 	_streamPlaying: null as (() => void) | null,
 	_streamEnded: null as (() => void) | null,
 
-	/** Begin playing a live stream URL through the shared audio pipeline. */
+	/** Begin playing a live stream URL through a dedicated audio element. */
 	playStream(url: string, item: MediaItem) {
 		claimAudio('radio');
 		_streamShouldPlay = true;
 		// Route MiniPlayer / web mediaSession / native transport controls to the live
-		// stream so pause/resume act on _streamAudio instead of the (silent) audio slots.
+		// stream so pause/resume act on _streamAudio instead of a no-op fallback.
 		this.setPlaybackHandlers(
 			() => this.resumeStream(),
 			() => this.pauseStream(),
@@ -367,9 +221,6 @@ export const mediaEngine = $state<NowPlayingState & {
 		_streamAudio.addEventListener('pause', () => { this.radioPlaying = false; });
 		_streamAudio.addEventListener('waiting', () => { this._streamWaiting?.(); });
 		_streamAudio.addEventListener('playing', () => { this._streamPlaying?.(); });
-		_streamAudio.addEventListener('timeupdate', () => {
-			// Heartbeat: keep the stream alive and track buffering state
-		});
 		_streamAudio.addEventListener('error', () => {
 			this.radioPlaying = false;
 			this._streamError?.(_streamAudio?.error ?? null);
@@ -389,12 +240,9 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.source = 'radio';
 		this.duration = 0;
 
-		// NOTE: Cross-origin streams (radio/podcast) CANNOT be processed by the Web
-		// Audio API. The browser outputs SILENCE for tainted cross-origin media unless
-		// the server sends CORS headers (which public radio/podcast servers do not).
-		// Routing them through createMediaElementSource() mutes them, and setting
-		// crossOrigin='anonymous' makes them fail to load. So we play streams DIRECTLY.
-		// EQ for radio/podcast requires proxying the stream through our own origin.
+		// NOTE: Cross-origin streams (radio) CANNOT be processed by the Web Audio
+		// API — the browser outputs SILENCE for tainted cross-origin media unless
+		// the server sends CORS headers. So we play streams DIRECTLY (no EQ).
 		_streamAudio.src = url;
 		_streamAudio.play().catch((err) => {
 			if (err?.name !== 'AbortError') this.radioPlaying = false;
@@ -415,10 +263,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	/** Resume the live stream if paused. */
 	resumeStream() {
 		if (_streamAudio && this.source === 'radio') {
-			_streamShouldPlay = true;
-			if (_audioCtx?.state === 'suspended') void _audioCtx.resume();
-			_streamAudio.play().catch(() => {});
-			this.radioPlaying = true;
+			resumeStreamAudio(this);
 		}
 	},
 
@@ -447,25 +292,8 @@ export const mediaEngine = $state<NowPlayingState & {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Audio Error Description
+// Radio live-stream internals
 // ─────────────────────────────────────────────────────────────────────────────
-function describeAudioError(err: MediaError): string {
-	switch (err.code) {
-		case MediaError.MEDIA_ERR_ABORTED:          return 'Playback was interrupted.';
-		case MediaError.MEDIA_ERR_NETWORK:           return 'A network error caused playback to fail. Check your connection.';
-		case MediaError.MEDIA_ERR_DECODE:            return 'The audio file could not be decoded.';
-		case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED: return 'This audio format is not supported.';
-		default: return err.message || 'Unknown playback error.';
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Audio Slot Management
-// ─────────────────────────────────────────────────────────────────────────────
-let _audioSlots: [HTMLAudioElement, HTMLAudioElement] | null = null;
-let _activeSlot = 0;
-let _audioCtx: AudioContext | null = null;
-let _filters: BiquadFilterNode[] = [];
 let _streamAudio: HTMLAudioElement | null = null;
 /** User intent: true while the listener wants the stream playing. Gates auto-reconnect
  *  so a deliberate pause/stop is never undone by the reconnect-on-drop logic. */
@@ -507,122 +335,12 @@ function stopStreamAudio() {
 	}
 }
 
-function getAudioSlots(): [HTMLAudioElement, HTMLAudioElement] {
-	if (typeof window === 'undefined') return [] as any;
-	if (!_audioSlots) {
-		_audioSlots = [new Audio(), new Audio()];
-		_audioSlots.forEach((audio, i) => {
-			audio.preload = 'metadata';
-			audio.addEventListener('play', () => { if (i === _activeSlot) mediaEngine.musicPlaying = true; });
-			audio.addEventListener('pause', () => { if (i === _activeSlot) mediaEngine.musicPlaying = false; });
-			audio.addEventListener('ended', () => { if (i === _activeSlot) mediaEngine.next(false); });
-			audio.addEventListener('timeupdate', () => {
-				if (i === _activeSlot) mediaEngine.updateTime(audio.currentTime, audio.duration);
-			});
-			audio.addEventListener('loadedmetadata', () => {
-				if (i === _activeSlot && audio.duration > 0) mediaEngine.duration = audio.duration;
-			});
-			audio.addEventListener('error', () => {
-				const err = audio.error;
-				if (!audio.src || audio.src === 'about:blank') return;
-				// MEDIA_ERR_SRC_NOT_SUPPORTED (4) is often a transient race on slot reuse —
-				// don't show a toast for it since the actual playback element is unaffected
-				if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) return;
-				console.error(`Audio slot ${i} error:`, err?.code, err?.message);
-				if (i === _activeSlot) {
-					mediaEngine.musicPlaying = false;
-					const msg = err ? describeAudioError(err) : 'Unknown playback error.';
-					addToast({ message: msg, type: 'error' });
-				}
-			});
-		});
-
-		// Connect newly created slots to existing filter chain (when AudioContext was
-		// already initialized, e.g. by an EQ preset change before any playback started)
-		if (_audioCtx && _filters.length > 0) {
-			_audioSlots.forEach(audio => {
-				try {
-					const src = _audioCtx!.createMediaElementSource(audio);
-					src.connect(_filters[0]);
-				} catch { /* already connected or unavailable */ }
-			});
-		}
-
-		// Sync volume, speed, and EQ reactively
-		$effect.root(() => {
-			$effect(() => {
-				const masterVol = mediaEngine.volume / 100;
-				const slots = getAudioSlots();
-				// Volume is handled during crossfade, but we sync master baseline here
-				// Note: manual volume changes should affect the ACTIVE slot immediately.
-				slots[_activeSlot].volume = masterVol;
-			});
-			$effect(() => {
-				const rate = mediaEngine.playbackRate;
-				getAudioSlots().forEach(s => s.playbackRate = rate);
-			});
-			$effect(() => {
-				updateGlobalEq(mediaEngine.eqBands);
-			});
-		});
-	}
-	return _audioSlots;
+/** Shared resume logic for the live stream (used by resume() and resumeStream()). */
+function resumeStreamAudio(engine: typeof mediaEngine) {
+	_streamShouldPlay = true;
+	_streamAudio!.play().catch(() => {});
+	engine.radioPlaying = true;
 }
-
-/** Fade helper for crossfading */
-function fadeAudio(audio: HTMLAudioElement, targetVol: number, duration: number, pauseOnEnd = false) {
-	const startVol = audio.volume;
-	const delta = targetVol - startVol;
-	const steps = 20;
-	const interval = (duration * 1000) / steps;
-	let currentStep = 0;
-
-	const timer = setInterval(() => {
-		currentStep++;
-		audio.volume = Math.max(0, Math.min(1, startVol + (delta * (currentStep / steps))));
-		if (currentStep >= steps) {
-			clearInterval(timer);
-			if (pauseOnEnd) {
-				audio.pause();
-				audio.src = '';
-			}
-		}
-	}, interval);
-}
-
-export function initGlobalAudioContext() {
-	if (_audioCtx) return;
-	try {
-		_audioCtx = new AudioContext();
-
-		// Auto-resume AudioContext when Android suspends it in background
-		_audioCtx.addEventListener('statechange', () => {
-			if (_audioCtx?.state === 'suspended' && mediaEngine.isPlaying) {
-				void _audioCtx.resume().catch(() => {});
-			}
-		});
-		
-		// Create a shared filter chain
-		_filters = createEqFilterChain(_audioCtx, mediaEngine.eqBands);
-		_filters[_filters.length - 1].connect(_audioCtx.destination);
-
-		// Connect audio slots if they exist (created before AudioContext init)
-		if (_audioSlots) {
-			_audioSlots.forEach(audio => {
-				const src = _audioCtx!.createMediaElementSource(audio);
-				src.connect(_filters[0]);
-			});
-		}
-	} catch (e) {
-		console.error('Failed to init global audio context:', e);
-	}
-}
-
-export function updateGlobalEq(gains: number[]) {
-	if (!_filters.length) initGlobalAudioContext();
-	applyEqGains(_filters, gains);
-}
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Browser Media Session Integration
@@ -813,9 +531,11 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		});
 
 		$effect(() => {
+			// Transport availability is driven entirely by the active source's
+			// registered _onNext/_onPrev handlers (the engine owns no queue).
 			void MediaControls.setTransportAvailability({
-				hasNext: mediaEngine.currentIndex < mediaEngine.queue.length - 1 || mediaEngine._onNext !== null,
-				hasPrevious: mediaEngine.currentIndex > 0 || mediaEngine._onPrev !== null,
+				hasNext: mediaEngine._onNext !== null,
+				hasPrevious: mediaEngine._onPrev !== null,
 			}).catch(() => {});
 		});
 
