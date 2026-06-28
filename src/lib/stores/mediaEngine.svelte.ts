@@ -15,6 +15,7 @@
  */
 
 import { Capacitor } from '@capacitor/core';
+import { untrack } from 'svelte';
 import type { MediaItem, MediaSource } from '$lib/models/media';
 import { MediaControls } from '$lib/native/media-controls';
 import { addToast } from './toastStore.svelte';
@@ -539,12 +540,46 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 			}).catch(() => {});
 		});
 
+		// Push native playback state on TRANSITIONS only (isPlaying / duration /
+		// item / source change), NOT on every mediaEngine.currentTime tick. The
+		// native MediaSession extrapolates position from setState(STATE_PLAYING,
+		// positionMs, 1f) on its own, so a per-tick push is unnecessary — and it is
+		// actively harmful: every push runs updateServiceInternal() →
+		// requestAudioFocus(). MP3/Podcast drive mediaEngine.currentTime at ~4Hz via
+		// updateTime, so a reactive dep on currentTime would re-request native
+		// AUDIOFOCUS_GAIN 4×/sec, which Android answers with a transient focus loss
+		// to the WebView <audio> element's own focus holder, AUTO-PAUSING it 2-3s
+		// after play (the Android "stops shortly after play" bug, MP3/Podcast only;
+		// radio has no updateTime churn and the mixer never sets `item`, so both were
+		// immune). Position is snapshotted via untrack() so reading it does NOT make
+		// it a reactive dependency.
 		$effect(() => {
+			const isPlaying  = mediaEngine.isPlaying;
+			const durationSec = mediaEngine.duration;
+			const item        = mediaEngine.item;     // track-change dep
+			mediaEngine.source;                        // source-change dep (defensive)
+			const positionSec = untrack(() => mediaEngine.currentTime);
+
 			void MediaControls.updatePlaybackState({
-				isPlaying: mediaEngine.isPlaying,
-				positionSec: mediaEngine.currentTime,
-				durationSec: mediaEngine.duration,
+				isPlaying,
+				positionSec,
+				durationSec,
 			}).catch(() => {});
+
+			if (!isPlaying || item == null) return;
+			// While a track plays, slowly re-sync position (every 3s) so the lock-screen
+			// / Android Auto seek bar stays accurate and corrects drift after a user
+			// seek — without the 4Hz focus churn. The native focus request is now
+			// transition-guarded (see MediaPlaybackService.requestAudioFocus), so this
+			// low cadence is safe even though it still routes through updateService.
+			const timer = window.setInterval(() => {
+				void MediaControls.updatePlaybackState({
+					isPlaying:   true,
+					positionSec: mediaEngine.currentTime,
+					durationSec: mediaEngine.duration,
+				}).catch(() => {});
+			}, 3000);
+			return () => window.clearInterval(timer);
 		});
 
 		// WakeLock: acquire when playing, release when paused

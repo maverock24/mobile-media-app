@@ -35,6 +35,11 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 	private AudioManager audioManager;
 	private PowerManager.WakeLock wakeLock;
 	private AudioFocusRequest focusRequest;
+	// True only while this service holds audio focus. Guards requestAudioFocus() /
+	// abandonAudioFocus() so they act on the play/pause TRANSITION rather than on
+	// every updateService() call — see requestAudioFocus() for why re-requesting
+	// GAIN 4×/sec auto-pauses the WebView <audio> element.
+	private boolean focusHeld = false;
 
 	// Audio focus is requested/abandoned to cooperate with other apps, but we do
 	// NOT let focus changes drive the WebView's play/pause state. The WebView owns
@@ -144,6 +149,14 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 
 	public void requestAudioFocus() {
 		if (audioManager == null) return;
+		// Transition-only: requesting AUDIOFOCUS_GAIN while already holding it
+		// makes Android dispatch a transient AUDIOFOCUS_LOSS to the WebView's own
+		// <audio> element focus holder, which AUTO-PAUSES that element 2-3s after
+		// play starts (the Android "stops shortly after play" bug for MP3/Podcast).
+		// updateServiceInternal() calls this on every JS updatePlaybackState; the
+		// MP3/Podcast position pushes fire that 4×/sec via mediaEngine.updateTime.
+		// Hold focus once per play transition, not once per position tick.
+		if (focusHeld) return;
 		try {
 			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
 				AudioAttributes attrs = new AudioAttributes.Builder()
@@ -159,6 +172,7 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 				audioManager.requestAudioFocus(
 					focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
 			}
+			focusHeld = true;
 		} catch (Exception e) {
 			// Audio focus not critical for playback
 		}
@@ -166,6 +180,7 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 
 	public void abandonAudioFocus() {
 		if (audioManager == null) return;
+		if (!focusHeld) return;
 		try {
 			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && focusRequest != null) {
 				audioManager.abandonAudioFocusRequest(focusRequest);
@@ -175,6 +190,7 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 		} catch (Exception e) {
 			// Audio focus not critical for playback
 		}
+		focusHeld = false;
 	}
 
 	private void acquireWakeLock() {
@@ -303,6 +319,11 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 		try {
 			stopForeground(true);
 		} catch (Exception ignored) {}
+		// Release audio focus + wakelock promptly (onDestroy() also does this, but
+		// clear() nulls the plugin's service reference immediately after this call,
+		// so releasing here avoids leaving focus held across a stop→restart cycle).
+		abandonAudioFocus();
+		releaseWakeLock();
 		stopSelf();
 	}
 
