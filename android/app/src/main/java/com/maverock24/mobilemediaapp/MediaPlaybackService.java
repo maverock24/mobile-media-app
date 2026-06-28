@@ -36,24 +36,17 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 	private PowerManager.WakeLock wakeLock;
 	private AudioFocusRequest focusRequest;
 
+	// Audio focus is requested/abandoned to cooperate with other apps, but we do
+	// NOT let focus changes drive the WebView's play/pause state. The WebView owns
+	// the actual <audio> elements and MediaSession; having this native listener
+	// dispatch pause/play back into JS caused a race where starting radio/podcast
+	// (or MP3) while another source was stopping delivered a spurious
+	// AUDIOFOCUS_LOSS that paused the just-started stream — "stops immediately"
+	// on Android, fixed only by switching back and forth until the focus churn
+	// settled. Removing the dispatch keeps focus cooperation without the fight.
 	private final AudioManager.OnAudioFocusChangeListener focusListener = focusChange -> {
-		switch (focusChange) {
-			case AudioManager.AUDIOFOCUS_LOSS:
-				// Permanent loss — another app took audio focus
-				MediaControlsPlugin.dispatchAction("pause");
-				break;
-			case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
-				// Temporary loss (notification, call) — pause
-				MediaControlsPlugin.dispatchAction("pause");
-				break;
-			case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
-				// Short interruption — keep playing at lower volume
-				break;
-			case AudioManager.AUDIOFOCUS_GAIN:
-				// Regained focus — resume if was playing
-				MediaControlsPlugin.dispatchAction("play");
-				break;
-		}
+		// Intentionally empty: see comment above. Focus changes are informational
+		// only; the WebView decides when to play/pause.
 	};
 
 	@Override
