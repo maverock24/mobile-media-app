@@ -24,7 +24,20 @@
 		getTrackKey,
 		mergeStoredFiles,
 		fmtGain,
+		parseFilename,
+		sortFiles as sortStoredFiles,
+		createStoredAudioFile,
+		createStoredWebAudioFile,
+		createStoredNativeAudioFile,
+		createStoredDriveAudioFile,
 	} from '$lib/models/music';
+	import {
+		idbGet, idbPut, idbDelete,
+		openIDB,
+		saveHandleToIDB, loadHandleFromIDB,
+		loadCachedLibrary, deleteCachedLibrary,
+		saveDriveCache, loadDriveCache, bustDriveCache,
+	} from '$lib/utils/idb';
 	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
 	import { marqueeTitle } from '$lib/actions/marqueeTitle';
 	import Button from '$lib/components/ui/Button.svelte';
@@ -87,54 +100,11 @@
 		return LAST_LIBRARY_CACHE_KEY;
 	}
 
-	// ── IndexedDB persistence for FileSystemDirectoryHandle ──────
-	function openIDB(): Promise<IDBDatabase> {
-		return new Promise((res, rej) => {
-			const req = indexedDB.open('music-app', 2);
-			req.onupgradeneeded = () => {
-				const db = req.result;
-				if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles');
-				if (!db.objectStoreNames.contains('libraries')) db.createObjectStore('libraries');
-			};
-			req.onsuccess = () => res(req.result);
-			req.onerror  = () => rej(req.error);
-			// Reject instead of hanging when another connection blocks the version change.
-			req.onblocked = () => rej(new Error('IDB open blocked'));
-		});
-	}
-	// ── IDB helpers — eliminate repeated Promise wrapping ──────────────────────
-	function idbGet<T>(db: IDBDatabase, store: string, key: string): Promise<T | null> {
-		return new Promise((res, rej) => {
-			const req = db.transaction(store).objectStore(store).get(key);
-			req.onsuccess = () => res((req.result ?? null) as T | null);
-			req.onerror = () => rej(req.error);
-		});
-	}
-	function idbPut(db: IDBDatabase, store: string, value: unknown, key: string): Promise<void> {
-		return new Promise((res, rej) => {
-			const tx = db.transaction(store, 'readwrite');
-			tx.objectStore(store).put(value, key);
-			tx.oncomplete = () => res();
-			tx.onerror = () => rej(tx.error);
-		});
-	}
-	function idbDelete(db: IDBDatabase, store: string, key: string): Promise<void> {
-		return new Promise((res, rej) => {
-			const tx = db.transaction(store, 'readwrite');
-			tx.objectStore(store).delete(key);
-			tx.oncomplete = () => res();
-			tx.onerror = () => rej(tx.error);
-		});
-	}
-
-	async function saveHandleToIDB(handle: FileSystemDirectoryHandle) {
-		try { const db = await openIDB(); await idbPut(db, 'handles', handle, 'last-dir'); db.close(); }
-		catch { /* storage unavailable */ }
-	}
-	async function loadHandleFromIDB(): Promise<FileSystemDirectoryHandle | null> {
-		try { const db = await openIDB(); const h = await idbGet<FileSystemDirectoryHandle>(db, 'handles', 'last-dir'); db.close(); return h; }
-		catch { return null; }
-	}
+	// ── IndexedDB persistence (primitives live in $lib/utils/idb) ───
+	// saveCachedLibrary / loadDeviceCachedLibrary are view-coupled (they derive
+	// the cache key from nativeTreeUri via getDeviceLibraryCacheKey); the generic
+	// idbGet/Put/Delete, openIDB, openDriveCacheIDB, handle/library/drive-cache
+	// helpers are imported from $lib/utils/idb.
 	async function saveCachedLibrary(folderName: string, files: StoredAudioFile[], cacheKey = getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName })) {
 		const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
 			if (file.source === 'web') {
@@ -173,52 +143,13 @@
 		}
 		catch { /* ignore cache write failures */ }
 	}
-	async function loadCachedLibrary(cacheKey = LAST_LIBRARY_CACHE_KEY): Promise<CachedLibrary | null> {
-		try { const db = await openIDB(); const r = await idbGet<CachedLibrary>(db, 'libraries', cacheKey); db.close(); return r; }
-		catch { return null; }
-	}
-	async function deleteCachedLibrary(cacheKey: string): Promise<void> {
-		try { const db = await openIDB(); await idbDelete(db, 'libraries', cacheKey); db.close(); }
-		catch { /* ignore cache delete failures */ }
-	}
 	async function loadDeviceCachedLibrary(treeUri: string | null, folderName: string): Promise<CachedLibrary | null> {
 		const cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName });
 		const cached = await loadCachedLibrary(cacheKey);
 		if (cached) return cached;
 		if (cacheKey === LAST_LIBRARY_CACHE_KEY) return null;
-		const fallback = await loadCachedLibrary();
+		const fallback = await loadCachedLibrary(LAST_LIBRARY_CACHE_KEY);
 		return fallback?.folderName === folderName ? fallback : null;
-	}
-
-	// ── Separate IDB for Google Drive file list cache (avoids version conflicts with music-app) ─
-	const DRIVE_CACHE_TTL = 60 * 60 * 1000;
-	function openDriveCacheIDB(): Promise<IDBDatabase> {
-		return new Promise((res, rej) => {
-			const req = indexedDB.open('music-app-drive-cache', 1);
-			req.onupgradeneeded = () => {
-				const db = req.result;
-				if (!db.objectStoreNames.contains('drive-files')) db.createObjectStore('drive-files');
-			};
-			req.onsuccess = () => res(req.result);
-			req.onerror  = () => rej(req.error);
-		});
-	}
-	async function saveDriveCache(cacheKey: string, files: GoogleDriveFile[]) {
-		try { const db = await openDriveCacheIDB(); await idbPut(db, 'drive-files', { files, savedAt: Date.now() }, cacheKey); db.close(); }
-		catch { /* ignore cache write failures */ }
-	}
-	async function loadDriveCache(cacheKey: string): Promise<GoogleDriveFile[] | null> {
-		try {
-			const db = await openDriveCacheIDB();
-			const entry = await idbGet<{ files: GoogleDriveFile[]; savedAt: number }>(db, 'drive-files', cacheKey);
-			db.close();
-			if (!entry || Date.now() - entry.savedAt > DRIVE_CACHE_TTL) return null;
-			return entry.files;
-		} catch { return null; }
-	}
-	async function bustDriveCache(cacheKey: string) {
-		try { const db = await openDriveCacheIDB(); await idbDelete(db, 'drive-files', cacheKey); db.close(); }
-		catch { /* ignore */ }
 	}
 
 	function restoreStoredFilesFromCache(cachedLibrary: CachedLibrary): StoredAudioFile[] {
@@ -615,12 +546,6 @@
 	// ─────────────────────────────────────────────────────────────
 	// General helpers
 	// ─────────────────────────────────────────────────────────────
-	function parseFilename(filename: string): { title: string; artist: string } {
-		const name = filename.replace(/\.mp3$/i, '').replace(/_/g, ' ');
-		const sep = name.indexOf(' - ');
-		if (sep > 0) return { artist: name.slice(0, sep).trim(), title: name.slice(sep + 3).trim() };
-		return { title: name, artist: 'Unknown Artist' };
-	}
 	function revokeAll() {
 		preloadRequestId += 1;
 		preloadedTrackIndex = null;
@@ -652,51 +577,7 @@
 		});
 	}
 	function sortFiles(files: StoredAudioFile[]): StoredAudioFile[] {
-		return [...files].sort((a, b) => {
-			if (musicSettings.sortOrder === 'title')
-				return parseFilename(a.name).title.localeCompare(parseFilename(b.name).title);
-			if (musicSettings.sortOrder === 'artist')
-				return parseFilename(a.name).artist.localeCompare(parseFilename(b.name).artist);
-			return a.name.localeCompare(b.name, undefined, { numeric: true });
-		});
-	}
-
-	function createStoredAudioFile(file: File): StoredAudioFile {
-		const relativePath = file.webkitRelativePath?.split('/').slice(1).join('/') ?? file.name;
-		return createStoredWebAudioFile(file, relativePath && relativePath.length > 0 ? relativePath : file.name);
-	}
-
-	function createStoredWebAudioFile(file: File, relativePath: string): StoredAudioFile {
-		return {
-			source: 'web',
-			name: file.name,
-			relativePath: relativePath && relativePath.length > 0 ? relativePath : file.name,
-			file,
-		};
-	}
-
-	function createStoredNativeAudioFile(entry: NativeDirectoryFile): StoredAudioFile {
-		return {
-			source: 'native',
-			name: entry.name,
-			relativePath: entry.relativePath,
-			path: entry.path,
-			mimeType: entry.mimeType,
-			modifiedAt: entry.modifiedAt,
-		};
-	}
-
-	function createStoredDriveAudioFile(entry: GoogleDriveFile): StoredAudioFile {
-		return {
-			source: 'drive',
-			name: entry.name,
-			relativePath: entry.relativePath ?? entry.name,
-			fileId: entry.id,
-			mimeType: entry.mimeType,
-			modifiedAt: entry.modifiedTime ? new Date(entry.modifiedTime).getTime() : undefined,
-			sizeBytes: entry.size ? Number(entry.size) : undefined,
-			webViewLink: entry.webViewLink,
-		};
+		return sortStoredFiles(files, musicSettings.sortOrder);
 	}
 
 	function pathToString(path: string[]): string | undefined {
