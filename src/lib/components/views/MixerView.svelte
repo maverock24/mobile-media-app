@@ -186,26 +186,17 @@
 		activeSessionId = getJSON<string | null>(ACTIVE_SESSION_KEY, null);
 	}
 
+	/** Persist the named-sessions list and the active-session id. Saved sessions
+	 *  are immutable snapshots: live deck edits are NEVER written back into a
+	 *  saved session (that was the bug where saving a new session silently
+	 *  overwrote the previously-active one). Deck-resume-on-mount is handled
+	 *  separately by saveDeckState()/DECK_STATE_KEY. */
 	function persistSessions() {
 		setJSON(SESSIONS_KEY, sessions);
 	}
 
 	function persistActiveSessionId() {
 		setJSON(ACTIVE_SESSION_KEY, activeSessionId);
-	}
-
-	/** Write the current live deck state (position, volume, loop, tracks) back into the
-	 *  active session, if any. Called on deck mutations and when another audio source
-	 *  (podcast/radio/music) takes over so the session always reflects the last state. */
-	function persistActiveSession() {
-		if (!activeSessionId) return;
-		const snapshot = captureDeckSnapshot();
-		sessions = sessions.map((s) =>
-			s.id === activeSessionId
-				? { ...s, A: snapshot.A, B: snapshot.B, updatedAt: Date.now() }
-				: s
-		);
-		persistSessions();
 	}
 
 	function saveCurrentSession() {
@@ -227,8 +218,8 @@
 	}
 
 	async function loadSession(session: MixerSession) {
-		// Persist the outgoing session's live state before swapping decks.
-		persistActiveSession();
+		// Saved sessions are immutable snapshots — do NOT persist the outgoing
+		// decks into the previously-active session. Just load the chosen snapshot.
 		await loadDeckSnapshot({ A: session.A, B: session.B });
 		activeSessionId = session.id;
 		persistActiveSessionId();
@@ -271,7 +262,6 @@
 				deck._savedFile = { source: file.source as 'native' | 'drive', name: file.name, relativePath: file.relativePath, path: (file as any).path, fileId: (file as any).fileId, mimeType: (file as any).mimeType, modifiedAt: (file as any).modifiedAt, sizeBytes: (file as any).sizeBytes, webViewLink: (file as any).webViewLink };
 			}
 			saveDeckState();
-			persistActiveSession();
 		} catch (e) {
 			addToast({ message: e instanceof Error ? e.message : 'Failed to load track.', type: 'error' });
 		} finally {
@@ -294,7 +284,6 @@
 		deck.loop = !deck.loop;
 		el.loop = deck.loop;
 		saveDeckState();
-		persistActiveSession();
 	}
 
 	function stopDeck(which: 'A' | 'B') {
@@ -303,7 +292,6 @@
 		el.pause();
 		el.currentTime = 0;
 		syncMixerPlayingFlag();
-		persistActiveSession();
 	}
 
 	/** Unload a deck entirely, releasing its object URL. */
@@ -327,7 +315,6 @@
 		deck.volume = value;
 		if (el) el.volume = value;
 		saveDeckState();
-		persistActiveSession();
 	}
 
 	function playBoth() {
@@ -364,26 +351,9 @@
 		const a = audioA;
 		const b = audioB;
 		registerAudioSource('mixer', () => {
-			persistActiveSession();
 			a?.pause();
 			b?.pause();
 		});
-	});
-
-	// ── Periodically persist the active session's playback position ──────────
-	// position changes continuously during playback; save it every few seconds so a
-	// sudden handoff (another source starting, app backgrounded) doesn't lose it.
-	$effect(() => {
-		if (!activeSessionId) return;
-		const timer = window.setInterval(persistActiveSession, 3000);
-		return () => window.clearInterval(timer);
-	});
-
-	// Persist the active session when the mixer view is torn down (tab hidden does
-	// not unmount, but Android may kill the WebView; onMount cleanup runs on real
-	// unmount / route change).
-	onMount(() => {
-		// Ensure sessions and the active id are loaded before restoring.
 	});
 
 	// ── Sync mixer hooks to MiniPlayer via mixerShared ──────────
@@ -447,7 +417,6 @@
 		loadSessions();
 		restoreDeckState();
 		return () => {
-			persistActiveSession();
 			audioA?.pause();
 			audioB?.pause();
 			revokeA?.();
