@@ -339,17 +339,13 @@ export const mediaEngine = $state<NowPlayingState & {
 		_streamAudio.preload = 'none';
 
 		_streamAudio.addEventListener('play', () => { this.setPlaying(true); this._streamPlaying?.(); });
-		_streamAudio.addEventListener('pause', () => { if (this.source === 'radio') this.setPlaying(false); });
+		_streamAudio.addEventListener('pause', () => { this.setPlaying(false); });
 		_streamAudio.addEventListener('waiting', () => { this._streamWaiting?.(); });
 		_streamAudio.addEventListener('playing', () => { this._streamPlaying?.(); });
 		_streamAudio.addEventListener('timeupdate', () => {
 			// Heartbeat: keep the stream alive and track buffering state
 		});
 		_streamAudio.addEventListener('error', () => {
-			// Stale pause/error from the previous stream fires during stopStreamAudio()
-			// teardown — ignore it once another source has claimed playback, so it can't
-			// clobber the new source's isPlaying=true (Android WebView race).
-			if (this.source !== 'radio') return;
 			this.setPlaying(false);
 			this._streamError?.(_streamAudio?.error ?? null);
 		});
@@ -357,7 +353,7 @@ export const mediaEngine = $state<NowPlayingState & {
 			// Stream ended unexpectedly (server disconnect / Android resource kill).
 			// Only auto-reconnect if the user still wants playback — a deliberate pause
 			// can also surface as 'ended' on live streams and must NOT restart audio.
-			if (this.source === 'radio') this.setPlaying(false);
+			this.setPlaying(false);
 			this._streamEnded?.();
 			if (_streamShouldPlay) reconnectStream(url, item);
 		});
@@ -376,7 +372,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		// EQ for radio/podcast requires proxying the stream through our own origin.
 		_streamAudio.src = url;
 		_streamAudio.play().catch((err) => {
-			if (err?.name !== 'AbortError' && this.source === 'radio') this.setPlaying(false);
+			if (err?.name !== 'AbortError') this.setPlaying(false);
 		});
 	},
 
@@ -491,8 +487,8 @@ function getAudioSlots(): [HTMLAudioElement, HTMLAudioElement] {
 		_audioSlots = [new Audio(), new Audio()];
 		_audioSlots.forEach((audio, i) => {
 			audio.preload = 'metadata';
-			audio.addEventListener('play', () => { if (i === _activeSlot && mediaEngine.source === 'music') mediaEngine.setPlaying(true); });
-			audio.addEventListener('pause', () => { if (i === _activeSlot && mediaEngine.source === 'music') mediaEngine.setPlaying(false); });
+			audio.addEventListener('play', () => { if (i === _activeSlot) mediaEngine.setPlaying(true); });
+			audio.addEventListener('pause', () => { if (i === _activeSlot) mediaEngine.setPlaying(false); });
 			audio.addEventListener('ended', () => { if (i === _activeSlot) mediaEngine.next(false); });
 			audio.addEventListener('timeupdate', () => {
 				if (i === _activeSlot) mediaEngine.updateTime(audio.currentTime, audio.duration);
@@ -507,7 +503,7 @@ function getAudioSlots(): [HTMLAudioElement, HTMLAudioElement] {
 				// don't show a toast for it since the actual playback element is unaffected
 				if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) return;
 				console.error(`Audio slot ${i} error:`, err?.code, err?.message);
-				if (i === _activeSlot && mediaEngine.source === 'music') {
+				if (i === _activeSlot) {
 					mediaEngine.setPlaying(false);
 					const msg = err ? describeAudioError(err) : 'Unknown playback error.';
 					addToast({ message: msg, type: 'error' });

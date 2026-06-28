@@ -526,7 +526,7 @@
 		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.setPlaying(true);  };
 		const onPause = () => {
 			isPlaying = false;
-			if (mediaEngine.source === 'music') mediaEngine.setPlaying(false);
+			mediaEngine.setPlaying(false);
 			musicSettings.lastTrackTimestamp = 0;
 		};
 		const onEnded = () => {
