@@ -344,15 +344,11 @@
 		syncMixerPlayingFlag();
 	}
 
-	/** Release the global playing flag when the mixer decks stop on user action,
-	 *  but ONLY if no other source (music/podcast/radio) is currently playing.
-	 *  claimAudio() from another source pauses the decks too, and in that case
-	 *  mediaEngine.isPlaying reflects the new source — we must not clear it. */
+	/** Release the global playing flag when the mixer decks stop on user action.
+	 *  With per-source playing flags, setting mixerPlaying=false is always safe —
+	 *  it never touches another source's flag, so no cross-source guard is needed. */
 	function syncMixerPlayingFlag() {
-		const decksPlaying = deckA.playing || deckB.playing;
-		if (!decksPlaying && !mediaEngine.isPlaying) {
-			mediaEngine.setPlaying(false);
-		}
+		if (!(deckA.playing || deckB.playing)) mediaEngine.mixerPlaying = false;
 	}
 
 	const anyPlaying = $derived(deckA.playing || deckB.playing);
@@ -697,6 +693,6 @@
 	</div>
 
 	<!-- Hidden audio elements -->
-	<audio bind:this={audioA} onplay={() => { deckA.playing = true; mediaEngine.setPlaying(true); }} onpause={() => { deckA.playing = false; }} onended={() => { deckA.playing = false; }} preload="none"></audio>
-	<audio bind:this={audioB} onplay={() => { deckB.playing = true; mediaEngine.setPlaying(true); }} onpause={() => { deckB.playing = false; }} onended={() => { deckB.playing = false; }} preload="none"></audio>
+	<audio bind:this={audioA} onplay={() => { deckA.playing = true; mediaEngine.mixerPlaying = true; }} onpause={() => { deckA.playing = false; }} onended={() => { deckA.playing = false; }} preload="none"></audio>
+	<audio bind:this={audioB} onplay={() => { deckB.playing = true; mediaEngine.mixerPlaying = true; }} onpause={() => { deckB.playing = false; }} onended={() => { deckB.playing = false; }} preload="none"></audio>
 </div>

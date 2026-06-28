@@ -523,10 +523,10 @@
 					: t
 			);
 		};
-		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.setPlaying(true);  };
+		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.musicPlaying = true;  };
 		const onPause = () => {
 			isPlaying = false;
-			mediaEngine.setPlaying(false);
+			mediaEngine.musicPlaying = false;
 			musicSettings.lastTrackTimestamp = 0;
 		};
 		const onEnded = () => {

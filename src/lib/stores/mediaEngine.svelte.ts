@@ -37,7 +37,12 @@ export function claimAudio(id: AudioSourceId): void {
 
 export interface NowPlayingState {
 	item:        MediaItem | null;
-	isPlaying:   boolean;
+	/** Derived: true when ANY source is actively playing. Read-only — each source
+	 *  owns its own flag (musicPlaying/podcastPlaying/radioPlaying/mixerPlaying)
+	 *  so a stale async 'pause'/'error' event from a just-stopped source can never
+	 *  clobber another source's playing state (the Android WebView race that
+	 *  caused radio/podcast/MP3 to stop immediately after starting). */
+	readonly isPlaying: boolean;
 	currentTime: number;    // seconds
 	duration:    number;    // seconds
 	source:      MediaSource | null;
@@ -58,6 +63,12 @@ export const mediaEngine = $state<NowPlayingState & {
 	crossfadeDuration: number; // seconds
 	eqBands: number[];
 
+	// --- Per-source playing flags (isPlaying is derived from these) ---
+	musicPlaying:   boolean;
+	podcastPlaying: boolean;
+	radioPlaying:   boolean;
+	mixerPlaying:   boolean;
+
 	// --- Central Commands ---
 	play(item: MediaItem, source: MediaSource): void;
 	playFromQueue(index: number): void;
@@ -71,7 +82,6 @@ export const mediaEngine = $state<NowPlayingState & {
 
 	// --- Internal Hookups (called by audio listeners) ---
 	updateTime(currentTime: number, duration: number): void;
-	setPlaying(playing: boolean): void;
 	clear(): void;
 	/** Metadata-only update — sets now-playing info without starting audio playback. */
 	setNowPlaying(item: MediaItem, source: MediaSource): void;
@@ -98,7 +108,16 @@ export const mediaEngine = $state<NowPlayingState & {
 	setCallbacks(next: (() => void) | null, prev: (() => void) | null): void;
 }>({
 	item:        null,
-	isPlaying:   false,
+	musicPlaying:   false,
+	podcastPlaying: false,
+	radioPlaying:   false,
+	mixerPlaying:   false,
+	get isPlaying(): boolean {
+		// Derived from per-source flags. Exclusivity means at most one is true at a
+		// time, but a stale async 'pause' from a just-stopped source may still be in
+		// flight — reading it only flips ITS flag, never the active source's.
+		return this.musicPlaying || this.podcastPlaying || this.radioPlaying || this.mixerPlaying;
+	},
 	currentTime: 0,
 	duration:    0,
 	source:      null,
@@ -124,7 +143,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		const isFirstPlay = !this.item;
 		this.item = item;
 		this.source = source;
-		this.isPlaying = true;
+		this.musicPlaying = true;
 
 		// Resolve dynamic URL if needed
 		let url = item.audioUrl;
@@ -141,7 +160,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		}
 
 		if (!url) {
-			this.isPlaying = false;
+			this.musicPlaying = false;
 			return;
 		}
 
@@ -171,7 +190,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		newSlot.play().then(() => {
 			if (this.item) addToHistory(this.item);
 		}).catch(() => {
-			this.isPlaying = false;
+			this.musicPlaying = false;
 		});
 	},
 
@@ -191,19 +210,19 @@ export const mediaEngine = $state<NowPlayingState & {
 		// Radio plays through _streamAudio (not an audio slot), so pause it directly.
 		if (this.source === 'radio' && _streamAudio) {
 			_streamAudio.pause();
-			this.isPlaying = false;
+			this.radioPlaying = false;
 			return;
 		}
 		const slots = getAudioSlots();
 		slots.forEach(s => s.pause());
-		this.isPlaying = false;
+		this.musicPlaying = false;
 	},
 
 	resume() {
 		if (this.source === 'radio' && _streamAudio) {
 			if (_audioCtx?.state === 'suspended') void _audioCtx.resume();
 			_streamAudio.play().catch(() => {});
-			this.isPlaying = true;
+			this.radioPlaying = true;
 			return;
 		}
 		const slots = getAudioSlots();
@@ -211,7 +230,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		if (current) {
 			if (_audioCtx?.state === 'suspended') void _audioCtx.resume();
 			current.play().catch(() => {});
-			this.isPlaying = true;
+			this.musicPlaying = true;
 		}
 	},
 
@@ -278,21 +297,6 @@ export const mediaEngine = $state<NowPlayingState & {
 		}
 	},
 
-	setPlaying(playing: boolean) {
-		this.isPlaying = playing;
-	},
-
-	clear() {
-		const slots = getAudioSlots();
-		slots.forEach(s => { s.pause(); s.src = ''; });
-		stopStreamAudio();
-		this.item = null;
-		this.isPlaying = false;
-		this.currentTime = 0;
-		this.duration = 0;
-		this.source = null;
-	},
-
 	setPlaybackHandlers(play, pause, seek) {
 		this._onPlay = play;
 		this._onPause = pause;
@@ -317,6 +321,22 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.duration = item.duration ?? 0;
 	},
 
+	/** Stop all playback and reset now-playing state. Resets every per-source
+	 *  playing flag so no stale `isPlaying=true` lingers after teardown. */
+	clear() {
+		const slots = getAudioSlots();
+		slots.forEach(s => { s.pause(); s.src = ''; });
+		stopStreamAudio();
+		this.item = null;
+		this.musicPlaying = false;
+		this.podcastPlaying = false;
+		this.radioPlaying = false;
+		this.mixerPlaying = false;
+		this.currentTime = 0;
+		this.duration = 0;
+		this.source = null;
+	},
+
 	// ─── Live stream playback (radio) ────────────────────────────────────
 	_streamError: null as ((err: MediaError | null) => void) | null,
 	_streamWaiting: null as (() => void) | null,
@@ -338,22 +358,22 @@ export const mediaEngine = $state<NowPlayingState & {
 		_streamAudio = new Audio();
 		_streamAudio.preload = 'none';
 
-		_streamAudio.addEventListener('play', () => { this.setPlaying(true); this._streamPlaying?.(); });
-		_streamAudio.addEventListener('pause', () => { this.setPlaying(false); });
+		_streamAudio.addEventListener('play', () => { this.radioPlaying = true; this._streamPlaying?.(); });
+		_streamAudio.addEventListener('pause', () => { this.radioPlaying = false; });
 		_streamAudio.addEventListener('waiting', () => { this._streamWaiting?.(); });
 		_streamAudio.addEventListener('playing', () => { this._streamPlaying?.(); });
 		_streamAudio.addEventListener('timeupdate', () => {
 			// Heartbeat: keep the stream alive and track buffering state
 		});
 		_streamAudio.addEventListener('error', () => {
-			this.setPlaying(false);
+			this.radioPlaying = false;
 			this._streamError?.(_streamAudio?.error ?? null);
 		});
 		_streamAudio.addEventListener('ended', () => {
 			// Stream ended unexpectedly (server disconnect / Android resource kill).
 			// Only auto-reconnect if the user still wants playback — a deliberate pause
 			// can also surface as 'ended' on live streams and must NOT restart audio.
-			this.setPlaying(false);
+			this.radioPlaying = false;
 			this._streamEnded?.();
 			if (_streamShouldPlay) reconnectStream(url, item);
 		});
@@ -372,7 +392,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		// EQ for radio/podcast requires proxying the stream through our own origin.
 		_streamAudio.src = url;
 		_streamAudio.play().catch((err) => {
-			if (err?.name !== 'AbortError') this.setPlaying(false);
+			if (err?.name !== 'AbortError') this.radioPlaying = false;
 		});
 	},
 
@@ -383,7 +403,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		cancelStreamReconnect();
 		if (_streamAudio) {
 			_streamAudio.pause();
-			this.setPlaying(false);
+			this.radioPlaying = false;
 		}
 	},
 
@@ -393,7 +413,7 @@ export const mediaEngine = $state<NowPlayingState & {
 			_streamShouldPlay = true;
 			if (_audioCtx?.state === 'suspended') void _audioCtx.resume();
 			_streamAudio.play().catch(() => {});
-			this.setPlaying(true);
+			this.radioPlaying = true;
 		}
 	},
 
@@ -487,8 +507,8 @@ function getAudioSlots(): [HTMLAudioElement, HTMLAudioElement] {
 		_audioSlots = [new Audio(), new Audio()];
 		_audioSlots.forEach((audio, i) => {
 			audio.preload = 'metadata';
-			audio.addEventListener('play', () => { if (i === _activeSlot) mediaEngine.setPlaying(true); });
-			audio.addEventListener('pause', () => { if (i === _activeSlot) mediaEngine.setPlaying(false); });
+			audio.addEventListener('play', () => { if (i === _activeSlot) mediaEngine.musicPlaying = true; });
+			audio.addEventListener('pause', () => { if (i === _activeSlot) mediaEngine.musicPlaying = false; });
 			audio.addEventListener('ended', () => { if (i === _activeSlot) mediaEngine.next(false); });
 			audio.addEventListener('timeupdate', () => {
 				if (i === _activeSlot) mediaEngine.updateTime(audio.currentTime, audio.duration);
@@ -504,7 +524,7 @@ function getAudioSlots(): [HTMLAudioElement, HTMLAudioElement] {
 				if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) return;
 				console.error(`Audio slot ${i} error:`, err?.code, err?.message);
 				if (i === _activeSlot) {
-					mediaEngine.setPlaying(false);
+					mediaEngine.musicPlaying = false;
 					const msg = err ? describeAudioError(err) : 'Unknown playback error.';
 					addToast({ message: msg, type: 'error' });
 				}
