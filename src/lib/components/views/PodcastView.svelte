@@ -237,13 +237,13 @@
 			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
 		};
 		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.setPlaying(true);  };
-		const onPause = () => { isPlaying = false; mediaEngine.setPlaying(false); };
+		const onPause = () => { isPlaying = false; if (mediaEngine.source === 'podcast') mediaEngine.setPlaying(false); };
 		const onWaiting  = () => { isBuffering = true; };
 		const onPlaying  = () => { isBuffering = false; };
 		const onEnded = () => {
 			isPlaying = false;
 			isBuffering = false;
-			mediaEngine.setPlaying(false);
+			if (mediaEngine.source === 'podcast') mediaEngine.setPlaying(false);
 			if (currentEpisode) {
 				markEpisodeFullyPlayed(currentEpisode.podcast.id, currentEpisode.episode);
 			}
@@ -256,7 +256,7 @@
 				addToast({ message: 'Connection lost — will resume when reconnected.', type: 'warning', autoDismissMs: 6000 });
 			} else {
 				isPlaying = false;
-				mediaEngine.setPlaying(false);
+				if (mediaEngine.source === 'podcast') mediaEngine.setPlaying(false);
 				if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
 					addToast({ message: 'This audio format is not supported.', type: 'error', autoDismissMs: 4000 });
 				}
