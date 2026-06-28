@@ -14,6 +14,10 @@
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	import { formatDuration } from '$lib/models/music';
 	import {
+		fetchRss, buildEpisodeId, describePodcastRequestError,
+		parseDuration, formatDate, readPodcastJson, clearRssCache,
+	} from '$lib/podcast/rss';
+	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
 		RefreshCw, X
@@ -435,10 +439,7 @@
 		})
 	);
 
-	// ── RSS feed cache (in-memory, 30-min TTL) ───────────────────
-	const RSS_CACHE_TTL = 30 * 60 * 1000;
-	const PODCAST_REQUEST_TIMEOUT_MS = 20_000;
-	const rssCache = new Map<string, { data: Record<string, unknown>; ts: number }>();
+	// ── Release URL resolver (hosted proxy for native / configured releases) ──
 	function resolvePodcastApiUrl(path: string): string {
 		if (/^https?:\/\//i.test(path)) {
 			return path;
@@ -451,70 +452,12 @@
 		return `${podcastApiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 	}
 
-	async function readPodcastJson<T>(requestUrl: string, signal?: AbortSignal): Promise<T> {
-		const controller = new AbortController();
-		let timedOut = false;
-		const timeoutId = setTimeout(() => {
-			timedOut = true;
-			controller.abort();
-		}, PODCAST_REQUEST_TIMEOUT_MS);
-		const abortFromParent = () => controller.abort();
-		if (signal?.aborted) controller.abort();
-		signal?.addEventListener('abort', abortFromParent, { once: true });
+	/** RssFetchConfig bound to this view's release/proxy resolution. */
+	const rssFetchConfig = $derived.by(() => ({
+		resolveUrl: resolvePodcastApiUrl,
+		useHostedProxy: useHostedPodcastProxy,
+	}));
 
-		let response: Response;
-		try {
-			response = await fetch(requestUrl, { signal: controller.signal });
-		} catch (error) {
-			if (timedOut) {
-				throw new Error('Podcast request timed out. Check your connection and try again.');
-			}
-			throw error;
-		} finally {
-			clearTimeout(timeoutId);
-			signal?.removeEventListener('abort', abortFromParent);
-		}
-		if (!response.ok) {
-			let message = `Podcast request failed: HTTP ${response.status}`;
-			try {
-				const payload = await response.json() as Record<string, unknown>;
-				if (typeof payload.error === 'string') {
-					message = payload.error;
-				} else if (typeof payload.message === 'string') {
-					message = payload.message;
-				}
-			} catch {
-				// Fall back to the status-derived message when the response has no JSON body.
-			}
-			throw new Error(message);
-		}
-
-		return await response.json() as T;
-	}
-
-	function getStringField(item: Record<string, unknown>, key: string): string {
-		const value = item[key];
-		return typeof value === 'string' ? value.trim() : '';
-	}
-
-	function getEpisodeIdentitySource(item: Record<string, unknown>, enclosure: { link?: string } | null): string {
-		const guid = item.guid;
-		if (typeof guid === 'string' && guid.trim()) return guid.trim();
-		if (guid && typeof guid === 'object') {
-			const guidRecord = guid as Record<string, unknown>;
-			const guidValue = typeof guidRecord._ === 'string' ? guidRecord._.trim() : '';
-			if (guidValue) return guidValue;
-		}
-
-		return enclosure?.link?.trim()
-			|| getStringField(item, 'link')
-			|| `${getStringField(item, 'title')}|${getStringField(item, 'pubDate')}`;
-	}
-
-	function buildEpisodeId(podcast: Podcast, item: Record<string, unknown>, index: number, enclosure: { link?: string } | null): string {
-		const source = getEpisodeIdentitySource(item, enclosure) || `episode-${index}`;
-		return `${podcast.itunesId}:${source}`;
-	}
 
 	function mergeEpisodeHistory(podcastId: number, episodes: Episode[]): Episode[] {
 		const existingEpisodes = podcastData.podcasts.find(p => p.id === podcastId)?.episodes ?? [];
@@ -539,55 +482,7 @@
 		});
 	}
 
-	function describePodcastRequestError(error: unknown, fallback: string): string {
-		if (error instanceof Error) {
-			if (/failed to fetch|fetch failed/i.test(error.message)) {
-				return fallback;
-			}
-			return error.message;
-		}
-		return fallback;
-	}
-
-	async function fetchRss(feedUrl: string, signal?: AbortSignal, page?: number): Promise<Record<string, unknown>> {
-		// Validate that the feed URL is a legitimate HTTP(S) address
-		try {
-			const parsed = new URL(feedUrl);
-			if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-				throw new Error('Feed URL must use HTTP or HTTPS.');
-			}
-		} catch (e) {
-			throw new Error('Invalid feed URL.');
-		}
-		const cacheKey = page ? `${feedUrl}::page${page}` : feedUrl;
-		const cached = rssCache.get(cacheKey);
-		if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) return cached.data;
-		let query = `url=${encodeURIComponent(feedUrl)}`;
-		if (page) query += `&page=${page}&perPage=50`;
-		const requestUrl = useHostedPodcastProxy
-			? resolvePodcastApiUrl(`/api/podcast/feed?${query}`)
-			: `/api/podcast/feed?${query}`;
-		const data = await readPodcastJson<Record<string, unknown>>(requestUrl, signal);
-		if (data.status === 'ok') rssCache.set(cacheKey, { data, ts: Date.now() });
-		return data;
-	}
-
 	// ── Helpers ─────────────────────────────────────────────────
-	function formatDate(dateStr: string): string {
-		if (!dateStr) return '';
-		const d = new Date(dateStr);
-		if (isNaN(d.getTime())) return '';
-		return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-	}
-	function parseDuration(dur: string | number): number {
-		if (typeof dur === 'number') return dur;
-		if (!dur) return 0;
-		const parts = String(dur).split(':').map(Number);
-		if (parts.some(isNaN)) return 0;
-		if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-		if (parts.length === 2) return parts[0] * 60 + parts[1];
-		return parts[0] || 0;
-	}
 	function isActiveEpisode(episode: Episode): boolean {
 		return currentEpisode?.episode.id === episode.id;
 	}
@@ -736,8 +631,8 @@
 				p = { ...p, feedUrl: resolvedFeedUrl };
 				podcastData.podcasts = podcastData.podcasts.map(pd => pd.id === p.id ? p : pd);
 			}
-			rssCache.delete(p.feedUrl);
-			const data = await fetchRss(p.feedUrl, signal);
+			clearRssCache(p.feedUrl);
+			const data = await fetchRss(p.feedUrl, rssFetchConfig, signal);
 			if (data.status !== 'ok') return;
 			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map(
 				(item: Record<string, unknown>, i: number) => {
@@ -792,13 +687,8 @@
 		episodeLoadController = controller;
 		episodeLoadPodcastId = podcast.id;
 		const signal = controller.signal;
-		// Bust the RSS cache on manual force-refresh
-		if (force && podcast.feedUrl) {
-			// Clear all cached pages for this feed
-			for (const key of rssCache.keys()) {
-				if (key.startsWith(podcast.feedUrl)) rssCache.delete(key);
-			}
-		}
+		// Clear all cached pages for this feed
+		if (force && podcast.feedUrl) clearRssCache(podcast.feedUrl);
 		if (force && podcast.episodesLoaded) {
 			episodesRefreshing = true;
 		} else {
@@ -826,7 +716,7 @@
 					selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
 				}
 			}
-			const data = await fetchRss(podcast.feedUrl, signal, force ? undefined : 1) as Record<string, unknown>;
+			const data = await fetchRss(podcast.feedUrl, rssFetchConfig, signal, force ? undefined : 1) as Record<string, unknown>;
 			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
 			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
 				const enc = item.enclosure as { link?: string; length?: number } | null;
@@ -883,7 +773,7 @@
 		episodesLoadingMore = true;
 		const nextPage = episodesPage + 1;
 		try {
-			const data = await fetchRss(podcast.feedUrl, undefined, nextPage) as Record<string, unknown>;
+			const data = await fetchRss(podcast.feedUrl, rssFetchConfig, undefined, nextPage) as Record<string, unknown>;
 			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
 			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
 				const enc = item.enclosure as { link?: string; length?: number } | null;
