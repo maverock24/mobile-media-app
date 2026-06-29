@@ -1,5 +1,6 @@
+/// <reference types="vitest/config" />
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -29,5 +30,12 @@ export default defineConfig({
 				]
 			}
 		})
-	]
+	],
+	test: {
+		// jsdom so store/action tests that touch window/document run headless.
+		// Pure-function tests (music.ts, rss.ts) don't need it but run fine under it.
+		environment: 'jsdom',
+		include: ['src/**/*.{test,spec}.{ts,js}', 'tests/unit/**/*.{test,spec}.{ts,js}'],
+		setupFiles: ['tests/unit/setup.ts']
+	}
 });
