@@ -100,7 +100,7 @@ test.describe('Cross-view audio exclusivity', () => {
 		await page.route('**/itunes.apple.com/**', (route) =>
 			route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_ITUNES) })
 		);
-		await page.route('**/api.rss2json.com/**', (route) =>
+		await page.route('**/api/podcast/feed**', (route) =>
 			route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_RSS_RESPONSE) })
 		);
 		await page.route('**/stream.testjazz.example/**', (route) => route.abort());
@@ -142,8 +142,10 @@ test.describe('Cross-view audio exclusivity', () => {
 
 		// Player state is intact — track title visible
 		await expect(page.getByText('song').first()).toBeVisible({ timeout: 3000 });
-		// Progress bar is still there
-		await expect(page.locator('input[type="range"]').first()).toBeVisible();
+		// Progress bar (MiniPlayer seek) is still there. Target it by aria-label
+		// rather than input[type=range] which also matches the always-mounted (hidden)
+		// mixer deck volume sliders.
+		await expect(page.locator('input[aria-label="Seek"]')).toBeVisible();
 	});
 
 	test('starting podcast playback stops music audio', async ({ page }) => {

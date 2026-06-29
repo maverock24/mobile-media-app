@@ -182,10 +182,12 @@ test.describe('Google Drive music library', () => {
 		// locator.click() has built-in auto-waiting so it will wait for the button to appear.
 		await page.getByRole('button', { name: /Select all/i }).click();
 
-		await expect(page.getByText('drive.tester@example.com')).toBeVisible({ timeout: 5000 });
-		await expect(page.getByText('Drive Song')).toBeVisible();
+		// The connected account's email is no longer rendered; verify the connect
+		// button flipped to "Change Drive folder" (proves driveUser was fetched)
+		// and the Drive file list loaded.
+		await expect(page.getByRole('button', { name: /Change Drive folder/i })).toBeVisible({ timeout: 5000 });		await expect(page.getByText('Drive Song').first()).toBeVisible();
 
-		await page.getByText('Drive Song').click();
+		await page.getByText('Drive Song').first().click();
 
 		await expect.poll(() => downloadCount).toBe(1);
 		await expect(page.getByText('Drive Song').first()).toBeVisible();

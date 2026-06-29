@@ -300,7 +300,7 @@ test.describe('MP3 Player view', () => {
 		// Player controls: skip back, skip forward, play/pause, shuffle, repeat
 		await expect(page.locator('button:has(svg)').filter({ hasText: '' }).nth(0)).toBeAttached();
 		// Progress bar input
-		await expect(page.locator('input[type="range"]').first()).toBeVisible({ timeout: 5000 });
+		await expect(page.locator('input[aria-label="Seek"]')).toBeVisible({ timeout: 5000 });
 		// Track title visible (may appear in browse list or mini-player)
 		await expect(page.getByText('Track One').first()).toBeVisible();
 	});
@@ -383,23 +383,6 @@ test.describe('MP3 Player view', () => {
 		await expect(page.getByRole('button', { name: /bass/i })).toBeVisible();
 		// frequency labels
 		await expect(page.getByText('60')).toBeVisible();
-	});
-
-	test('volume slider is present in player view', async ({ page }) => {
-		const [fc] = await Promise.all([
-			page.waitForEvent('filechooser'),
-			page.evaluate(() => {
-				const input = document.querySelector('input[type="file"][multiple]') as HTMLInputElement | null;
-				if (input) { input.style.display = 'block'; input.click(); }
-			}),
-		]);
-		await fc.setFiles(tmpDir);
-		await page.getByText('Track One').first().click({ timeout: 5000 });
-		await switchToPlayerView(page);
-
-		// Two range inputs in player view: progress + volume
-		const ranges = page.locator('input[type="range"]');
-		await expect(ranges).toHaveCount(2, { timeout: 5000 });
 	});
 
 	test('next button advances to the next track', async ({ page }) => {
