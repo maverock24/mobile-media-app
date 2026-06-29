@@ -25,6 +25,9 @@
 	let showSleepTimerOptions = $state(false);
 
 	const ownerTab = $derived.by(() => {
+		// On the mixer tab the decks own playback; surface deck A's label and
+		// navigate back to the mixer.
+		if (activeTab === 'mixer' && mixerShared.anyDeckLoaded) return 'mixer';
 		switch (mediaEngine.source) {
 			case 'music':   return 'music';
 			case 'podcast': return 'podcasts';
@@ -38,6 +41,12 @@
 	// main media — so at most one is true at a time, but checking both keeps the
 	// button correct when switching tabs (e.g. opening the mixer while music plays).
 	const isPlaying = $derived(mixerShared.anyPlaying || mediaEngine.isPlaying);
+
+	const onMixerTab = $derived(ownerTab === 'mixer');
+	/** Title/subtitle to display: deck A's label on the mixer tab, otherwise the
+	 *  main-media now-playing item. */
+	const displayTitle = $derived(onMixerTab ? mixerShared.deckALabel : mediaEngine.item?.title);
+	const displaySubtitle = $derived(onMixerTab ? 'Mixer · Deck A' : mediaEngine.item?.subtitle);
 
 	const visible = $derived(
 		(mediaEngine.item !== null && ownerTab !== null) ||
@@ -124,7 +133,7 @@
 	<div
 		class="mini-player-root bg-background/95 backdrop-blur-sm shrink-0 {position === 'top' ? 'border-b' : 'border-t'}"
 		role="region"
-		aria-label="Mini player — {mediaEngine.item?.title}"
+		aria-label="Mini player — {displayTitle}"
 	>
 		<div class="mini-player-main px-3 pt-3 pb-2 space-y-2.5">
 			<!-- Track info — tapping navigates back to the player -->
@@ -133,8 +142,8 @@
 				onclick={() => ownerTab && onNavigateTo?.(ownerTab)}
 				aria-label="Return to {ownerTab} player"
 			>
-				<p class="mini-player-info-title text-sm font-semibold leading-tight truncate">{mediaEngine.item?.title}</p>
-				<p class="mini-player-info-subtitle text-xs text-muted-foreground leading-tight truncate mt-0.5">{mediaEngine.item?.subtitle}</p>
+				<p class="mini-player-info-title text-sm font-semibold leading-tight truncate">{displayTitle}</p>
+				<p class="mini-player-info-subtitle text-xs text-muted-foreground leading-tight truncate mt-0.5">{displaySubtitle}</p>
 			</button>
 
 			<div class="relative min-h-[3.5rem]">

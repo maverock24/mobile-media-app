@@ -15,6 +15,9 @@ export const mixerShared = $state<{
 	anyDeckLoaded: boolean;
 	/** true when at least one mixer deck is actively playing. */
 	anyPlaying: boolean;
+	/** Deck A's display name, surfaced so the MiniPlayer can show it as the
+	 *  now-playing title/subtitle on the mixer tab. */
+	deckALabel: string;
 	/** Play both decks (set by MixerView on mount). */
 	playBoth: (() => void) | null;
 }>({
@@ -24,5 +27,6 @@ export const mixerShared = $state<{
 	browseLoading: false,
 	anyDeckLoaded: false,
 	anyPlaying: false,
+	deckALabel: '',
 	playBoth: null,
 });

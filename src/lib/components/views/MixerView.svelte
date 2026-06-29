@@ -381,6 +381,7 @@
 	$effect(() => {
 		mixerShared.anyDeckLoaded = deckA.hasTrack || deckB.hasTrack;
 		mixerShared.anyPlaying = deckA.playing || deckB.playing;
+		mixerShared.deckALabel = deckA.name;
 		mixerShared.playBoth = () => {
 			if (deckA.playing || deckB.playing) pauseBoth();
 			else playBoth();
