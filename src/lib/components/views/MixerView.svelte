@@ -338,6 +338,22 @@
 		if (!(deckA.playing || deckB.playing)) mediaEngine.mixerPlaying = false;
 	}
 
+	/** True when no main-media source (music/podcast/radio) is playing — i.e. the
+	 *  mixer owns the MiniPlayer's progression slider. Deck A's time/duration is
+	 *  mirrored into mediaEngine only while this holds, so loading/seeking deck A
+	 *  never clobbers another source's progression during its playback. */
+	function mixerOwnsProgression(): boolean {
+		return !mediaEngine.musicPlaying && !mediaEngine.podcastPlaying && !mediaEngine.radioPlaying;
+	}
+
+	/** Mirror deck A's playback position + duration into mediaEngine so the
+	 *  MiniPlayer's progression slider reflects deck A on the mixer tab. */
+	function mirrorDeckA() {
+		if (!audioA || !mixerOwnsProgression()) return;
+		const dur = isFinite(audioA.duration) ? audioA.duration : 0;
+		mediaEngine.updateTime(audioA.currentTime, dur);
+	}
+
 	const anyPlaying = $derived(deckA.playing || deckB.playing);
 
 	// ── Register mixer decks in the audio-exclusivity system ─────────────────
@@ -662,6 +678,6 @@
 	</div>
 
 	<!-- Hidden audio elements -->
-	<audio bind:this={audioA} onplay={() => { deckA.playing = true; mediaEngine.mixerPlaying = true; }} onpause={() => { deckA.playing = false; }} onended={() => { deckA.playing = false; }} preload="none"></audio>
+	<audio bind:this={audioA} ontimeupdate={mirrorDeckA} onloadedmetadata={mirrorDeckA} onplay={() => { deckA.playing = true; mediaEngine.mixerPlaying = true; }} onpause={() => { deckA.playing = false; }} onended={() => { deckA.playing = false; }} preload="none"></audio>
 	<audio bind:this={audioB} onplay={() => { deckB.playing = true; mediaEngine.mixerPlaying = true; }} onpause={() => { deckB.playing = false; }} onended={() => { deckB.playing = false; }} preload="none"></audio>
 </div>
