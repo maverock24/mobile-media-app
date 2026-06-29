@@ -36,11 +36,13 @@
 		}
 	});
 
-	// Sound is playing if either the mixer decks or the main media engine is active.
-	// The two are mutually exclusive — playBoth() claims audio exclusivity and pauses
-	// main media — so at most one is true at a time, but checking both keeps the
-	// button correct when switching tabs (e.g. opening the mixer while music plays).
-	const isPlaying = $derived(mixerShared.anyPlaying || mediaEngine.isPlaying);
+	// Single rule for the play/pause button: pause icon when something is playing,
+	// play icon when nothing is. mediaEngine.isPlaying covers every source —
+	// music/podcast/radio via their own flags, and the mixer decks via
+	// mediaEngine.mixerPlaying, which MixerView now syncs on every deck
+	// play/pause/ended event (previously a natural deck pause left mixerPlaying
+	// stuck true, so the button stayed on Pause after playback stopped).
+	const isPlaying = $derived(mediaEngine.isPlaying);
 
 	const onMixerTab = $derived(ownerTab === 'mixer');
 	/** Title/subtitle to display: deck A's label on the mixer tab, otherwise the
@@ -79,14 +81,12 @@
 	}
 
 	function togglePlayback() {
-		// Act on whatever is currently producing sound. Mixer decks take precedence
-		// when playing, since starting them pauses the main media engine.
-		if (mixerShared.anyPlaying) {
-			mixerShared.playBoth?.(); // playBoth toggles: playing → pauseBoth
-			return;
-		}
+		// Single source of truth: mediaEngine.isPlaying (music/podcast/radio/mixer).
+		// Pause whatever is active; if nothing is playing, start the right source.
 		if (mediaEngine.isPlaying) {
-			mediaEngine._onPause?.() ?? mediaEngine.pause();
+			// Mixer decks take precedence when playing — pausing them frees the flag.
+			if (mediaEngine.mixerPlaying) mixerShared.playBoth?.();   // toggles: playing → pauseBoth
+			else mediaEngine._onPause?.() ?? mediaEngine.pause();
 			return;
 		}
 		// Nothing is playing — start the appropriate source. On the mixer tab with a

@@ -679,6 +679,6 @@
 	</div>
 
 	<!-- Hidden audio elements -->
-	<audio bind:this={audioA} ontimeupdate={mirrorDeckA} onloadedmetadata={mirrorDeckA} onplay={() => { deckA.playing = true; mediaEngine.mixerPlaying = true; }} onpause={() => { deckA.playing = false; }} onended={() => { deckA.playing = false; }} preload="none"></audio>
-	<audio bind:this={audioB} onplay={() => { deckB.playing = true; mediaEngine.mixerPlaying = true; }} onpause={() => { deckB.playing = false; }} onended={() => { deckB.playing = false; }} preload="none"></audio>
+	<audio bind:this={audioA} ontimeupdate={mirrorDeckA} onloadedmetadata={mirrorDeckA} onplay={() => { deckA.playing = true; mediaEngine.mixerPlaying = true; }} onpause={() => { deckA.playing = false; syncMixerPlayingFlag(); }} onended={() => { deckA.playing = false; syncMixerPlayingFlag(); }} preload="none"></audio>
+	<audio bind:this={audioB} onplay={() => { deckB.playing = true; mediaEngine.mixerPlaying = true; }} onpause={() => { deckB.playing = false; syncMixerPlayingFlag(); }} onended={() => { deckB.playing = false; syncMixerPlayingFlag(); }} preload="none"></audio>
 </div>
