@@ -11,7 +11,7 @@
 	} from '$lib/stores/sleepTimer.svelte';
 	import { triggerToggleHaptic } from '$lib/native/haptics';
 	import { formatClock as formatTime } from '$lib/models/music';
-	import { Play, Pause, SkipBack, SkipForward, Moon, X, SlidersHorizontal } from 'lucide-svelte';
+	import { Play, Pause, SkipBack, SkipForward, Moon, X, SlidersHorizontal, Repeat } from 'lucide-svelte';
 
 	interface Props {
 		/** The currently selected tab. */
@@ -127,6 +127,17 @@
 		podcastSettings.playbackSpeed = enabled ? 1.5 : 1.0;
 		void triggerToggleHaptic(enabled);
 	}
+
+	function toggleMusicSelectionLoop() {
+		if (mediaEngine.musicSelectionLoopActive) {
+			// Already looping — remove loop selection and hide the button
+			mediaEngine.musicSelectionLoopActive = false;
+			mediaEngine.musicHasSelectedTracks = false;
+		} else {
+			mediaEngine.musicSelectionLoopActive = true;
+		}
+		void triggerToggleHaptic(mediaEngine.musicSelectionLoopActive);
+	}
 </script>
 
 {#if visible}
@@ -160,6 +171,16 @@
 
 				<div class="flex items-center justify-center gap-3">
 					{#if canSkipPrevious}
+						{#if mediaEngine.source === 'music' && mediaEngine.musicHasSelectedTracks}
+							<button
+								class="mini-player-action mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full {mediaEngine.musicSelectionLoopActive ? 'text-primary' : 'text-muted-foreground'} hover:text-foreground"
+								onclick={toggleMusicSelectionLoop}
+								aria-label={mediaEngine.musicSelectionLoopActive ? 'Exit loop selection' : 'Enter loop selection'}
+								title={mediaEngine.musicSelectionLoopActive ? 'Exit loop selection' : 'Loop selected tracks'}
+							>
+								<Repeat class="w-4 h-4" />
+							</button>
+						{/if}
 						<button
 							class="mini-player-action mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
 							onclick={skipPrevious}

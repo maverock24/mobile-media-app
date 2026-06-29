@@ -24,6 +24,7 @@
 		getTrackKey,
 		mergeStoredFiles,
 		fmtGain,
+		getNextTrackIndex as getNextTrackIndexPure,
 		parseFilename,
 		sortFiles as sortStoredFiles,
 		createStoredAudioFile,
@@ -184,6 +185,7 @@
 				source: file,
 			};
 		});
+		mediaEngine.musicSelectionLoopActive = false;
 
 		if (tracks.length === 0) {
 			musicSettings.lastTrackIndex = 0;
@@ -266,7 +268,6 @@
 	});
 	let browseVersion    = $state(0);                          // bump to force reload
 	let selectedBrowseFileKeys = $state<string[]>([]);
-	let selectionLoopActive = $state(false);
 	let driveAccessToken = $state('');
 	let driveTokenExpiresAt = $state(0);
 	let driveUser        = $state<GoogleDriveUser | null>(null);
@@ -352,6 +353,20 @@
 				audioEl.pause();
 			}
 		});
+	});
+
+	// Keep mediaEngine.musicHasSelectedTracks in sync so MiniPlayer can show the loop toggle
+	$effect(() => {
+		mediaEngine.musicHasSelectedTracks = selectedBrowseFileKeys.length > 0;
+	});
+
+	// When MiniPlayer clears loop selection, clear local selection state too
+	$effect(() => {
+		const loopActive = mediaEngine.musicSelectionLoopActive;
+		const hasTracks = mediaEngine.musicHasSelectedTracks;
+		if (!loopActive && !hasTracks && selectedBrowseFileKeys.length > 0) {
+			selectedBrowseFileKeys = [];
+		}
 	});
 
 	function claimMusicControls() {
@@ -448,7 +463,7 @@
 			// Track finished — clear any saved resume position
 			isBuffering = false;
 			musicSettings.lastTrackTimestamp = 0;
-			if (selectionLoopActive) { void advanceTrack(true, false); }
+			if (mediaEngine.musicSelectionLoopActive) { void advanceTrack(true, false); }
 			else if (musicSettings.isRepeat) { audioEl.currentTime = 0; audioEl.play().catch(() => {}); }
 			else void advanceTrack(true, false);
 		};
@@ -702,6 +717,7 @@
 
 	function clearBrowseSelection() {
 		selectedBrowseFileKeys = [];
+		mediaEngine.musicSelectionLoopActive = false;
 	}
 
 	async function playFavoriteTrack(favorite: FavoriteTrack) {
@@ -739,10 +755,15 @@
 
 	function getSelectedBrowseFilesInOrder(): StoredAudioFile[] {
 		if (selectedBrowseFileKeys.length === 0) return [];
-		const selectedKeys = new Set(selectedBrowseFileKeys);
-		return getCurrentBrowseFileEntries()
-			.filter((entry) => selectedKeys.has(getStoredFileKey(entry.file)))
-			.map((entry) => entry.file);
+		const fileByKey = new Map(
+			getCurrentBrowseFileEntries().map((entry) => [getStoredFileKey(entry.file), entry.file])
+		);
+		const selectedFiles: StoredAudioFile[] = [];
+		for (const key of selectedBrowseFileKeys) {
+			const file = fileByKey.get(key);
+			if (file) selectedFiles.push(file);
+		}
+		return selectedFiles;
 	}
 
 	function getBrowsePlaybackFiles(): { files: StoredAudioFile[]; selectionLoop: boolean } {
@@ -1665,33 +1686,13 @@
 	}
 
 	function getNextTrackIndex(currentIndex: number): number | null {
-		if (tracks.length === 0) {
-			return null;
-		}
-
-		if (musicSettings.isShuffle) {
-			if (tracks.length === 1) {
-				return 0;
-			}
-
-			if (preloadedTrackIndex !== null && preloadedTrackIndex !== currentIndex && tracks[preloadedTrackIndex]) {
-				return preloadedTrackIndex;
-			}
-
-			let nextIndex = currentIndex;
-			while (nextIndex === currentIndex) {
-				nextIndex = Math.floor(Math.random() * tracks.length);
-			}
-
-			return nextIndex;
-		}
-
-		const atEnd = currentIndex === tracks.length - 1;
-		if (atEnd && !musicSettings.isRepeat && !selectionLoopActive) {
-			return null;
-		}
-
-		return atEnd ? 0 : currentIndex + 1;
+		return getNextTrackIndexPure(currentIndex, {
+			trackCount: tracks.length,
+			isShuffle: musicSettings.isShuffle,
+			isRepeat: musicSettings.isRepeat,
+			selectionLoop: mediaEngine.musicSelectionLoopActive,
+			preloadedIndex: preloadedTrackIndex,
+		});
 	}
 
 	async function preloadNextTrack(currentIndex: number) {
@@ -1748,7 +1749,7 @@
 		preloadRequestId += 1;
 		currentTime = 0; duration = 0; isPlaying = false; isBuffering = false;
 		trackListLockedByUser = true;
-		selectionLoopActive = options.selectionLoop ?? false;
+		mediaEngine.musicSelectionLoopActive = options.selectionLoop ?? false;
 	}
 
 	function appendTracksToQueue(files: StoredAudioFile[], folder: string, expectedQueueSessionId: number) {
@@ -2187,6 +2188,11 @@
 
 	async function resumePlayback() {
 		if (!audioEl || !currentTrack || isPlaying) return;
+		// If there are selected files but loop selection is not yet active, start loop selection
+		if (selectedBrowseFileKeys.length > 0 && !mediaEngine.musicSelectionLoopActive) {
+			await playCurrentFolder();
+			return;
+		}
 		void triggerPlaybackHaptic(true);
 		initAudioContext();
 		claimAudio('music');
@@ -2671,24 +2677,7 @@
 
 		<!-- Entry list -->
 		<div class="flex-1 overflow-y-auto min-h-0">
-			{#if selectedBrowseCount > 0 && !showFavoriteTracks}
-				<div class="px-4 pb-2">
-					<div class="flex items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/10 px-3 py-2">
-						<div class="min-w-0">
-							<p class="text-sm font-medium text-primary">{selectedBrowseCount} selected</p>
-							<p class="text-xs text-primary/80 truncate">Tap more files to add them, then loop the selection.</p>
-						</div>
-						<div class="flex items-center gap-2 shrink-0">
-							<button class="text-xs font-medium text-muted-foreground hover:text-foreground" onclick={clearBrowseSelection}>
-								Clear
-							</button>
-							<Button size="sm" class="gap-1 h-8 px-3 text-xs" onclick={playCurrentFolder} disabled={isChangingTrack || isLoading}>
-								<Repeat class="w-3.5 h-3.5" /> Loop
-							</Button>
-						</div>
-					</div>
-				</div>
-			{/if}
+
 			{#if showFavoriteTracks}
 				{#if filteredFavoriteTracks.length === 0}
 					<div class="flex flex-col items-center justify-center h-40 gap-2 text-muted-foreground px-6 text-center">

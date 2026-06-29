@@ -194,3 +194,44 @@ export function mergeStoredFiles(existing: StoredAudioFile[], incoming: StoredAu
 }
 
 export function fmtGain(g: number): string { return (g > 0 ? '+' : '') + g; }
+
+/** Compute the next playback index given the queue length, current index, and
+ *  the loop/shuffle state. Pure — no DOM/store deps — so it can be unit-tested.
+ *
+ *  - `trackCount === 0` → null (empty queue)
+ *  - shuffle (and count > 1): return `preloadedIndex` if it's a distinct valid
+ *    index, else a random index != currentIndex.
+ *  - otherwise sequential: at the last index, wrap to 0 only when repeat or
+ *    selectionLoop is on; otherwise return null (stop). Advance otherwise.
+ *  - a single-track queue with repeat/selectionLoop returns 0 (loop itself). */
+export function getNextTrackIndex(
+	currentIndex: number,
+	opts: {
+		trackCount: number;
+		isShuffle?: boolean;
+		isRepeat?: boolean;
+		selectionLoop?: boolean;
+		preloadedIndex?: number | null;
+		rand?: () => number;
+	},
+): number | null {
+	const { trackCount, isShuffle, isRepeat, selectionLoop, preloadedIndex } = opts;
+	if (trackCount === 0) return null;
+	if (trackCount === 1) return 0;
+
+	if (isShuffle) {
+		if (preloadedIndex != null && preloadedIndex !== currentIndex && preloadedIndex < trackCount) {
+			return preloadedIndex;
+		}
+		const rand = opts.rand ?? Math.random;
+		let nextIndex = currentIndex;
+		while (nextIndex === currentIndex) {
+			nextIndex = Math.floor(rand() * trackCount);
+		}
+		return nextIndex;
+	}
+
+	const atEnd = currentIndex === trackCount - 1;
+	if (atEnd && !isRepeat && !selectionLoop) return null;
+	return atEnd ? 0 : currentIndex + 1;
+}

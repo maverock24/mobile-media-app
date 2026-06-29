@@ -63,6 +63,8 @@ export const mediaEngine = $state<NowPlayingState & {
 	podcastPlaying: boolean;
 	radioPlaying:   boolean;
 	mixerPlaying:   boolean;
+	musicSelectionLoopActive: boolean;
+	musicHasSelectedTracks: boolean;
 
 	// --- Transport fallbacks ---
 	// Views register handlers via setPlaybackHandlers()/setSkipHandlers() so the
@@ -109,6 +111,8 @@ export const mediaEngine = $state<NowPlayingState & {
 	podcastPlaying: false,
 	radioPlaying:   false,
 	mixerPlaying:   false,
+	musicSelectionLoopActive: false,
+	musicHasSelectedTracks: false,
 	get isPlaying(): boolean {
 		// Derived from per-source flags. Exclusivity means at most one is true at a
 		// time, but a stale async 'pause' from a just-stopped source may still be in
