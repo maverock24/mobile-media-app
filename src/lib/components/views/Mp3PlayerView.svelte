@@ -1171,6 +1171,12 @@
 		clearPendingDriveFolderPickerIntent();
 		musicSettings.driveFolderId = folderId ?? '';
 		musicSettings.driveFolderName = folderName ?? '';
+		// Switch to drive source immediately so the restoration $effect doesn't
+		// re-hydrate the device library during async pauses inside finishDriveLoad.
+		musicSettings.librarySource = 'drive';
+		rootDirHandle = null;
+		nativeTreeUri = null;
+		libraryScanPromise = null;
 		const token = folderPickerToken;
 		folderPickerToken = '';
 		await finishDriveLoad(token, folderId);
@@ -2402,6 +2408,8 @@
 	$effect(() => {
 		untrack(() => {
 		if (musicSettings.librarySource === 'drive') {
+			// Skip if a Drive load is already running (e.g. triggered by folder picker confirmation)
+			if (isDriveLoading) return;
 			// Silently restore Drive library using the persisted session token (survives refresh)
 			void (async () => {
 				try {
