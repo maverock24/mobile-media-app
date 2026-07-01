@@ -23,6 +23,19 @@ public class ScreenDimPlugin extends Plugin {
     private boolean enabled = false;
     private View dimOverlay = null;
 
+    // Touch listener that resets the dim timer on every user interaction.
+    // Attached to the activity's decor view so ANY touch (WebView, buttons, etc.) counts.
+    private final View.OnTouchListener activityTouchListener = new View.OnTouchListener() {
+        @Override
+        public boolean onTouch(View v, MotionEvent event) {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                scheduleDim();
+            }
+            // Don't consume — let touches reach child views
+            return false;
+        }
+    };
+
     @PluginMethod
     public void enable(PluginCall call) {
         long delay = call.getInt(KEY_DELAY_MS, 0);
@@ -33,6 +46,7 @@ public class ScreenDimPlugin extends Plugin {
         disableInternal();
         delayMs = delay;
         enabled = true;
+        installActivityTouchListener();
         scheduleDim();
         call.resolve();
     }
@@ -55,7 +69,27 @@ public class ScreenDimPlugin extends Plugin {
         enabled = false;
         handler.removeCallbacks(dimRunnable);
         removeOverlay();
+        uninstallActivityTouchListener();
         delayMs = 0;
+    }
+
+    private void installActivityTouchListener() {
+        try {
+            getActivity().getWindow().getDecorView().setOnTouchListener(activityTouchListener);
+        } catch (Exception e) {
+            // Activity may be gone
+        }
+    }
+
+    private void uninstallActivityTouchListener() {
+        try {
+            View decor = getActivity().getWindow().getDecorView();
+            if (decor != null) {
+                decor.setOnTouchListener(null);
+            }
+        } catch (Exception e) {
+            // Activity may be gone
+        }
     }
 
     private final Runnable dimRunnable = new Runnable() {
@@ -119,7 +153,7 @@ public class ScreenDimPlugin extends Plugin {
 
     private void handleUserInteraction() {
         if (!enabled) return;
-        // Remove the dim overlay and reschedule the timer
+        // Remove the dim overlay (user touched the dim screen) and reschedule timer
         removeOverlay();
         scheduleDim();
     }
