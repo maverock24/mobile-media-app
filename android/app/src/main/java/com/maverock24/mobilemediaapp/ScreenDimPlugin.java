@@ -1,11 +1,12 @@
 package com.maverock24.mobilemediaapp;
 
+import android.graphics.Color;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.Window;
-import android.view.WindowManager;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -15,17 +16,12 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 @CapacitorPlugin(name = "ScreenDim")
 public class ScreenDimPlugin extends Plugin {
-    private static final float DIM_BRIGHTNESS = 0.01f;
     private static final String KEY_DELAY_MS = "delayMs";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private float savedBrightness = -1f;
     private long delayMs = 0;
     private boolean enabled = false;
-    private boolean dimmed = false;
-
-    // Runnable executed after inactivity timeout
-    private Runnable dimRunnable;
+    private View dimOverlay = null;
 
     @PluginMethod
     public void enable(PluginCall call) {
@@ -37,13 +33,6 @@ public class ScreenDimPlugin extends Plugin {
         disableInternal();
         delayMs = delay;
         enabled = true;
-        dimRunnable = new Runnable() {
-            @Override
-            public void run() {
-                dimScreen();
-            }
-        };
-        setupTouchListener();
         scheduleDim();
         call.resolve();
     }
@@ -65,11 +54,16 @@ public class ScreenDimPlugin extends Plugin {
         if (!enabled) return;
         enabled = false;
         handler.removeCallbacks(dimRunnable);
-        dimRunnable = null;
-        restoreBrightness();
+        removeOverlay();
         delayMs = 0;
-        savedBrightness = -1f;
     }
+
+    private final Runnable dimRunnable = new Runnable() {
+        @Override
+        public void run() {
+            showOverlay();
+        }
+    };
 
     private void scheduleDim() {
         if (!enabled || delayMs <= 0) return;
@@ -77,62 +71,56 @@ public class ScreenDimPlugin extends Plugin {
         handler.postDelayed(dimRunnable, delayMs);
     }
 
-    private void dimScreen() {
-        if (!enabled || dimmed) return;
-        dimmed = true;
+    private void showOverlay() {
+        if (!enabled || dimOverlay != null) return;
         try {
-            Window window = getActivity().getWindow();
-            WindowManager.LayoutParams layoutParams = window.getAttributes();
-            // Save current brightness only once (first dim)
-            if (savedBrightness < 0f) {
-                savedBrightness = layoutParams.screenBrightness;
-            }
-            layoutParams.screenBrightness = DIM_BRIGHTNESS;
-            window.setAttributes(layoutParams);
-        } catch (Exception e) {
-            // Activity may be gone — suppress
-        }
-    }
+            ViewGroup root = getActivity().findViewById(android.R.id.content);
+            if (root == null) return;
 
-    private void restoreBrightness() {
-        if (!dimmed) return;
-        dimmed = false;
-        try {
-            Window window = getActivity().getWindow();
-            WindowManager.LayoutParams layoutParams = window.getAttributes();
-            layoutParams.screenBrightness = savedBrightness;
-            window.setAttributes(layoutParams);
-            savedBrightness = -1f;
-        } catch (Exception e) {
-            // Activity may be gone — suppress
-        }
-    }
-
-    private void setupTouchListener() {
-        try {
-            View rootView = getActivity().getWindow().getDecorView();
-            rootView.setOnTouchListener(new View.OnTouchListener() {
+            // Find or cast to FrameLayout (android.R.id.content is a FrameLayout)
+            // Create a full-screen dark overlay
+            dimOverlay = new View(getContext());
+            dimOverlay.setBackgroundColor(Color.argb(220, 0, 0, 0)); // semi-transparent black
+            dimOverlay.setLayoutParams(new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ));
+            dimOverlay.setClickable(true);
+            dimOverlay.setFocusable(true);
+            dimOverlay.setOnTouchListener(new View.OnTouchListener() {
                 @Override
                 public boolean onTouch(View v, MotionEvent event) {
                     if (event.getAction() == MotionEvent.ACTION_DOWN) {
                         handleUserInteraction();
                     }
-                    // Return false so touch events continue to children
-                    return false;
+                    // Consume the touch so it doesn't reach the WebView behind
+                    return true;
                 }
             });
+
+            root.addView(dimOverlay);
         } catch (Exception e) {
             // Activity may be gone
         }
     }
 
+    private void removeOverlay() {
+        if (dimOverlay == null) return;
+        try {
+            ViewGroup root = getActivity().findViewById(android.R.id.content);
+            if (root != null) {
+                root.removeView(dimOverlay);
+            }
+        } catch (Exception e) {
+            // Activity may be gone
+        }
+        dimOverlay = null;
+    }
+
     private void handleUserInteraction() {
         if (!enabled) return;
-        if (dimmed) {
-            // Screen was dimmed — restore brightness and reschedule
-            restoreBrightness();
-        }
-        // Reschedule the dim timer after any user interaction
+        // Remove the dim overlay and reschedule the timer
+        removeOverlay();
         scheduleDim();
     }
 }
