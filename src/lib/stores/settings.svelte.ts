@@ -13,6 +13,7 @@ export const appSettings = persisted('app-settings', {
 	driveMode: false,
 	mediaControlsPosition: 'bottom' as 'top' | 'bottom',
 	listTileTone: 'default' as ListTileTone,
+	screenDimDelay: 0,  // seconds; 0 = off, presets: 30, 60, 120, 600
 });
 
 appSettings.listTileTone = normalizeListTileTone(appSettings.listTileTone);

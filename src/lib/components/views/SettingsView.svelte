@@ -3,6 +3,7 @@
 	import { Capacitor, CapacitorHttp } from '@capacitor/core';
 	import { Filesystem, Directory } from '@capacitor/filesystem';
 	import { DirectoryReader } from '$lib/native/directory-reader';
+	import { ScreenDim } from '$lib/native/screen-dim';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import SleepTimerSettings from '$lib/components/settings/SleepTimerSettings.svelte';
@@ -32,6 +33,7 @@
 		Check,
 		Globe,
 		Smartphone,
+		Battery,
 		Download,
 		RefreshCw,
 		Copy,
@@ -98,6 +100,35 @@
 			? `Stops in ${formatSleepTimerRemaining(sleepTimer.remainingMs)}`
 			: `Off · last ${sleepTimerSettings.lastDurationMin}m`
 	);
+
+	// Screen dimmer (Android-only)
+	const SCREEN_DIM_PRESETS = [30, 60, 120, 600] as const;
+	const screenDimSummary = $derived(
+		appSettings.screenDimDelay > 0
+			? `Dims after ${appSettings.screenDimDelay}s`
+			: 'Off'
+	);
+	const isNativeAndroid = Capacitor.isNativePlatform();
+
+	function applyScreenDimDelay(delaySec: number) {
+		appSettings.screenDimDelay = delaySec;
+		if (!isNativeAndroid) return;
+		if (delaySec > 0) {
+			ScreenDim.enable({ delayMs: delaySec * 1000 }).catch(() => {});
+		} else {
+			ScreenDim.disable().catch(() => {});
+		}
+	}
+
+	// Apply screen dim setting on mount (Android only)
+	onMount(() => {
+		if (!isNativeAndroid || appSettings.screenDimDelay <= 0) return;
+		const delayMs = appSettings.screenDimDelay * 1000;
+		ScreenDim.enable({ delayMs }).catch(() => {});
+		return () => {
+			ScreenDim.disable().catch(() => {});
+		};
+	});
 	const lastRuntimeErrorReport = $derived(
 		runtimeDiagnostics.lastRuntimeError
 			? formatRuntimeErrorReport(runtimeDiagnostics.lastRuntimeError)
@@ -317,6 +348,8 @@
 		sleepTimerSettings.endsAt = 0;
 		sleepTimerSettings.lastDurationMin = 30;
 		clearSleepTimer({ silent: true });
+		// screen dimmer
+		applyScreenDimDelay(0);
 		// weather
 		weatherSettings.units = 'C';
 		weatherSettings.windUnit = 'kmh';
@@ -493,6 +526,48 @@
 			<SleepTimerSettings />
 		{/if}
 		</div>
+
+		<!-- ── Screen Dimmer ────────────────────────────────── -->
+		{#if isNativeAndroid}
+		<div>
+			<button class="tap-feedback settings-section-trigger w-full flex items-center gap-3 px-4 py-4 text-left transition-colors" onclick={() => toggle('screen-dim')}>
+				<div class="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shrink-0">
+					<Battery class="w-5 h-5 text-white" />
+				</div>
+				<div class="flex-1 min-w-0">
+					<p class="font-semibold text-[0.95rem] leading-tight">Screen Dimmer</p>
+					<p class="text-xs text-muted-foreground">{screenDimSummary}</p>
+				</div>
+				<ChevronRight class="w-4 h-4 text-muted-foreground transition-transform {expandedSection === 'screen-dim' ? 'rotate-90' : ''}" />
+			</button>
+			{#if expandedSection === 'screen-dim'}
+				<div class="settings-panel-body px-4 pb-4 space-y-4">
+					<p class="text-xs text-muted-foreground leading-relaxed">
+						Dim the screen after a period of inactivity to save battery. Touch the screen at any time to restore full brightness.
+					</p>
+					<div>
+						<p class="text-sm font-medium mb-2">Dim after</p>
+						<div class="flex flex-wrap gap-2">
+							<button
+								class="px-3 py-1.5 rounded-lg text-xs border transition-colors {appSettings.screenDimDelay === 0 ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
+								onclick={() => applyScreenDimDelay(0)}
+							>
+								Off
+							</button>
+							{#each SCREEN_DIM_PRESETS as seconds}
+								<button
+									class="px-3 py-1.5 rounded-lg text-xs border transition-colors {appSettings.screenDimDelay === seconds ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border hover:bg-accent'}"
+									onclick={() => applyScreenDimDelay(seconds)}
+								>
+									{seconds >= 60 ? `${seconds / 60} min` : `${seconds}s`}
+								</button>
+							{/each}
+						</div>
+					</div>
+				</div>
+			{/if}
+		</div>
+		{/if}
 
 		<!-- ── Music ─────────────────────────────────────────── -->
 		<div>

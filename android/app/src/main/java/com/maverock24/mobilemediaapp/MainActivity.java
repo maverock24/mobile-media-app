@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
 		registerPlugin(DirectoryReaderPlugin.class);
 		registerPlugin(GoogleDriveNativePlugin.class);
 		registerPlugin(MediaControlsPlugin.class);
+		registerPlugin(ScreenDimPlugin.class);
 		super.onCreate(savedInstanceState);
 		setVolumeControlStream(AudioManager.STREAM_MUSIC);
 	}

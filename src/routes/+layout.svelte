@@ -2,6 +2,9 @@
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import AuroraBackground from '$lib/components/AuroraBackground.svelte';
+	import { Capacitor } from '@capacitor/core';
+	import { ScreenDim } from '$lib/native/screen-dim';
+	import { appSettings } from '$lib/stores/settings.svelte';
 	import { onMount } from 'svelte';
 	let { children } = $props();
 
@@ -9,6 +12,12 @@
 	// Tests can wait for body[data-hydrated] before interacting with the app.
 	onMount(() => {
 		document.body.dataset.hydrated = '1';
+
+		// Start screen dimmer on Android if configured
+		if (Capacitor.isNativePlatform() && appSettings.screenDimDelay > 0) {
+			const delayMs = appSettings.screenDimDelay * 1000;
+			ScreenDim.enable({ delayMs }).catch(() => {});
+		}
 	});
 </script>
 
