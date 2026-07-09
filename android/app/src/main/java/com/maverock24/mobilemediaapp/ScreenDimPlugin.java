@@ -23,15 +23,19 @@ public class ScreenDimPlugin extends Plugin {
     private boolean enabled = false;
     private View dimOverlay = null;
 
-    // Touch listener that resets the dim timer on every user interaction.
-    // Attached to the activity's decor view so ANY touch (WebView, buttons, etc.) counts.
-    private final View.OnTouchListener activityTouchListener = new View.OnTouchListener() {
+    // Intercepting touch listener that resets the dim timer on every user interaction.
+    // We can't use setOnTouchListener on the decor view directly — ViewGroup.dispatchTouchEvent only
+    // calls super.dispatchTouchEvent (which checks the listener) when NO child consumed the touch.
+    // Since the WebView consumes touches, a decor-view listener would never fire.
+    // Instead we add a transparent, non-clickable overlay on top that intercepts touches,
+    // resets the timer, and returns false so the touch falls through to the WebView below.
+    private final View.OnTouchListener interceptTouchListener = new View.OnTouchListener() {
         @Override
         public boolean onTouch(View v, MotionEvent event) {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
                 scheduleDim();
             }
-            // Don't consume — let touches reach child views
+            // Don't consume — let touches fall through to child views
             return false;
         }
     };
@@ -75,7 +79,26 @@ public class ScreenDimPlugin extends Plugin {
 
     private void installActivityTouchListener() {
         try {
-            getActivity().getWindow().getDecorView().setOnTouchListener(activityTouchListener);
+            ViewGroup root = getActivity().findViewById(android.R.id.content);
+            if (root == null) return;
+            // Only add if not already present
+            for (int i = 0; i < root.getChildCount(); i++) {
+                View child = root.getChildAt(i);
+                if (child.getTag() != null && "dim-touch-interceptor".equals(child.getTag().toString())) {
+                    return; // already installed
+                }
+            }
+            View touchInterceptor = new View(getContext());
+            touchInterceptor.setTag("dim-touch-interceptor");
+            touchInterceptor.setLayoutParams(new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ));
+            touchInterceptor.setBackgroundColor(Color.TRANSPARENT);
+            touchInterceptor.setClickable(false);
+            touchInterceptor.setFocusable(false);
+            touchInterceptor.setOnTouchListener(interceptTouchListener);
+            root.addView(touchInterceptor);
         } catch (Exception e) {
             // Activity may be gone
         }
@@ -83,9 +106,18 @@ public class ScreenDimPlugin extends Plugin {
 
     private void uninstallActivityTouchListener() {
         try {
-            View decor = getActivity().getWindow().getDecorView();
-            if (decor != null) {
-                decor.setOnTouchListener(null);
+            ViewGroup root = getActivity().findViewById(android.R.id.content);
+            if (root == null) return;
+            View toRemove = null;
+            for (int i = 0; i < root.getChildCount(); i++) {
+                View child = root.getChildAt(i);
+                if (child.getTag() != null && "dim-touch-interceptor".equals(child.getTag().toString())) {
+                    toRemove = child;
+                    break;
+                }
+            }
+            if (toRemove != null) {
+                root.removeView(toRemove);
             }
         } catch (Exception e) {
             // Activity may be gone

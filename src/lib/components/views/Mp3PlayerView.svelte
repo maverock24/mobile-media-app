@@ -2231,10 +2231,57 @@
 		}
 	}
 
+	// ── Rebuild tracks from current selection when loop is active.
+	// Called before advancing so newly added/removed tracks take effect.
+	function syncLoopTracksToSelection() {
+		if (!mediaEngine.musicSelectionLoopActive) return;
+		const selectedFiles = getSelectedBrowseFilesInOrder();
+		if (selectedFiles.length === 0) {
+			// All selections removed — disable the loop
+			mediaEngine.musicSelectionLoopActive = false;
+			return;
+		}
+		const currentKeys = tracks.map((t) => getStoredFileKey(t.source));
+		const newKeys = selectedFiles.map((f) => getStoredFileKey(f));
+		const selectionChanged =
+			currentKeys.length !== newKeys.length ||
+			currentKeys.some((k, i) => k !== newKeys[i]);
+		if (!selectionChanged) return;
+
+		// Preserve the currently-playing track's index across the rebuild
+		const currentTrackKey =
+			tracks[musicSettings.lastTrackIndex]
+				? getStoredFileKey(tracks[musicSettings.lastTrackIndex].source)
+				: null;
+		const sorted = sortFiles(selectedFiles);
+		tracks = sorted.map((f, i) => ({
+			id: i,
+			...parseFilename(f.name),
+			filename: f.name,
+			url: '',
+			duration: 0,
+			cleanup: undefined,
+			source: f,
+		}));
+		if (currentTrackKey) {
+			const newIdx = tracks.findIndex((t) => getStoredFileKey(t.source) === currentTrackKey);
+			if (newIdx >= 0) {
+				musicSettings.lastTrackIndex = newIdx;
+			} else {
+				// Currently playing track was removed — reset to first
+				musicSettings.lastTrackIndex = 0;
+			}
+		}
+		queueSessionId += 1;
+	}
+
 	async function advanceTrack(wasPlaying: boolean, interactiveAuth = false) {
 		if (isChangingTrack || tracks.length === 0) return;
 		isChangingTrack = true;
 		try {
+			// Sync selection so newly added/removed loop tracks take effect
+			syncLoopTracksToSelection();
+
 			const idx = musicSettings.lastTrackIndex;
 			const nextIndex = getNextTrackIndex(idx);
 			if (nextIndex === null) {
@@ -2242,6 +2289,14 @@
 				if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
 				return;
 			}
+
+			// Single-track loop: release the old blob URL BEFORE ensuring a fresh one.
+			// Otherwise ensureTrackUrl returns the still-live blob, releaseTrackUrl
+			// revokes it, and we feed a revoked URL to audioEl.src.
+			if (nextIndex === idx) {
+				releaseTrackUrl(idx);
+			}
+
 			setCurrentTrack(nextIndex);
 			musicSettings.lastTrackTimestamp = 0;
 			currentTime = 0; duration = 0;
@@ -2251,8 +2306,11 @@
 					isPlaying = false; isBuffering = false;
 					return;
 				}
-				// Release old URL only after new URL is ready so streaming doesn't error
-				releaseTrackUrl(idx);
+				// Release old URL only after new URL is ready (unless it's the same
+				// track — already released above).
+				if (nextIndex !== idx) {
+					releaseTrackUrl(idx);
+				}
 				audioEl.src = url;
 				syncTrackToMediaEngine(nextIndex);
 				void preloadNextTrack(nextIndex);
