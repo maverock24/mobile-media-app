@@ -494,7 +494,7 @@
 			isBuffering = false;
 			musicSettings.lastTrackTimestamp = 0;
 			if (mediaEngine.musicSelectionLoopActive) { void advanceTrack(true, false); }
-			else if (musicSettings.isRepeat) { audioEl.currentTime = 0; audioEl.play().catch(() => {}); }
+			else if (musicSettings.isRepeat) { audioEl.currentTime = 0; safePlay(); }
 			else void advanceTrack(true, false);
 		};
 		const onWaiting = () => { isBuffering = true; };
@@ -558,8 +558,6 @@
 		if (audioCtx) { if (audioCtx.state === 'suspended') audioCtx.resume(); return; }
 		try {
 			const ctx = new AudioContext();
-			// Attempt to resume immediately — on Android WebView the context may start
-			// in 'suspended' state even within a user gesture when created after an await.
 			void ctx.resume();
 			const src = ctx.createMediaElementSource(audioEl);
 			const bands = createEqFilterChain(ctx, musicSettings.eqBands);
@@ -572,6 +570,23 @@
 			addToast({ message: 'Equalizer not available on this device.', type: 'warning' });
 			console.warn('AudioContext creation failed:', e);
 		}
+	}
+
+	/** Retry audioEl.play() on AbortError — Android WebView can abort when
+	 *  the source isn't ready yet, especially after setting src. */
+	function safePlay(onFailure?: () => void, onSuccess?: () => void) {
+		const tryPlay = (attempt: number) => {
+			audioEl!.play().then(() => {
+				onSuccess?.();
+			}).catch((err: Error) => {
+				if (err?.name === 'AbortError' && attempt < 3) {
+					setTimeout(() => tryPlay(attempt + 1), 150);
+				} else {
+					onFailure?.();
+				}
+			});
+		};
+		tryPlay(0);
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -2040,7 +2055,7 @@
 		claimAudio('music');
 		initAudioContext();
 		isBuffering = true;
-		audioEl.play().catch(() => { isBuffering = false; });
+		safePlay(() => { isBuffering = false; isPlaying = false; });
 		return true;
 	}
 
@@ -2289,7 +2304,7 @@
 			syncTrackToMediaEngine(musicSettings.lastTrackIndex);
 		}
 		void preloadNextTrack(musicSettings.lastTrackIndex);
-		audioEl.play().catch(() => {});
+		safePlay();
 	}
 
 	async function selectTrack(index: number) {
@@ -2379,7 +2394,7 @@
 					audioEl.currentTime = 0;
 					if (wasPlaying) {
 						isBuffering = false;
-						audioEl.play().catch(() => { isPlaying = false; });
+						safePlay(() => { isPlaying = false; });
 					}
 				}
 				isChangingTrack = false;
@@ -2404,7 +2419,7 @@
 				initAudioContext();
 				if (wasPlaying) {
 					isBuffering = true;
-					audioEl.play().catch(() => { isPlaying = false; isBuffering = false; });
+					safePlay(() => { isPlaying = false; isBuffering = false; });
 				}
 			}
 		} finally {
@@ -2437,7 +2452,7 @@
 				initAudioContext();
 				if (wasPlaying) {
 					isBuffering = true;
-					audioEl.play().catch(() => { isPlaying = false; isBuffering = false; });
+					safePlay(() => { isPlaying = false; isBuffering = false; });
 				}
 			}
 		} finally {
