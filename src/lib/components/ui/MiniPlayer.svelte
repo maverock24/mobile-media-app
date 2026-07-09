@@ -52,7 +52,7 @@
 		mediaEngine.item?.title ??
 		(mediaEngine.musicPlayingA || mediaEngine.musicPlayingB
 			? `Deck ${mediaEngine.musicPlayingA ? 'A' : 'B'}`
-			: undefined)
+			: activeTab === 'music' ? `Deck ${mediaEngine.activeMusicDeck}` : undefined)
 	);
 	const displaySubtitle = $derived(
 		mediaEngine.item
@@ -61,10 +61,14 @@
 				: mediaEngine.item.subtitle)
 			: (mediaEngine.musicPlayingA || mediaEngine.musicPlayingB
 				? `Playing on Deck ${mediaEngine.musicPlayingA ? 'A' : 'B'}`
-				: undefined)
+				: activeTab === 'music' ? 'No track loaded' : undefined)
 	);
 
+	// Always visible on the music tab (so the A/B toggle, play button, and
+	// volume slider are always accessible). For other tabs, only show when
+	// something is playing or a track is loaded.
 	const visible = $derived(
+		activeTab === 'music' ||
 		mediaEngine.item !== null ||
 		mediaEngine.musicPlayingA ||
 		mediaEngine.musicPlayingB ||
