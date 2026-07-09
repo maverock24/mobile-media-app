@@ -28,7 +28,14 @@
 			case 'music':   return 'music';
 			case 'podcast': return 'podcasts';
 			case 'radio':   return 'radio';
-			default:        return null;
+			default: {
+				// source may be null when item was cleared but a deck is still
+				// playing — determine owner from the active playing flags.
+				if (mediaEngine.musicPlayingA || mediaEngine.musicPlayingB) return 'music';
+				if (mediaEngine.podcastPlaying) return 'podcasts';
+				if (mediaEngine.radioPlaying) return 'radio';
+				return null;
+			}
 		}
 	});
 
@@ -41,18 +48,28 @@
 			: mediaEngine.isPlaying
 	);
 
-	const displayTitle = $derived(mediaEngine.item?.title ?? (mediaEngine.source === 'music' && mediaEngine.isPlaying ? `Deck ${mediaEngine.activeMusicDeck === 'A' ? 'B' : 'A'}` : undefined));
+	const displayTitle = $derived(
+		mediaEngine.item?.title ??
+		(mediaEngine.musicPlayingA || mediaEngine.musicPlayingB
+			? `Deck ${mediaEngine.musicPlayingA ? 'A' : 'B'}`
+			: undefined)
+	);
 	const displaySubtitle = $derived(
-		mediaEngine.source === 'music'
-			? (mediaEngine.item
+		mediaEngine.item
+			? (mediaEngine.source === 'music'
 				? `Deck ${mediaEngine.activeMusicDeck} · ${mediaEngine.item.subtitle ?? ''}`
-				: `Playing on Deck ${mediaEngine.activeMusicDeck === 'A' ? 'B' : 'A'}`)
-			: mediaEngine.item?.subtitle
+				: mediaEngine.item.subtitle)
+			: (mediaEngine.musicPlayingA || mediaEngine.musicPlayingB
+				? `Playing on Deck ${mediaEngine.musicPlayingA ? 'A' : 'B'}`
+				: undefined)
 	);
 
 	const visible = $derived(
-		(mediaEngine.item !== null && ownerTab !== null) ||
-		(mediaEngine.source === 'music' && mediaEngine.isPlaying)
+		mediaEngine.item !== null ||
+		mediaEngine.musicPlayingA ||
+		mediaEngine.musicPlayingB ||
+		mediaEngine.podcastPlaying ||
+		mediaEngine.radioPlaying
 	);
 
 	const progress = $derived(
