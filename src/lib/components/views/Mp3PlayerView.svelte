@@ -261,6 +261,7 @@
 	let fileSearchQuery  = $state('');
 	let browseLoading    = $state(false);
 	let browseVersion    = $state(0);                          // bump to force reload
+	let deckFolderLabel  = $state('Library');                      // per-deck folder name
 	let selectedBrowseFileKeys = $state<string[]>([]);
 	let driveAccessToken = $state('');
 	let driveTokenExpiresAt = $state(0);
@@ -331,7 +332,7 @@
 
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
 	const currentLibraryLabel = $derived(
-		musicSettings.librarySource === 'drive' ? 'Google Drive' : musicSettings.lastFolderName || 'Library'
+		musicSettings.librarySource === 'drive' ? 'Google Drive' : deckFolderLabel
 	);
 
 	// ── register stop-callback for cross-view audio exclusivity ──
@@ -1126,6 +1127,7 @@
 	function activateDeviceLibrary(folderName: string) {
 		musicSettings.librarySource = 'device';
 		musicSettings.lastFolderName = folderName;
+		deckFolderLabel = folderName;
 		driveSearch = '';
 	}
 
@@ -2255,13 +2257,8 @@
 			showFavoriteTracks = false;
 			return;
 		}
-		// Navigate to parent folder. Only hide the browse view when we're
-		// already at the root (browsePath is empty) AND there's a track loaded
-		// to show in the player view — otherwise keep the browse view open.
 		if (browsePath.length > 0) {
 			browsePath = browsePath.slice(0, -1);
-		} else if (currentTrack) {
-			showQueue = false;
 		}
 	}
 
@@ -2749,6 +2746,7 @@
 
 		<!-- Header -->
 		<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0">
+			{#if browsePath.length > 0 || showFavoriteTracks}
 			<Button
 				variant="ghost"
 				size="icon"
@@ -2756,12 +2754,11 @@
 				onclick={navigateUp}
 				aria-label={showFavoriteTracks
 					? 'Back from favorite tracks'
-					: browsePath.length > 0
-						? 'Back to parent folder'
-						: 'Return to player'}
+					: 'Back to parent folder'}
 			>
 				<ChevronLeft class="w-6 h-6" />
 			</Button>
+			{/if}
 
 			<!-- Breadcrumb -->
 			<div class="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
