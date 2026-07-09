@@ -31,6 +31,8 @@ export const sleepTimerSettings = persisted('sleep-timer-settings', {
 // ─────────────────────────────────────────────────────────────
 export const musicSettings = persisted('music-settings', {
 	volume: 80,
+	deckAVolume: 80,
+	deckBVolume: 80,
 	isMuted: false,
 	isShuffle: false,
 	isRepeat: false,

@@ -59,12 +59,14 @@ export interface NowPlayingState {
 // ─────────────────────────────────────────────────────────────────────────────
 export const mediaEngine = $state<NowPlayingState & {
 	// --- Per-source playing flags (isPlaying is derived from these) ---
-	musicPlaying:   boolean;
+	musicPlayingA:  boolean;
+	musicPlayingB:  boolean;
 	podcastPlaying: boolean;
 	radioPlaying:   boolean;
 	mixerPlaying:   boolean;
 	musicSelectionLoopActive: boolean;
 	musicHasSelectedTracks: boolean;
+	activeMusicDeck: 'A' | 'B';
 
 	// --- Transport fallbacks ---
 	// Views register handlers via setPlaybackHandlers()/setSkipHandlers() so the
@@ -107,17 +109,16 @@ export const mediaEngine = $state<NowPlayingState & {
 	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null): void;
 }>({
 	item:        null,
-	musicPlaying:   false,
+	musicPlayingA:  false,
+	musicPlayingB:  false,
 	podcastPlaying: false,
 	radioPlaying:   false,
 	mixerPlaying:   false,
 	musicSelectionLoopActive: false,
 	musicHasSelectedTracks: false,
+	activeMusicDeck: 'A',
 	get isPlaying(): boolean {
-		// Derived from per-source flags. Exclusivity means at most one is true at a
-		// time, but a stale async 'pause' from a just-stopped source may still be in
-		// flight — reading it only flips ITS flag, never the active source's.
-		return this.musicPlaying || this.podcastPlaying || this.radioPlaying || this.mixerPlaying;
+		return this.musicPlayingA || this.musicPlayingB || this.podcastPlaying || this.radioPlaying || this.mixerPlaying;
 	},
 	currentTime: 0,
 	duration:    0,
@@ -209,7 +210,8 @@ export const mediaEngine = $state<NowPlayingState & {
 		cancelStreamReconnect();
 		stopStreamAudio();
 		this.item = null;
-		this.musicPlaying = false;
+		this.musicPlayingA = false;
+		this.musicPlayingB = false;
 		this.podcastPlaying = false;
 		this.radioPlaying = false;
 		this.mixerPlaying = false;

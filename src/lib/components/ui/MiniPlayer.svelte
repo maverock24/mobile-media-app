@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
-	import { mixerShared } from '$lib/stores/mixerShared.svelte';
-	import { podcastSettings } from '$lib/stores/settings.svelte';
+	import { podcastSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import {
 		sleepTimer,
 		SLEEP_TIMER_PRESETS,
@@ -11,7 +10,7 @@
 	} from '$lib/stores/sleepTimer.svelte';
 	import { triggerToggleHaptic } from '$lib/native/haptics';
 	import { formatClock as formatTime } from '$lib/models/music';
-	import { Play, Pause, SkipBack, SkipForward, Moon, X, SlidersHorizontal, Repeat } from 'lucide-svelte';
+	import { Play, Pause, SkipBack, SkipForward, Moon, X, Repeat, Volume2 } from 'lucide-svelte';
 
 	interface Props {
 		/** The currently selected tab. */
@@ -25,9 +24,6 @@
 	let showSleepTimerOptions = $state(false);
 
 	const ownerTab = $derived.by(() => {
-		// On the mixer tab the decks own playback; surface deck A's label and
-		// navigate back to the mixer.
-		if (activeTab === 'mixer' && mixerShared.anyDeckLoaded) return 'mixer';
 		switch (mediaEngine.source) {
 			case 'music':   return 'music';
 			case 'podcast': return 'podcasts';
@@ -36,24 +32,16 @@
 		}
 	});
 
-	// Single rule for the play/pause button: pause icon when something is playing,
-	// play icon when nothing is. mediaEngine.isPlaying covers every source —
-	// music/podcast/radio via their own flags, and the mixer decks via
-	// mediaEngine.mixerPlaying, which MixerView now syncs on every deck
-	// play/pause/ended event (previously a natural deck pause left mixerPlaying
-	// stuck true, so the button stayed on Pause after playback stopped).
 	const isPlaying = $derived(mediaEngine.isPlaying);
 
-	const onMixerTab = $derived(ownerTab === 'mixer');
-	/** Title/subtitle to display: deck A's label on the mixer tab, otherwise the
-	 *  main-media now-playing item. */
-	const displayTitle = $derived(onMixerTab ? mixerShared.deckALabel : mediaEngine.item?.title);
-	const displaySubtitle = $derived(onMixerTab ? 'Mixer · Deck A' : mediaEngine.item?.subtitle);
-
-	const visible = $derived(
-		(mediaEngine.item !== null && ownerTab !== null) ||
-		(activeTab === 'mixer' && mixerShared.anyDeckLoaded)
+	const displayTitle = $derived(mediaEngine.item?.title);
+	const displaySubtitle = $derived(
+		mediaEngine.source === 'music'
+			? `Deck ${mediaEngine.activeMusicDeck} · ${mediaEngine.item?.subtitle ?? ''}`
+			: mediaEngine.item?.subtitle
 	);
+
+	const visible = $derived(mediaEngine.item !== null && ownerTab !== null);
 
 	const progress = $derived(
 		mediaEngine.duration > 0
@@ -81,18 +69,8 @@
 	}
 
 	function togglePlayback() {
-		// Single source of truth: mediaEngine.isPlaying (music/podcast/radio/mixer).
-		// Pause whatever is active; if nothing is playing, start the right source.
 		if (mediaEngine.isPlaying) {
-			// Mixer decks take precedence when playing — pausing them frees the flag.
-			if (mediaEngine.mixerPlaying) mixerShared.playBoth?.();   // toggles: playing → pauseBoth
-			else mediaEngine._onPause?.() ?? mediaEngine.pause();
-			return;
-		}
-		// Nothing is playing — start the appropriate source. On the mixer tab with a
-		// deck loaded, that's the decks; otherwise resume the main media engine.
-		if (activeTab === 'mixer' && mixerShared.anyDeckLoaded) {
-			mixerShared.playBoth?.();
+			mediaEngine._onPause?.() ?? mediaEngine.pause();
 			return;
 		}
 		mediaEngine._onPlay?.() ?? mediaEngine.resume();
@@ -214,12 +192,12 @@
 
 					{#if activeTab === 'music'}
 						<button
-							class="mini-player-action mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-							onclick={() => onNavigateTo?.('mixer')}
-							aria-label="Open mixer"
-							title="Mixer — play two tracks at once"
+							class="mini-player-action mini-player-control-surface h-8 min-w-[2.5rem] px-2 inline-flex items-center justify-center rounded-full text-xs font-semibold {mediaEngine.activeMusicDeck === 'A' ? 'border-primary bg-primary/18 text-primary' : 'text-muted-foreground hover:text-foreground'}"
+							onclick={() => { mediaEngine.activeMusicDeck = mediaEngine.activeMusicDeck === 'A' ? 'B' : 'A'; void triggerToggleHaptic(true); }}
+							aria-label="Switch to deck {mediaEngine.activeMusicDeck === 'A' ? 'B' : 'A'}"
+							title="Deck {mediaEngine.activeMusicDeck}"
 						>
-							<SlidersHorizontal class="w-4 h-4" />
+							{mediaEngine.activeMusicDeck}
 						</button>
 					{/if}
 				</div>
@@ -286,6 +264,26 @@
 					<span>{formatTime(mediaEngine.currentTime)}</span>
 					<span>{mediaEngine.duration > 0 ? formatTime(mediaEngine.duration) : '--:--'}</span>
 				</div>
+			</div>
+		{/if}
+
+		{#if mediaEngine.source === 'music'}
+			{@const vol = mediaEngine.activeMusicDeck === 'A' ? musicSettings.deckAVolume : musicSettings.deckBVolume}
+			<div class="px-3 pb-2 flex items-center gap-2">
+				<Volume2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+				<input
+					class="mini-player-seek w-full h-1.5 rounded-full appearance-none cursor-pointer bg-muted accent-primary"
+					type="range"
+					min="0"
+					max="100"
+					value={vol}
+					oninput={(e) => {
+						const v = parseInt((e.target as HTMLInputElement).value);
+						if (mediaEngine.activeMusicDeck === 'A') musicSettings.deckAVolume = v;
+						else musicSettings.deckBVolume = v;
+					}}
+					aria-label="Deck {mediaEngine.activeMusicDeck} volume"
+				/>
 			</div>
 		{/if}
 	</div>

@@ -64,7 +64,6 @@
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
-	import { mixerShared } from '$lib/stores/mixerShared.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
@@ -83,6 +82,9 @@
 	type FavoriteTrack = (typeof musicSettings.favoriteTracks)[number];
 
 	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+
+	let { deck = 'A' as 'A' | 'B' }: { deck?: 'A' | 'B' } = $props();
+	const deckVolKey = $derived(deck === 'A' ? 'deckAVolume' as const : 'deckBVolume' as const);
 	const googleDriveConfigured = isGoogleDriveConfigured();
 	const googleDriveClientId = getGoogleDriveClientId();
 
@@ -258,14 +260,6 @@
 	let browseEntries    = $state<BrowseEntry[]>([]);
 	let fileSearchQuery  = $state('');
 	let browseLoading    = $state(false);
-
-	// ── Sync browse state to Mixer's shared store (reactive $effect) ────
-	$effect(() => {
-		mixerShared.allFiles       = allFiles;
-		mixerShared.browseEntries  = browseEntries;
-		mixerShared.browsePath     = browsePath;
-		mixerShared.browseLoading  = browseLoading;
-	});
 	let browseVersion    = $state(0);                          // bump to force reload
 	let selectedBrowseFileKeys = $state<string[]>([]);
 	let driveAccessToken = $state('');
@@ -386,6 +380,13 @@
 		}
 	}
 
+	// ── When this deck becomes the active music deck, claim transport controls ──
+	$effect(() => {
+		if (mediaEngine.activeMusicDeck === deck) {
+			claimMusicControls();
+		}
+	});
+
 	// MediaSession play/pause/seek handlers are managed by mediaEngine directly.
 
 	function syncTrackToMediaEngine(index: number) {
@@ -453,10 +454,10 @@
 					: t
 			);
 		};
-		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.musicPlaying = true;  };
+		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = true;  };
 		const onPause = () => {
 			isPlaying = false;
-			mediaEngine.musicPlaying = false;
+			mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = false;
 			musicSettings.lastTrackTimestamp = 0;
 		};
 		const onEnded = () => {
@@ -470,7 +471,7 @@
 		const onWaiting = () => { isBuffering = true; };
 		const onPlaying = () => { isBuffering = false; };
 		const onError = () => { isBuffering = false; void advanceTrack(true, false); };
-		audioEl.volume = musicSettings.volume / 100;
+		audioEl.volume = musicSettings[deckVolKey] / 100;
 		audioEl.muted  = musicSettings.isMuted;
 		audioEl.playbackRate = musicSettings.playbackSpeed;
 		audioEl.addEventListener('timeupdate',     onTimeUpdate);
@@ -495,7 +496,7 @@
 
 	// ── Sync volume / mute ──
 	$effect(() => {
-		if (audioEl) { audioEl.volume = musicSettings.volume / 100; audioEl.muted = musicSettings.isMuted; }
+		if (audioEl) { audioEl.volume = musicSettings[deckVolKey] / 100; audioEl.muted = musicSettings.isMuted; }
 	});
 
 	// ── Sync playback speed ──
@@ -2424,8 +2425,8 @@
 	}
 	function handleVolume(e: Event) {
 		const input = e.target as HTMLInputElement;
-		musicSettings.volume = parseFloat(input.value);
-		musicSettings.isMuted = musicSettings.volume === 0;
+		musicSettings[deckVolKey] = parseFloat(input.value);
+		musicSettings.isMuted = musicSettings[deckVolKey] === 0;
 	}
 	function toggleMute() { musicSettings.isMuted = !musicSettings.isMuted; }
 	function togglePanel(p: 'speed' | 'eq') {
@@ -3007,14 +3008,14 @@
 		<!-- Volume -->
 		<div class="flex items-center gap-3 w-full">
 			<Button variant="ghost" size="icon" onclick={toggleMute} class="text-muted-foreground shrink-0">
-				{#if musicSettings.isMuted || musicSettings.volume === 0}
+				{#if musicSettings.isMuted || musicSettings[deckVolKey] === 0}
 					<VolumeX class="w-5 h-5" />
 				{:else}
 					<Volume2 class="w-5 h-5" />
 				{/if}
 			</Button>
 			<input type="range" min="0" max="100"
-				value={musicSettings.isMuted ? 0 : musicSettings.volume}
+				value={musicSettings.isMuted ? 0 : musicSettings[deckVolKey]}
 				oninput={handleVolume}
 				class="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-secondary accent-primary" />
 		</div>

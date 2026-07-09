@@ -20,9 +20,9 @@ describe('isPlaying derivation', () => {
 	});
 
 	it('reflects each per-source flag', () => {
-		mediaEngine.musicPlaying = true;
+		mediaEngine.musicPlayingA = true;
 		expect(mediaEngine.isPlaying).toBe(true);
-		mediaEngine.musicPlaying = false;
+		mediaEngine.musicPlayingA = false;
 		mediaEngine.podcastPlaying = true;
 		expect(mediaEngine.isPlaying).toBe(true);
 		mediaEngine.podcastPlaying = false;
@@ -39,7 +39,7 @@ describe('isPlaying derivation', () => {
 		// music starts, then a stale async 'pause' sets musicPlaying=false AFTER
 		// podcast already started — only music's flag flips, podcast keeps playing.
 		mediaEngine.podcastPlaying = true;
-		mediaEngine.musicPlaying = false; // stale pause from the old source
+		mediaEngine.musicPlayingA = false; // stale pause from the old source
 		expect(mediaEngine.isPlaying).toBe(true); // podcast still up
 	});
 });
@@ -70,12 +70,12 @@ describe('setNowPlaying / clear', () => {
 			id: 'm1', source: 'music', title: 'Song', subtitle: 'Artist',
 			audioUrl: '', artworkUrl: undefined,
 		}, 'music');
-		mediaEngine.musicPlaying = true;
+		mediaEngine.musicPlayingA = true;
 		mediaEngine.mixerPlaying = true;
 		mediaEngine.clear();
 		expect(mediaEngine.item).toBeNull();
 		expect(mediaEngine.source).toBeNull();
-		expect(mediaEngine.musicPlaying).toBe(false);
+		expect(mediaEngine.musicPlayingA).toBe(false);
 		expect(mediaEngine.mixerPlaying).toBe(false);
 		expect(mediaEngine.isPlaying).toBe(false);
 	});

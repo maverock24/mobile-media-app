@@ -5,11 +5,11 @@
 	import RadioView from '$lib/components/views/RadioView.svelte';
 	import WeatherView from '$lib/components/views/WeatherView.svelte';
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
-	import MixerView from '$lib/components/views/MixerView.svelte';
 	import MiniPlayer from '$lib/components/ui/MiniPlayer.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
 	import { initSleepTimer } from '$lib/stores/sleepTimer.svelte';
 	import { appSettings } from '$lib/stores/settings.svelte';
+	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { triggerTabHaptic } from '$lib/native/haptics';
 	import {
 		recordConsoleError,
@@ -21,11 +21,11 @@
 	import { Music, Mic2, Radio, Cloud, Settings2 } from 'lucide-svelte';
 	import { checkForAndroidUpdate } from '$lib/utils/androidUpdate';
 
-	type Tab = 'music' | 'podcasts' | 'radio' | 'weather' | 'settings' | 'mixer';
+	type Tab = 'music' | 'podcasts' | 'radio' | 'weather' | 'settings';
 	const NAVIGATION_STATE_KEY = 'navigation-state';
 	const RUNTIME_ERROR_NOTICE_KEY = 'runtime-error-notice-shown';
 	const DEFAULT_TAB: Tab = 'music';
-	const DRIVE_MODE_TABS: Tab[] = ['music', 'podcasts', 'radio', 'settings', 'mixer'];
+	const DRIVE_MODE_TABS: Tab[] = ['music', 'podcasts', 'radio', 'settings'];
 
 	let activeTab = $state<Tab>(DEFAULT_TAB);
 
@@ -42,7 +42,7 @@
 
 	function isTab(value: unknown): value is Tab {
 		return value === 'music' || value === 'podcasts' || value === 'radio'
-			|| value === 'weather' || value === 'settings' || value === 'mixer';
+			|| value === 'weather' || value === 'settings';
 	}
 
 	function readSavedTab(): Tab {
@@ -174,16 +174,18 @@
 			preserved. JS timers and Web Audio context also survive.
 		-->
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'music'}>
-			<Mp3PlayerView />
+			<div class="absolute inset-0 overflow-hidden" class:hidden={mediaEngine.activeMusicDeck !== 'A'}>
+				<Mp3PlayerView deck="A" />
+			</div>
+			<div class="absolute inset-0 overflow-hidden" class:hidden={mediaEngine.activeMusicDeck !== 'B'}>
+				<Mp3PlayerView deck="B" />
+			</div>
 		</div>
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'podcasts'}>
 			<PodcastView />
 		</div>
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'radio'}>
 			<RadioView />
-		</div>
-		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'mixer'}>
-			<MixerView />
 		</div>
 		{#if activeTab === 'weather'}
 			<div class="absolute inset-0 overflow-y-auto">
