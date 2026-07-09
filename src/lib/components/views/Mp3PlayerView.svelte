@@ -380,10 +380,34 @@
 		}
 	}
 
-	// ── When this deck becomes the active music deck, claim transport controls ──
+	// ── When this deck becomes the active music deck, claim transport controls
+	//     and sync track info / progress to the MiniPlayer. ──
 	$effect(() => {
 		if (mediaEngine.activeMusicDeck === deck) {
 			claimMusicControls();
+			// Push current track metadata so the MiniPlayer shows the right title
+			if (currentTrack) {
+				mediaEngine.setNowPlaying({
+					id:         String(currentTrack.id),
+					source:     'music',
+					title:      currentTrack.title,
+					subtitle:   currentTrack.artist,
+					audioUrl:   '',
+					artworkUrl: undefined,
+					duration:   currentTrack.duration > 0 ? currentTrack.duration : undefined,
+				}, 'music');
+				// Push current playback position so progress slider updates
+				mediaEngine.updateTime(
+					audioEl?.currentTime ?? 0,
+					isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack.duration ?? 0)
+				);
+				// Sync playing state flags
+				if (deck === 'A') {
+					mediaEngine.musicPlayingA = isPlaying;
+				} else {
+					mediaEngine.musicPlayingB = isPlaying;
+				}
+			}
 		}
 	});
 
@@ -444,7 +468,12 @@
 			if (now - _lastTimeUpdate < 250) return;
 			_lastTimeUpdate = now;
 			currentTime = audioEl.currentTime;
-			mediaEngine.updateTime(audioEl.currentTime, isFinite(audioEl.duration) ? audioEl.duration : 0);
+			// Only push progress to the MiniPlayer when this deck is active,
+			// otherwise both decks fight over mediaEngine.currentTime and the
+			// slider jumps between the two positions.
+			if (mediaEngine.activeMusicDeck === deck) {
+				mediaEngine.updateTime(audioEl.currentTime, isFinite(audioEl.duration) ? audioEl.duration : 0);
+			}
 		};
 		const onLoadedMetadata = () => {
 			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
