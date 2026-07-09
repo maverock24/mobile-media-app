@@ -1553,7 +1553,9 @@
 	// ─────────────────────────────────────────────────────────────
 	// Browse — async entry loading
 	// ─────────────────────────────────────────────────────────────
+	let _browseLoadId = 0;
 	async function loadBrowseEntries(path: string[], driveFilter = '') {
+		const loadId = ++_browseLoadId;
 		browseLoading = true;
 		try {
 			if (musicSettings.librarySource === 'drive' && driveFilter.trim()) {
@@ -1574,6 +1576,7 @@
 			} else if (nativeTreeUri) {
 				// Scan in progress and this subfolder not yet indexed — live single-level call
 				const result = await DirectoryReader.listEntries({ treeUri: nativeTreeUri, path: pathToString(path) });
+				if (loadId !== _browseLoadId) return;
 				const folders: BrowseEntry[] = [];
 				const files: BrowseEntry[] = [];
 				for (const entry of result.entries) {
@@ -1621,6 +1624,7 @@
 				browseEntries = [...folders, ...files];
 			} else if (nativeTreeUri) {
 				const result = await DirectoryReader.listEntries({ treeUri: nativeTreeUri, path: pathToString(path) });
+				if (loadId !== _browseLoadId) return;
 				const folders: BrowseEntry[] = [];
 				const files: BrowseEntry[] = [];
 
@@ -1636,10 +1640,10 @@
 				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 				browseEntries = [...folders, ...files];
 			} else {
-				browseEntries = [];
+				if (loadId === _browseLoadId) browseEntries = [];
 			}
-		} catch { browseEntries = []; }
-		browseLoading = false;
+		} catch { if (loadId === _browseLoadId) browseEntries = []; }
+		if (loadId === _browseLoadId) browseLoading = false;
 	}
 
 	// ── Collect all MP3s from a directory handle recursively ──
@@ -2230,8 +2234,14 @@
 			showFavoriteTracks = false;
 			return;
 		}
-		if (browsePath.length > 0) browsePath = browsePath.slice(0, -1);
-		else showQueue = false;
+		// Navigate to parent folder. Only hide the browse view when we're
+		// already at the root (browsePath is empty) AND there's a track loaded
+		// to show in the player view — otherwise keep the browse view open.
+		if (browsePath.length > 0) {
+			browsePath = browsePath.slice(0, -1);
+		} else if (currentTrack) {
+			showQueue = false;
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────
