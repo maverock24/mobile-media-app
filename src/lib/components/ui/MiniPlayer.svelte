@@ -32,7 +32,14 @@
 		}
 	});
 
-	const isPlaying = $derived(mediaEngine.isPlaying);
+	// Play/pause button: when music is the active source, reflect ONLY the
+	// deck you're currently viewing — not the other deck that may be playing
+	// in the background. For podcast/radio, use the global playing flag.
+	const isPlaying = $derived(
+		mediaEngine.source === 'music'
+			? (mediaEngine.activeMusicDeck === 'A' ? mediaEngine.musicPlayingA : mediaEngine.musicPlayingB)
+			: mediaEngine.isPlaying
+	);
 
 	const displayTitle = $derived(mediaEngine.item?.title ?? (mediaEngine.source === 'music' && mediaEngine.isPlaying ? `Deck ${mediaEngine.activeMusicDeck === 'A' ? 'B' : 'A'}` : undefined));
 	const displaySubtitle = $derived(
@@ -78,7 +85,11 @@
 	}
 
 	function togglePlayback() {
-		if (mediaEngine.isPlaying) {
+		// Use the same deck-aware check as the play/pause icon
+		const deckPlaying = mediaEngine.source === 'music'
+			? (mediaEngine.activeMusicDeck === 'A' ? mediaEngine.musicPlayingA : mediaEngine.musicPlayingB)
+			: mediaEngine.isPlaying;
+		if (deckPlaying) {
 			mediaEngine._onPause?.() ?? mediaEngine.pause();
 			return;
 		}
