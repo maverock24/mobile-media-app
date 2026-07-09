@@ -710,9 +710,35 @@
 
 	function toggleBrowseFileSelection(file: StoredAudioFile) {
 		const key = getStoredFileKey(file);
-		selectedBrowseFileKeys = isBrowseFileSelected(file)
+		const wasSelected = isBrowseFileSelected(file);
+		selectedBrowseFileKeys = wasSelected
 			? selectedBrowseFileKeys.filter((currentKey) => currentKey !== key)
 			: [...selectedBrowseFileKeys, key];
+
+		// When nothing is playing, keep the loop queue instantly in sync
+		// with the selection so the MiniPlayer and notification always
+		// reflect the current loop state without needing to press play.
+		if (!mediaEngine.isPlaying) {
+			if (selectedBrowseFileKeys.length > 0) {
+				preloadLoopSelection();
+			} else {
+				clearBrowseSelection();
+				mediaEngine.clear();
+			}
+		}
+	}
+
+	/** Load selected tracks into the queue without starting playback.
+	 *  Updates tracks, mediaEngine item, and musicSelectionLoopActive so the
+	 *  MiniPlayer and media notification show the loaded track immediately. */
+	function preloadLoopSelection() {
+		const selectedFiles = getSelectedBrowseFilesInOrder();
+		if (selectedFiles.length === 0) return;
+		const label = browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName;
+		loadTracks(selectedFiles, label, { selectionLoop: true });
+		musicSettings.lastTrackIndex = 0;
+		musicSettings.lastTrackTimestamp = 0;
+		syncTrackToMediaEngine(0);
 	}
 
 	function clearBrowseSelection() {
