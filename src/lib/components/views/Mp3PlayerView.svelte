@@ -2327,11 +2327,23 @@
 				return;
 			}
 
-			// Single-track loop: release the old blob URL BEFORE ensuring a fresh one.
-			// Otherwise ensureTrackUrl returns the still-live blob, releaseTrackUrl
-			// revokes it, and we feed a revoked URL to audioEl.src.
+			// Same-track loop (single selected track, or repeat): just seek to
+			// start and play. Avoids the ensureTrackUrl → set src dance which is
+			// a no-op on Android native (Capacitor.convertFileSrc returns the same
+			// bridge URL every time, so audioEl.src = sameUrl doesn't reload).
 			if (nextIndex === idx) {
-				releaseTrackUrl(idx);
+				setCurrentTrack(nextIndex);
+				currentTime = 0;
+				musicSettings.lastTrackTimestamp = 0;
+				if (audioEl) {
+					audioEl.currentTime = 0;
+					if (wasPlaying) {
+						isBuffering = false;
+						audioEl.play().catch(() => { isPlaying = false; });
+					}
+				}
+				isChangingTrack = false;
+				return;
 			}
 
 			setCurrentTrack(nextIndex);
@@ -2343,11 +2355,8 @@
 					isPlaying = false; isBuffering = false;
 					return;
 				}
-				// Release old URL only after new URL is ready (unless it's the same
-				// track — already released above).
-				if (nextIndex !== idx) {
-					releaseTrackUrl(idx);
-				}
+				// Release old URL only after new URL is ready so streaming doesn't error
+				releaseTrackUrl(idx);
 				audioEl.src = url;
 				syncTrackToMediaEngine(nextIndex);
 				void preloadNextTrack(nextIndex);
