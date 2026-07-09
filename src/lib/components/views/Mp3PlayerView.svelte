@@ -2193,12 +2193,23 @@
 	}
 
 	async function resumePlayback() {
-		if (!audioEl || !currentTrack || isPlaying) return;
-		// If there are selected files but loop selection is not yet active, start loop selection
+		if (!audioEl || isPlaying) return;
+
+		// Loop selection takes priority — start or restart the loop even if no
+		// track is currently loaded (fresh app start / empty queue).
 		if (selectedBrowseFileKeys.length > 0 && !mediaEngine.musicSelectionLoopActive) {
 			await playCurrentFolder();
 			return;
 		}
+
+		// If a loop is already active but somehow the queue was cleared, restart it.
+		if (mediaEngine.musicSelectionLoopActive && !currentTrack) {
+			await playCurrentFolder();
+			return;
+		}
+
+		if (!currentTrack) return;
+
 		void triggerPlaybackHaptic(true);
 		initAudioContext();
 		claimAudio('music');
