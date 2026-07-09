@@ -474,6 +474,7 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		let backgroundResumeTimer: number | null = null;
 		let backgroundResumeArmed = false;
 		let backgroundResumeAttempts = 0;
+		let backgroundWatchdog: number | null = null;
 
 		const clearBackgroundResume = () => {
 			backgroundResumeArmed = false;
@@ -481,6 +482,10 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 			if (backgroundResumeTimer != null) {
 				window.clearTimeout(backgroundResumeTimer);
 				backgroundResumeTimer = null;
+			}
+			if (backgroundWatchdog != null) {
+				window.clearInterval(backgroundWatchdog);
+				backgroundWatchdog = null;
 			}
 		};
 
@@ -512,6 +517,25 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 				window.clearTimeout(backgroundResumeTimer);
 			}
 			backgroundResumeTimer = window.setTimeout(tryResumeAfterBackgroundPause, 180);
+
+			// Start a long-running watchdog that checks every 5 seconds while the
+			// app is backgrounded. The initial 180ms / 250ms×3 retry handles the
+			// immediate Android auto-pause on activity pause, but the OS can also
+			// pause the audio element MINUTES later (Doze throttling, audio-focus
+			// churn from notifications, OEM battery optimisation). Radio streams
+			// are immune (continuous HTTP connection), but local-file and
+			// progressive-download playback (MP3, podcast) needs ongoing recovery.
+			if (backgroundWatchdog == null) {
+				backgroundWatchdog = window.setInterval(() => {
+					if (!backgroundResumeArmed) {
+						clearBackgroundResume();
+						return;
+					}
+					if (mediaEngine.item != null && !mediaEngine.isPlaying) {
+						mediaEngine._onPlay?.() ?? mediaEngine.resume();
+					}
+				}, 5000);
+			}
 		};
 
 		const handleDocumentResume = () => {
