@@ -26,7 +26,7 @@ import { addToast } from './toastStore.svelte';
 // others. Radio is special-cased: its stream lives in _streamAudio (below),
 // which claimAudio tears down directly for non-radio claims.
 // ─────────────────────────────────────────────────────────────────────────────
-type AudioSourceId = MediaSource | 'essay' | 'mixer';
+type AudioSourceId = MediaSource | 'essay' | 'mixer' | 'musicA' | 'musicB';
 const _stopFns: Partial<Record<AudioSourceId, () => void>> = {};
 
 export function registerAudioSource(id: AudioSourceId, stopFn: () => void): void {

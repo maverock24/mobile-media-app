@@ -342,7 +342,8 @@
 	});
 
 	$effect(() => {
-		registerAudioSource('music', () => {
+		const srcId = deck === 'A' ? 'musicA' as const : 'musicB' as const;
+		registerAudioSource(srcId, () => {
 			if (audioEl && isPlaying) {
 				audioEl.pause();
 			}
@@ -2057,7 +2058,7 @@
 		audioEl.src = url;
 		syncTrackToMediaEngine(index);
 		void preloadNextTrack(index);
-		claimAudio('music');
+		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
 		initAudioContext();
 		isBuffering = true;
 		safePlay(() => { isBuffering = false; isPlaying = false; });
@@ -2298,7 +2299,7 @@
 
 		void triggerPlaybackHaptic(true);
 		initAudioContext();
-		claimAudio('music');
+		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
 		if (!audioEl.src || audioEl.src === window.location.href) {
 			const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
 			if (!url) {
@@ -2420,7 +2421,7 @@
 				audioEl.src = url;
 				syncTrackToMediaEngine(nextIndex);
 				void preloadNextTrack(nextIndex);
-				claimAudio('music');
+				claimAudio(deck === 'A' ? 'musicA' : 'musicB');
 				initAudioContext();
 				if (wasPlaying) {
 					isBuffering = true;
@@ -2453,7 +2454,7 @@
 				audioEl.src = url;
 				syncTrackToMediaEngine(prevIndex);
 				void preloadNextTrack(prevIndex);
-				claimAudio('music');
+				claimAudio(deck === 'A' ? 'musicA' : 'musicB');
 				initAudioContext();
 				if (wasPlaying) {
 					isBuffering = true;
