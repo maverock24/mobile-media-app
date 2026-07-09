@@ -381,11 +381,11 @@
 	}
 
 	// ── When this deck becomes the active music deck, claim transport controls
-	//     and sync track info / progress to the MiniPlayer. ──
+	//     and sync track info / progress / volume / playing state to the
+	//     MiniPlayer so it always reflects the deck you're looking at. ──
 	$effect(() => {
 		if (mediaEngine.activeMusicDeck === deck) {
 			claimMusicControls();
-			// Push current track metadata so the MiniPlayer shows the right title
 			if (currentTrack) {
 				mediaEngine.setNowPlaying({
 					id:         String(currentTrack.id),
@@ -396,17 +396,22 @@
 					artworkUrl: undefined,
 					duration:   currentTrack.duration > 0 ? currentTrack.duration : undefined,
 				}, 'music');
-				// Push current playback position so progress slider updates
 				mediaEngine.updateTime(
 					audioEl?.currentTime ?? 0,
 					isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack.duration ?? 0)
 				);
-				// Sync playing state flags
 				if (deck === 'A') {
 					mediaEngine.musicPlayingA = isPlaying;
 				} else {
 					mediaEngine.musicPlayingB = isPlaying;
 				}
+			} else {
+				// No track loaded in this deck — clear the MiniPlayer display
+				// without touching the other deck's playing state.
+				mediaEngine.item = null;
+				mediaEngine.source = null;
+				mediaEngine.currentTime = 0;
+				mediaEngine.duration = 0;
 			}
 		}
 	});

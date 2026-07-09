@@ -34,14 +34,19 @@
 
 	const isPlaying = $derived(mediaEngine.isPlaying);
 
-	const displayTitle = $derived(mediaEngine.item?.title);
+	const displayTitle = $derived(mediaEngine.item?.title ?? (mediaEngine.source === 'music' && mediaEngine.isPlaying ? `Deck ${mediaEngine.activeMusicDeck === 'A' ? 'B' : 'A'}` : undefined));
 	const displaySubtitle = $derived(
 		mediaEngine.source === 'music'
-			? `Deck ${mediaEngine.activeMusicDeck} · ${mediaEngine.item?.subtitle ?? ''}`
+			? (mediaEngine.item
+				? `Deck ${mediaEngine.activeMusicDeck} · ${mediaEngine.item.subtitle ?? ''}`
+				: `Playing on Deck ${mediaEngine.activeMusicDeck === 'A' ? 'B' : 'A'}`)
 			: mediaEngine.item?.subtitle
 	);
 
-	const visible = $derived(mediaEngine.item !== null && ownerTab !== null);
+	const visible = $derived(
+		(mediaEngine.item !== null && ownerTab !== null) ||
+		(mediaEngine.source === 'music' && mediaEngine.isPlaying)
+	);
 
 	const progress = $derived(
 		mediaEngine.duration > 0
@@ -56,6 +61,10 @@
 	const podcastOneAndHalfActive = $derived(showPodcastSpeedPreset && podcastSettings.playbackSpeed === 1.5);
 	const sleepTimerLabel = $derived(
 		sleepTimer.isActive ? formatSleepTimerRemaining(sleepTimer.remainingMs) : 'Off'
+	);
+
+	const musicDeckVolume = $derived(
+		mediaEngine.activeMusicDeck === 'A' ? musicSettings.deckAVolume : musicSettings.deckBVolume
 	);
 
 	function seekTo(time: number) {
@@ -268,7 +277,6 @@
 		{/if}
 
 		{#if mediaEngine.source === 'music'}
-			{@const vol = mediaEngine.activeMusicDeck === 'A' ? musicSettings.deckAVolume : musicSettings.deckBVolume}
 			<div class="px-3 pb-2 flex items-center gap-2">
 				<Volume2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
 				<input
@@ -276,7 +284,7 @@
 					type="range"
 					min="0"
 					max="100"
-					value={vol}
+					value={musicDeckVolume}
 					oninput={(e) => {
 						const v = parseInt((e.target as HTMLInputElement).value);
 						if (mediaEngine.activeMusicDeck === 'A') musicSettings.deckAVolume = v;
