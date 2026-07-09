@@ -407,10 +407,10 @@
 					mediaEngine.musicPlayingB = isPlaying;
 				}
 			} else {
-				// No track loaded in this deck — clear the MiniPlayer display
-				// without touching the other deck's playing state.
+				// No track loaded in this deck — clear the display but keep
+				// source='music' so the MiniPlayer stays visible if the other
+				// deck is actively playing.
 				mediaEngine.item = null;
-				mediaEngine.source = null;
 				mediaEngine.currentTime = 0;
 				mediaEngine.duration = 0;
 			}
