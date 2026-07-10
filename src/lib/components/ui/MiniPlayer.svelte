@@ -91,10 +91,6 @@
 		sleepTimer.isActive ? formatSleepTimerRemaining(sleepTimer.remainingMs) : 'Off'
 	);
 
-	const musicDeckVolume = $derived(
-		mediaEngine.activeMusicDeck === 'A' ? musicSettings.deckAVolume : musicSettings.deckBVolume
-	);
-
 	function seekTo(time: number) {
 		const target = Math.max(0, Math.min(time, mediaEngine.duration || 0));
 		mediaEngine._onSeek?.(target) ?? mediaEngine.seek(target);
@@ -308,7 +304,7 @@
 			</div>
 		{/if}
 
-		{#if mediaEngine.source === 'music'}
+		{#if mediaEngine.source === 'music' && mediaEngine.activeMusicDeck === 'B'}
 			<div class="px-3 pb-2 flex items-center gap-2">
 				<Volume2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
 				<input
@@ -316,13 +312,11 @@
 					type="range"
 					min="0"
 					max="100"
-					value={musicDeckVolume}
+					value={musicSettings.deckBVolume}
 					oninput={(e) => {
-						const v = parseInt((e.target as HTMLInputElement).value);
-						if (mediaEngine.activeMusicDeck === 'A') musicSettings.deckAVolume = v;
-						else musicSettings.deckBVolume = v;
+						musicSettings.deckBVolume = parseInt((e.target as HTMLInputElement).value);
 					}}
-					aria-label="Deck {mediaEngine.activeMusicDeck} volume"
+					aria-label="Deck B volume"
 				/>
 			</div>
 		{/if}

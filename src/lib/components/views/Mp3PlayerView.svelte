@@ -85,6 +85,8 @@
 
 	let { deck = 'A' as 'A' | 'B' }: { deck?: 'A' | 'B' } = $props();
 	const deckVolKey = $derived(deck === 'A' ? 'deckAVolume' as const : 'deckBVolume' as const);
+	// Deck A always plays at full volume. Deck B uses its independent volume slider.
+	const effectiveVolume = $derived(deck === 'A' ? 100 : musicSettings.deckBVolume);
 	const googleDriveConfigured = isGoogleDriveConfigured();
 	const googleDriveClientId = getGoogleDriveClientId();
 
@@ -507,7 +509,7 @@
 		const onWaiting = () => { isBuffering = true; };
 		const onPlaying = () => { isBuffering = false; };
 		const onError = () => { isBuffering = false; void advanceTrack(true, false); };
-		audioEl.volume = musicSettings[deckVolKey] / 100;
+		audioEl.volume = effectiveVolume / 100;
 		audioEl.muted  = musicSettings.isMuted;
 		audioEl.playbackRate = musicSettings.playbackSpeed;
 		audioEl.addEventListener('timeupdate',     onTimeUpdate);
@@ -532,7 +534,7 @@
 
 	// ── Sync volume / mute ──
 	$effect(() => {
-		if (audioEl) { audioEl.volume = musicSettings[deckVolKey] / 100; audioEl.muted = musicSettings.isMuted; }
+		if (audioEl) { audioEl.volume = effectiveVolume / 100; audioEl.muted = musicSettings.isMuted; }
 	});
 
 	// ── Sync playback speed ──
@@ -2482,8 +2484,8 @@
 	}
 	function handleVolume(e: Event) {
 		const input = e.target as HTMLInputElement;
-		musicSettings[deckVolKey] = parseFloat(input.value);
-		musicSettings.isMuted = musicSettings[deckVolKey] === 0;
+		musicSettings.deckBVolume = parseFloat(input.value);
+		musicSettings.isMuted = musicSettings.deckBVolume === 0;
 	}
 	function toggleMute() { musicSettings.isMuted = !musicSettings.isMuted; }
 	function togglePanel(p: 'speed' | 'eq') {
@@ -3062,20 +3064,22 @@
 			</Button>
 		</div>
 
-		<!-- Volume -->
+		<!-- Volume (Deck B only — Deck A always at 100%) -->
+		{#if deck === 'B'}
 		<div class="flex items-center gap-3 w-full">
 			<Button variant="ghost" size="icon" onclick={toggleMute} class="text-muted-foreground shrink-0">
-				{#if musicSettings.isMuted || musicSettings[deckVolKey] === 0}
+				{#if musicSettings.isMuted || effectiveVolume === 0}
 					<VolumeX class="w-5 h-5" />
 				{:else}
 					<Volume2 class="w-5 h-5" />
 				{/if}
 			</Button>
 			<input type="range" min="0" max="100"
-				value={musicSettings.isMuted ? 0 : musicSettings[deckVolKey]}
+				value={musicSettings.isMuted ? 0 : effectiveVolume}
 				oninput={handleVolume}
 				class="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-secondary accent-primary" />
 		</div>
+		{/if}
 	</div>
 
 	<!-- Speed panel -->
