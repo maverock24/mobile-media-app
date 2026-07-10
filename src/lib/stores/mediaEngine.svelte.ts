@@ -35,7 +35,10 @@ export function registerAudioSource(id: AudioSourceId, stopFn: () => void): void
 
 export function claimAudio(id: AudioSourceId): void {
 	for (const other of Object.keys(_stopFns) as AudioSourceId[]) {
-		if (other !== id) _stopFns[other]?.();
+		if (other === id) continue;
+		// Both music decks can play simultaneously — don't stop the sibling deck.
+		if ((id === 'musicA' || id === 'musicB') && (other === 'musicA' || other === 'musicB')) continue;
+		_stopFns[other]?.();
 	}
 	// Stop any active live stream unless this is a radio claim
 	if (id !== 'radio') stopStreamAudio();
