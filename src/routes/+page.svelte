@@ -175,10 +175,10 @@
 		-->
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'music'}>
 			<div class="absolute inset-0 overflow-hidden" class:hidden={mediaEngine.activeMusicDeck !== 'A'}>
-				<Mp3PlayerView deck="A" />
+				<Mp3PlayerView deck="A" {activeTab} />
 			</div>
 			<div class="absolute inset-0 overflow-hidden" class:hidden={mediaEngine.activeMusicDeck !== 'B'}>
-				<Mp3PlayerView deck="B" />
+				<Mp3PlayerView deck="B" {activeTab} />
 			</div>
 		</div>
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'podcasts'}>

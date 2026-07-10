@@ -83,7 +83,7 @@
 
 	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
 
-	let { deck = 'A' as 'A' | 'B' }: { deck?: 'A' | 'B' } = $props();
+	let { deck = 'A' as 'A' | 'B', activeTab = 'music' as string }: { deck?: 'A' | 'B'; activeTab?: string } = $props();
 	const deckVolKey = $derived(deck === 'A' ? 'deckAVolume' as const : 'deckBVolume' as const);
 	// Deck A always plays at full volume. Deck B uses its independent volume slider.
 	const effectiveVolume = $derived(deck === 'A' ? 100 : musicSettings.deckBVolume);
@@ -384,11 +384,13 @@
 		}
 	}
 
-	// ── When this deck becomes the active music deck, claim transport controls
-	//     and sync track info / progress / volume / playing state to the
-	//     MiniPlayer so it always reflects the deck you're looking at. ──
+	// ── When this deck is the active music deck AND the user is on the
+	//     music tab, push state to the MiniPlayer. Uses both activeMusicDeck
+	//     and activeTab so it re-fires when returning from podcast/radio.
+	//     Does NOT push when podcast/radio are playing — they own the source. ──
 	$effect(() => {
-		if (mediaEngine.activeMusicDeck === deck) {
+		if (mediaEngine.activeMusicDeck === deck && activeTab === 'music'
+			&& !mediaEngine.podcastPlaying && !mediaEngine.radioPlaying) {
 			claimMusicControls();
 			if (currentTrack) {
 				mediaEngine.setNowPlaying({
