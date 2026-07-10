@@ -229,7 +229,7 @@
 
 					{#if activeTab === 'music'}
 						<button
-							class="mini-player-action mini-player-control-surface h-8 min-w-[2.5rem] px-2 inline-flex items-center justify-center rounded-full text-xs font-semibold {mediaEngine.activeMusicDeck === 'A' ? 'border-primary bg-primary/18 text-primary' : 'text-muted-foreground hover:text-foreground'}"
+							class="mini-player-action mini-player-control-surface h-8 min-w-[2.5rem] px-2 inline-flex items-center justify-center rounded-full text-xs font-semibold border-primary bg-primary/18 text-primary"
 							onclick={() => { mediaEngine.activeMusicDeck = mediaEngine.activeMusicDeck === 'A' ? 'B' : 'A'; void triggerToggleHaptic(true); }}
 							aria-label="Switch to deck {mediaEngine.activeMusicDeck === 'A' ? 'B' : 'A'}"
 							title="Deck {mediaEngine.activeMusicDeck}"
