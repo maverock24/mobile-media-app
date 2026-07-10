@@ -779,6 +779,13 @@
 				clearBrowseSelection();
 				mediaEngine.clear();
 			}
+		} else if (selectedBrowseFileKeys.length > 0) {
+			// Other deck is playing — can't preload, but mark the loop as
+			// active so the MiniPlayer toggle shows the correct state.
+			mediaEngine.musicSelectionLoopActive = true;
+		} else {
+			// All selections cleared while other deck is playing
+			mediaEngine.musicSelectionLoopActive = false;
 		}
 	}
 
