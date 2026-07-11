@@ -440,24 +440,13 @@
 		claimMusicControls();
 	}
 
-	// ── Browse entry cache — makes navigating back to parent instant ──
-	const _browseCache = new Map<string, BrowseEntry[]>();
-
-	// ── Invalidate browse cache when underlying data changes ──
-	$effect(() => {
-		void browseVersion;
-		void musicSettings.librarySource;
-		_browseCache.clear();
-	});
-
-	// ── reload browse entries when path or data changes ──
+	// ── reload browse entries when path or folder version changes ──
 	$effect(() => {
 		const path = [...browsePath];
 		const driveFilter = driveSearch.trim().toLowerCase();
-		void browseVersion; // re-run when scan completes with new files
-		loadBrowseEntries(path, driveFilter).catch(() => {
-			browseLoading = false;
-		});
+		browseVersion; // reactive dependency
+		musicSettings.librarySource;
+		void loadBrowseEntries(path, driveFilter);
 	});
 
 	$effect(() => {
@@ -1600,26 +1589,8 @@
 	// Browse — async entry loading
 	// ─────────────────────────────────────────────────────────────
 	let _browseLoadId = 0;
-	let _loadingBrowse = false;
 	async function loadBrowseEntries(path: string[], driveFilter = '') {
-		// Guard against re-entrant calls from the effect chain
-		if (_loadingBrowse) return;
-		_loadingBrowse = true;
-		try {
-		const cacheKey = path.join('/') + '|' + driveFilter;
 		const loadId = ++_browseLoadId;
-
-		// Serve cached entries instantly so navigating back is immediate.
-		// The async load still runs to pick up any filesystem changes.
-		if (!driveFilter) {
-			const cached = _browseCache.get(cacheKey);
-			if (cached) {
-				browseEntries = cached;
-				browseLoading = false;
-				return;
-			}
-		}
-
 		browseLoading = true;
 		try {
 			if (musicSettings.librarySource === 'drive' && driveFilter.trim()) {
@@ -1707,12 +1678,7 @@
 				if (loadId === _browseLoadId) browseEntries = [];
 			}
 		} catch { if (loadId === _browseLoadId) browseEntries = []; }
-		// Cache successful results so navigating back is instant
-		if (loadId === _browseLoadId && !driveFilter && browseEntries.length > 0) {
-			_browseCache.set(cacheKey, browseEntries);
-		}
 		if (loadId === _browseLoadId) browseLoading = false;
-		} finally { _loadingBrowse = false; }
 	}
 
 	// ── Collect all MP3s from a directory handle recursively ──
