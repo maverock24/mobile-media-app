@@ -242,14 +242,7 @@
 	// Wired via use:swipeBack on the player container in the template below.
 
 	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
-	let isRestoring = $state(true);  // true until IDB check finishes (prevents empty-state flash)
-
-	// Safety timeout: force isRestoring=false after 5s so the UI doesn't stay
-	// stuck on the loading spinner if the IDB init never completes.
-	$effect(() => {
-		const timer = setTimeout(() => { isRestoring = false; }, 5000);
-		return () => clearTimeout(timer);
-	});
+	let isRestoring = $state(typeof window !== 'undefined' && Capacitor.isNativePlatform());
 
 	let preloadedTrackIndex = $state<number | null>(null);
 	let preloadRequestId = 0;
