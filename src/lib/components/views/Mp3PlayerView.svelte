@@ -1585,11 +1585,27 @@
 	}
 
 	// ─────────────────────────────────────────────────────────────
+	// ── Browse entry cache — makes navigating back to parent instant ──
+	const _browseCache = new Map<string, BrowseEntry[]>();
+
 	// Browse — async entry loading
 	// ─────────────────────────────────────────────────────────────
 	let _browseLoadId = 0;
 	async function loadBrowseEntries(path: string[], driveFilter = '') {
+		const cacheKey = path.join('/') + '|' + driveFilter;
 		const loadId = ++_browseLoadId;
+
+		// Serve cached entries instantly so navigating back is immediate.
+		// The async load still runs to pick up any filesystem changes.
+		if (!driveFilter) {
+			const cached = _browseCache.get(cacheKey);
+			if (cached) {
+				browseEntries = cached;
+				browseLoading = false;
+				return;
+			}
+		}
+
 		browseLoading = true;
 		try {
 			if (musicSettings.librarySource === 'drive' && driveFilter.trim()) {
@@ -1677,6 +1693,10 @@
 				if (loadId === _browseLoadId) browseEntries = [];
 			}
 		} catch { if (loadId === _browseLoadId) browseEntries = []; }
+		// Cache successful results so navigating back is instant
+		if (loadId === _browseLoadId && !driveFilter && browseEntries.length > 0) {
+			_browseCache.set(cacheKey, browseEntries);
+		}
 		if (loadId === _browseLoadId) browseLoading = false;
 	}
 
