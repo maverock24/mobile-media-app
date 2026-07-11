@@ -1600,7 +1600,12 @@
 	// Browse — async entry loading
 	// ─────────────────────────────────────────────────────────────
 	let _browseLoadId = 0;
+	let _loadingBrowse = false;
 	async function loadBrowseEntries(path: string[], driveFilter = '') {
+		// Guard against re-entrant calls from the effect chain
+		if (_loadingBrowse) return;
+		_loadingBrowse = true;
+		try {
 		const cacheKey = path.join('/') + '|' + driveFilter;
 		const loadId = ++_browseLoadId;
 
@@ -1707,6 +1712,7 @@
 			_browseCache.set(cacheKey, browseEntries);
 		}
 		if (loadId === _browseLoadId) browseLoading = false;
+		} finally { _loadingBrowse = false; }
 	}
 
 	// ── Collect all MP3s from a directory handle recursively ──
