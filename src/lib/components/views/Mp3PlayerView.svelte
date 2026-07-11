@@ -243,6 +243,14 @@
 
 	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
 	let isRestoring = $state(true);  // true until IDB check finishes (prevents empty-state flash)
+
+	// Safety timeout: force isRestoring=false after 5s so the UI doesn't stay
+	// stuck on the loading spinner if the IDB init never completes.
+	$effect(() => {
+		const timer = setTimeout(() => { isRestoring = false; }, 5000);
+		return () => clearTimeout(timer);
+	});
+
 	let preloadedTrackIndex = $state<number | null>(null);
 	let preloadRequestId = 0;
 	// Prevents background folder scans from overwriting the track list after the user has
@@ -454,7 +462,9 @@
 		const path = [...browsePath];
 		const driveFilter = driveSearch.trim().toLowerCase();
 		void browseVersion; // re-run when scan completes with new files
-		void loadBrowseEntries(path, driveFilter);
+		loadBrowseEntries(path, driveFilter).catch(() => {
+			browseLoading = false;
+		});
 	});
 
 	$effect(() => {
