@@ -242,7 +242,7 @@
 	// Wired via use:swipeBack on the player container in the template below.
 
 	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
-	let isRestoring = $state(typeof window !== 'undefined' && Capacitor.isNativePlatform());
+	let isRestoring = $state(false);  // set to true by init effect on Android native only
 
 	let preloadedTrackIndex = $state<number | null>(null);
 	let preloadRequestId = 0;
@@ -2580,6 +2580,7 @@
 	// cause this effect to re-run when those signals are written during hydration — leading to
 	// multiple concurrent finishDriveLoad calls and a spinner that never resolves.
 	$effect(() => {
+		if (isNativeApp) isRestoring = true;
 		untrack(() => {
 		if (musicSettings.librarySource === 'drive') {
 			// Skip if a Drive load is already running (e.g. triggered by folder picker confirmation)
