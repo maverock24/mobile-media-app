@@ -2001,14 +2001,7 @@
 					hydrateTracksFromLibrary(allFiles);
 					browseVersion++;
 				}
-			} catch (error) {
-				const isCancel = error instanceof Error && /cancel|abort/i.test(error.message);
-				if (!isCancel) {
-					console.error('showDirectoryPicker failed:', error);
-					// Fall back to the basic file input
-					folderInputEl?.click();
-				}
-			}
+			} catch { /* user cancelled or API not supported */ }
 		} else {
 			folderInputEl?.click();
 		}
