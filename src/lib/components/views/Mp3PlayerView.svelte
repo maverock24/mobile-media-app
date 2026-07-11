@@ -2008,7 +2008,14 @@
 					hydrateTracksFromLibrary(allFiles);
 					browseVersion++;
 				}
-			} catch { /* user cancelled */ }
+			} catch (error) {
+				const isCancel = error instanceof Error && /cancel|abort/i.test(error.message);
+				if (!isCancel) {
+					console.error('showDirectoryPicker failed:', error);
+					// Fall back to the basic file input
+					folderInputEl?.click();
+				}
+			}
 		} else {
 			folderInputEl?.click();
 		}
