@@ -439,12 +439,18 @@
 		claimMusicControls();
 	}
 
-	// ── reload browse entries when path or folder version changes ──
+	// ── Invalidate browse cache when underlying data changes ──
+	$effect(() => {
+		void browseVersion;
+		void musicSettings.librarySource;
+		_browseCache.clear();
+	});
+
+	// ── reload browse entries when path or data changes ──
 	$effect(() => {
 		const path = [...browsePath];
 		const driveFilter = driveSearch.trim().toLowerCase();
-		browseVersion; // reactive dependency
-		musicSettings.librarySource;
+		void browseVersion; // re-run when scan completes with new files
 		void loadBrowseEntries(path, driveFilter);
 	});
 
