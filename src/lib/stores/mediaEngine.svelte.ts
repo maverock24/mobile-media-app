@@ -38,6 +38,8 @@ export function claimAudio(id: AudioSourceId): void {
 		if (other === id) continue;
 		// Both music decks can play simultaneously — don't stop the sibling deck.
 		if ((id === 'musicA' || id === 'musicB') && (other === 'musicA' || other === 'musicB')) continue;
+		// Deck B can mix with podcast/radio — don't stop them when B starts.
+		if (id === 'musicB' && (other === 'podcast' || other === 'radio')) continue;
 		_stopFns[other]?.();
 	}
 	// Stop any active live stream unless this is a radio claim
