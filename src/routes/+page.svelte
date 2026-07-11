@@ -49,6 +49,10 @@
 		if (typeof localStorage === 'undefined') return DEFAULT_TAB;
 		try {
 			const parsed = JSON.parse(localStorage.getItem(NAVIGATION_STATE_KEY) ?? '{}') as { activeTab?: unknown };
+			if (parsed.activeTab === 'mixer') {
+				localStorage.removeItem(NAVIGATION_STATE_KEY);
+				return DEFAULT_TAB;
+			}
 			return isTab(parsed.activeTab) ? parsed.activeTab : DEFAULT_TAB;
 		} catch {
 			return DEFAULT_TAB;
