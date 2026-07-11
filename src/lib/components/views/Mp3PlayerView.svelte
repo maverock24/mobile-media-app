@@ -439,6 +439,9 @@
 		claimMusicControls();
 	}
 
+	// ── Browse entry cache — makes navigating back to parent instant ──
+	const _browseCache = new Map<string, BrowseEntry[]>();
+
 	// ── Invalidate browse cache when underlying data changes ──
 	$effect(() => {
 		void browseVersion;
@@ -1591,9 +1594,6 @@
 	}
 
 	// ─────────────────────────────────────────────────────────────
-	// ── Browse entry cache — makes navigating back to parent instant ──
-	const _browseCache = new Map<string, BrowseEntry[]>();
-
 	// Browse — async entry loading
 	// ─────────────────────────────────────────────────────────────
 	let _browseLoadId = 0;
