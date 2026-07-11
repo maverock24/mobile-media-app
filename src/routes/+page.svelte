@@ -178,10 +178,10 @@
 			preserved. JS timers and Web Audio context also survive.
 		-->
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'music'}>
-			<div class="absolute inset-0 overflow-hidden" class:hidden={mediaEngine.activeMusicDeck !== 'A'}>
+			<div class="absolute inset-0" class:hidden={mediaEngine.activeMusicDeck !== 'A'}>
 				<Mp3PlayerView deck="A" {activeTab} />
 			</div>
-			<div class="absolute inset-0 overflow-hidden" class:hidden={mediaEngine.activeMusicDeck !== 'B'}>
+			<div class="absolute inset-0" class:hidden={mediaEngine.activeMusicDeck !== 'B'}>
 				<Mp3PlayerView deck="B" {activeTab} />
 			</div>
 		</div>
