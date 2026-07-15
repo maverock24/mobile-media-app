@@ -393,6 +393,12 @@
 		if (mediaEngine.activeMusicDeck === deck && activeTab === 'music'
 			&& !mediaEngine.podcastPlaying && !mediaEngine.radioPlaying) {
 			claimMusicControls();
+			// Sync playing flags regardless of whether a track is loaded
+			if (deck === 'A') {
+				mediaEngine.musicPlayingA = isPlaying;
+			} else {
+				mediaEngine.musicPlayingB = isPlaying;
+			}
 			if (currentTrack) {
 				mediaEngine.setNowPlaying({
 					id:         String(currentTrack.id),
@@ -407,18 +413,6 @@
 					audioEl?.currentTime ?? 0,
 					isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack.duration ?? 0)
 				);
-				if (deck === 'A') {
-					mediaEngine.musicPlayingA = isPlaying;
-				} else {
-					mediaEngine.musicPlayingB = isPlaying;
-				}
-			} else {
-				// No track loaded in this deck — clear the display but keep
-				// source='music' so the MiniPlayer stays visible if the other
-				// deck is actively playing.
-				mediaEngine.item = null;
-				mediaEngine.currentTime = 0;
-				mediaEngine.duration = 0;
 			}
 		}
 	});
