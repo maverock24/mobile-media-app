@@ -474,10 +474,9 @@
 			if (now - _lastTimeUpdate < 250) return;
 			_lastTimeUpdate = now;
 			currentTime = audioEl.currentTime;
-			// Only push progress to the MiniPlayer when this deck is active,
-			// otherwise both decks fight over mediaEngine.currentTime and the
-			// slider jumps between the two positions.
-			if (mediaEngine.activeMusicDeck === deck) {
+			// Only push progress when music owns the MiniPlayer display.
+			// When podcast/radio is active, they own mediaEngine.currentTime.
+			if (mediaEngine.activeMusicDeck === deck && mediaEngine.source === 'music') {
 				mediaEngine.updateTime(audioEl.currentTime, isFinite(audioEl.duration) ? audioEl.duration : 0);
 			}
 		};

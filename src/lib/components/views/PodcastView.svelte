@@ -216,7 +216,9 @@
 			if (now - _lastTimeUpdate < 250) return;
 			_lastTimeUpdate = now;
 			currentTime = audioEl.currentTime;
-			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
+			if (mediaEngine.source === 'podcast') {
+				mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
+			}
 			const playbackDuration =
 				(isFinite(audioEl.duration) && audioEl.duration > 0)
 					? audioEl.duration
@@ -239,7 +241,9 @@
 					duration,
 				});
 			}
-			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
+			if (mediaEngine.source === 'podcast') {
+				mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
+			}
 		};
 		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.podcastPlaying = true;  };
 		const onPause = () => {
