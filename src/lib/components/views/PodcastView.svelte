@@ -99,6 +99,7 @@
 	let currentTime    = $state(0);
 	let duration       = $state(0);
 	let audioEl: HTMLAudioElement;
+	let _userPaused = false;
 
 	// ── Register stop-callback ───────────────────────────────────
 	$effect(() => {
@@ -241,7 +242,22 @@
 			mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
 		};
 		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.podcastPlaying = true;  };
-		const onPause = () => { isPlaying = false; mediaEngine.podcastPlaying = false; };
+		const onPause = () => {
+			const wasUserPaused = _userPaused;
+			_userPaused = false;
+			isPlaying = false;
+			mediaEngine.podcastPlaying = false;
+			// System paused us (Android Doze, audio-focus churn) — try to resume.
+			// Retry up to 3 times with backoff, same pattern as MP3 safePlay.
+			if (!wasUserPaused && currentEpisode) {
+				const tryResume = (attempt: number) => {
+					audioEl?.play().catch(() => {
+						if (attempt < 3) setTimeout(() => tryResume(attempt + 1), 300 * (attempt + 1));
+					});
+				};
+				setTimeout(() => tryResume(0), 150);
+			}
+		};
 		const onWaiting  = () => { isBuffering = true; };
 		const onPlaying  = () => { isBuffering = false; };
 		const onEnded = () => {
@@ -805,13 +821,15 @@
 
 	function pausePlayback() {
 		if (!audioEl || !currentEpisode || !isPlaying) return;
+		_userPaused = true;
 		void triggerPlaybackHaptic(false);
-		cancelNetworkRetry(); // user deliberately paused — no auto-resume
+		cancelNetworkRetry();
 		audioEl.pause();
 	}
 
 	function resumePlayback() {
 		if (!audioEl || !currentEpisode || isPlaying) return;
+		_userPaused = false;
 		void triggerPlaybackHaptic(true);
 		claimAudio('podcast');
 		syncEpisodeAudioSource(
