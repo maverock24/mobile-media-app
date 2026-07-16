@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { swipeBack } from '$lib/actions/touch';
+	import { swipeItem } from '$lib/actions/swipeItem';
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
 	import { FilePicker } from '@capawesome/capacitor-file-picker';
@@ -53,6 +54,7 @@
 		streamGoogleDriveMp3Files,
 		requestGoogleDriveAccessToken,
 		revokeGoogleDriveAccess,
+		uploadGoogleDriveFile,
 		type GoogleDriveFile,
 		type GoogleDriveFolder,
 		type GoogleDriveUser
@@ -69,7 +71,7 @@
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
-		Cloud, RefreshCw, LogOut, Search, Star
+		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download
 	} from 'lucide-svelte';
 
 	interface Track {
@@ -273,6 +275,17 @@
 	let driveSearch      = $state('');
 	let isDriveAuthenticating = $state(false);
 	let isDriveLoading   = $state(false);
+
+	// ── Transfer state (upload to Drive / download from Drive) ──
+	let showDriveFolderPicker = $state(false);
+	let showLocalFolderPicker = $state(false);
+	let transferFile = $state<StoredAudioFile | null>(null);
+	let transferDirection = $state<'upload' | 'download'>('upload');
+	let isTransferring = $state(false);
+	// Drive folder picker navigation
+	let drivePickerPath = $state<GoogleDriveFolder[]>([]);
+	let drivePickerFolders = $state<GoogleDriveFolder[]>([]);
+	let drivePickerLoading = $state(false);
 	let driveLoadProgress = $state({ filesFound: 0, foldersScanned: 0, foldersQueued: 0 });
 	let driveLoadAbort   = $state<AbortController | null>(null);
 	let switchingToFavId = $state<string | null>(null); // fav id currently loading
@@ -2267,6 +2280,105 @@
 		}
 	}
 
+	// ── Google Drive ↔ Local file transfer ─────────────────────
+
+	async function openDriveUploadFolderPicker(file: StoredAudioFile) {
+		if (!driveAccessToken) {
+			addToast({ message: 'Connect to Google Drive first.', type: 'warning' });
+			return;
+		}
+		transferFile = file;
+		transferDirection = 'upload';
+		showDriveFolderPicker = true;
+		await loadDriveFolderPicker('root');
+	}
+
+	async function openLocalDownloadFolderPicker(file: StoredAudioFile) {
+		transferFile = file;
+		transferDirection = 'download';
+		if (isNativeApp) {
+			showLocalFolderPicker = true;
+		} else {
+			await downloadToLocalFolder(file);
+		}
+	}
+
+	async function loadDriveFolderPicker(parentId: string) {
+		drivePickerLoading = true;
+		try {
+			const result = await listGoogleDriveFolders(driveAccessToken, parentId);
+			drivePickerFolders = result;
+		} catch (e) {
+			addToast({ message: 'Failed to list Drive folders.', type: 'error' });
+		} finally {
+			drivePickerLoading = false;
+		}
+	}
+
+	function navigateDrivePickerInto(folder: GoogleDriveFolder) {
+		drivePickerPath = [...drivePickerPath, folder];
+		void loadDriveFolderPicker(folder.id);
+	}
+
+	function navigateDrivePickerUp() {
+		drivePickerPath = drivePickerPath.slice(0, -1);
+		const parent = drivePickerPath.length > 0 ? drivePickerPath[drivePickerPath.length - 1].id : 'root';
+		void loadDriveFolderPicker(parent);
+	}
+
+	async function selectDriveFolderAndUpload(folder: GoogleDriveFolder) {
+		if (!transferFile || isTransferring) return;
+		isTransferring = true;
+		showDriveFolderPicker = false;
+		try {
+			const file = await materializeStoredFile(transferFile, true);
+			const blob = new Blob([await file.arrayBuffer()], { type: file.type || 'audio/mpeg' });
+			await uploadGoogleDriveFile({
+				accessToken: driveAccessToken,
+				parentFolderId: folder.id,
+				fileName: transferFile.name,
+				blob,
+			});
+			addToast({ message: `Uploaded "${transferFile.name}" to Drive.`, type: 'info' });
+		} catch (e) {
+			addToast({ message: 'Upload failed.', type: 'error' });
+		} finally {
+			isTransferring = false;
+			transferFile = null;
+		}
+	}
+
+	async function downloadToLocalFolder(file: StoredAudioFile) {
+		if (isTransferring) return;
+		isTransferring = true;
+		try {
+			if (!('showDirectoryPicker' in window)) {
+				addToast({ message: 'Folder picker not supported in this browser.', type: 'warning' });
+				return;
+			}
+			const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+			const driveFile = await downloadGoogleDriveFile({
+				accessToken: driveAccessToken,
+				fileId: (file as any).fileId ?? '',
+				fileName: file.name,
+				mimeType: (file as any).mimeType,
+				modifiedAt: (file as any).modifiedAt,
+			});
+			const newHandle = await dirHandle.getFileHandle(file.name, { create: true });
+			const writable = await newHandle.createWritable();
+			await writable.write(driveFile);
+			await writable.close();
+			addToast({ message: `Downloaded "${file.name}" to phone.`, type: 'info' });
+		} catch (e: any) {
+			if (e?.name !== 'AbortError') {
+				addToast({ message: 'Download failed.', type: 'error' });
+			}
+		} finally {
+			isTransferring = false;
+			transferFile = null;
+		}
+	}
+
 	// ─────────────────────────────────────────────────────────────
 	// Playback controls
 	// ─────────────────────────────────────────────────────────────
@@ -2955,10 +3067,36 @@
 						</button>
 					</div>
 					{:else}
-					<!-- File row — click anywhere to play -->
+					<!-- File row — swipe left for upload/download -->
 					{@const isSelected = isBrowseFileSelected(entry.file)}
 					{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === getStoredFileKey(entry.file)}
-					<div class="list-row-surface flex items-center gap-2 px-4 py-2 border-b transition-colors {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}">
+					{@const isDrive = entry.file.source === 'drive'}
+					{@const rowBg = isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : ''}
+					<div class="relative overflow-hidden border-b {isSelected ? 'bg-primary/12' : ''}">
+						<!-- Behind-content: upload/download action -->
+						<div class="absolute inset-y-0 right-0 flex items-center pr-4">
+							<button
+								class="h-9 px-4 rounded-xl text-xs font-semibold text-white flex items-center gap-2 {isDrive ? 'bg-emerald-600' : 'bg-blue-600'}"
+								onclick={(e) => {
+									e.stopPropagation();
+									if (isDrive) openLocalDownloadFolderPicker(entry.file);
+									else openDriveUploadFolderPicker(entry.file);
+								}}
+							>
+								{#if isDrive}
+									<Download class="w-4 h-4" />
+									Download
+								{:else}
+									<Upload class="w-4 h-4" />
+									Upload
+								{/if}
+							</button>
+						</div>
+						<!-- Front: existing row content (swipeable) -->
+						<div
+							use:swipeItem={{ threshold: 80 }}
+							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
+						>
 						<button
 							class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {isSelected || isCurrentTrack ? 'active:bg-primary/18' : listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}"
 							onclick={async () => {
@@ -3007,6 +3145,7 @@
 						>
 							<Star class="w-5 h-5" fill={isFavoriteTrack(entry.file) ? 'currentColor' : 'none'} />
 						</Button>
+					</div>
 					</div>
 					{/if}
 				{/each}
@@ -3145,6 +3284,45 @@
 
 	{/if}
 </div>
+
+<!-- ═══════════════════ TRANSFER FOLDER PICKER (Upload to Drive) ═══ -->
+{#if showDriveFolderPicker}
+<div class="absolute inset-0 z-50 bg-background flex flex-col">
+	<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0">
+		<Button variant="ghost" size="icon" class="w-11 h-11 shrink-0" onclick={() => { showDriveFolderPicker = false; transferFile = null; }}>
+			<ChevronLeft class="w-6 h-6" />
+		</Button>
+		<div class="flex-1 min-w-0">
+			<p class="text-sm font-semibold">Upload to Google Drive</p>
+			<p class="text-xs text-muted-foreground">{transferFile?.name ?? ''}</p>
+		</div>
+	</div>
+	<!-- Breadcrumb -->
+	{#if drivePickerPath.length > 0}
+	<div class="flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b shrink-0 flex-wrap">
+		<button class="hover:text-foreground" onclick={() => { drivePickerPath = []; void loadDriveFolderPicker('root'); }}>My Drive</button>
+		{#each drivePickerPath as folder, i}
+			<ChevronRight class="w-3 h-3 shrink-0" />
+			<button class="hover:text-foreground truncate max-w-[100px] {i === drivePickerPath.length - 1 ? 'text-foreground font-medium' : ''}" onclick={() => { drivePickerPath = drivePickerPath.slice(0, i + 1); void loadDriveFolderPicker(folder.id); }}>{folder.name}</button>
+		{/each}
+	</div>
+	{/if}
+	<div class="flex-1 overflow-y-auto">
+		{#if drivePickerLoading}
+		<div class="flex items-center justify-center py-12"><div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div></div>
+		{:else if drivePickerFolders.length === 0}
+		<p class="text-center text-muted-foreground text-sm py-12">No folders here</p>
+		{:else}
+		{#each drivePickerFolders as folder}
+			<button class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent text-left" onclick={() => selectDriveFolderAndUpload(folder)}>
+				<Folder class="w-5 h-5 text-primary shrink-0" />
+				<span class="text-sm truncate">{folder.name}</span>
+			</button>
+		{/each}
+		{/if}
+	</div>
+</div>
+{/if}
 
 <!-- ═══════════════════ DRIVE FOLDER PICKER DIALOG ═══════════════════ -->
 {#if showFolderPicker}

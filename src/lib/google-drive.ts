@@ -622,3 +622,56 @@ export async function downloadGoogleDriveFile(options: {
 		lastModified: options.modifiedAt ?? Date.now()
 	});
 }
+
+/** Upload a raw file to Google Drive via multipart upload. */
+export async function uploadGoogleDriveFile(options: {
+	accessToken: string;
+	parentFolderId: string;
+	fileName: string;
+	blob: Blob;
+	mimeType?: string;
+}): Promise<{ id: string; name: string }> {
+	const boundary = '-------' + Math.random().toString(36).slice(2);
+	const metadata = JSON.stringify({
+		name: options.fileName,
+		parents: [options.parentFolderId],
+		mimeType: options.mimeType ?? 'audio/mpeg',
+	});
+
+	const body = [
+		`--${boundary}`,
+		'Content-Type: application/json; charset=UTF-8',
+		'',
+		metadata,
+		`--${boundary}`,
+		`Content-Type: ${options.mimeType ?? 'audio/mpeg'}`,
+		'',
+		'',
+	].join('\r\n');
+
+	const preamble = new TextEncoder().encode(body);
+	const trailer = new TextEncoder().encode(`\r\n--${boundary}--\r\n`);
+	const fileData = new Uint8Array(await options.blob.arrayBuffer());
+
+	const payload = new Uint8Array(preamble.length + fileData.length + trailer.length);
+	payload.set(preamble, 0);
+	payload.set(fileData, preamble.length);
+	payload.set(trailer, preamble.length + fileData.length);
+
+	const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${options.accessToken}`,
+			'Content-Type': `multipart/related; boundary=${boundary}`,
+		},
+		body: payload,
+	});
+
+	if (!response.ok) {
+		const message = await response.text().catch(() => '');
+		throw new Error(message || `Upload failed (${response.status}).`);
+	}
+
+	const result = await response.json() as { id: string; name: string };
+	return result;
+}
