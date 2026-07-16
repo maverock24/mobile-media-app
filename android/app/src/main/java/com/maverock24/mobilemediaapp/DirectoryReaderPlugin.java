@@ -56,7 +56,8 @@ public class DirectoryReaderPlugin extends Plugin {
 			Uri treeUri = Uri.parse(treeUriString);
 			getContext()
 				.getContentResolver()
-				.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+				.takePersistableUriPermission(treeUri,
+					Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
 			call.resolve();
 		} catch (SecurityException exception) {
 			call.reject("Unable to persist directory permission.", exception);
@@ -301,6 +302,56 @@ public class DirectoryReaderPlugin extends Plugin {
 		result.put("mimeType", file.getType());
 		result.put("modifiedAt", file.lastModified());
 		return result;
+	}
+
+	@PluginMethod
+	public void writeFile(PluginCall call) {
+		try {
+			DocumentFile target = getTargetDirectory(call);
+			String fileName = call.getString("fileName");
+			if (fileName == null || fileName.isEmpty()) {
+				call.reject("fileName is required.");
+				return;
+			}
+
+			String mimeType = call.getString("mimeType", "application/octet-stream");
+			String base64Data = call.getString("data");
+			if (base64Data == null || base64Data.isEmpty()) {
+				call.reject("data is required.");
+				return;
+			}
+
+			byte[] bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT);
+
+			// Create or overwrite the file under the SAF tree URI
+			DocumentFile existing = target.findFile(fileName);
+			if (existing != null && existing.isFile()) {
+				existing.delete();
+			}
+			DocumentFile newFile = target.createFile(mimeType, fileName);
+			if (newFile == null) {
+				call.reject("Unable to create file: " + fileName);
+				return;
+			}
+
+			java.io.OutputStream out = getContext().getContentResolver().openOutputStream(newFile.getUri());
+			if (out == null) {
+				call.reject("Unable to open output stream for: " + fileName);
+				return;
+			}
+			try {
+				out.write(bytes);
+				out.flush();
+			} finally {
+				out.close();
+			}
+
+			JSObject result = new JSObject();
+			result.put("path", newFile.getUri().toString());
+			call.resolve(result);
+		} catch (Exception e) {
+			call.reject("Failed to write file: " + e.getMessage(), e);
+		}
 	}
 
 	@PluginMethod

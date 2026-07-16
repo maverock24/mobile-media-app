@@ -286,6 +286,10 @@
 	let drivePickerPath = $state<GoogleDriveFolder[]>([]);
 	let drivePickerFolders = $state<GoogleDriveFolder[]>([]);
 	let drivePickerLoading = $state(false);
+	// Local folder picker state (Android)
+	let localPickerPath = $state<string[]>([]);
+	let localPickerEntries = $state<Array<NativeDirectoryFolder | NativeDirectoryFile>>([]);
+	let localPickerLoading = $state(false);
 	let driveLoadProgress = $state({ filesFound: 0, foldersScanned: 0, foldersQueued: 0 });
 	let driveLoadAbort   = $state<AbortController | null>(null);
 	let switchingToFavId = $state<string | null>(null); // fav id currently loading
@@ -2296,10 +2300,64 @@
 	async function openLocalDownloadFolderPicker(file: StoredAudioFile) {
 		transferFile = file;
 		transferDirection = 'download';
-		if (isNativeApp) {
+		if (isNativeApp && nativeTreeUri) {
 			showLocalFolderPicker = true;
+			await loadLocalFolderPicker('');
 		} else {
 			await downloadToLocalFolder(file);
+		}
+	}
+
+	async function loadLocalFolderPicker(path: string) {
+		if (!nativeTreeUri) return;
+		localPickerLoading = true;
+		try {
+			const result = await DirectoryReader.listEntries({ treeUri: nativeTreeUri, path });
+			localPickerEntries = result.entries;
+		} catch (e) {
+			addToast({ message: 'Failed to list folders.', type: 'error' });
+		} finally {
+			localPickerLoading = false;
+		}
+	}
+
+	function navigateLocalPickerInto(folder: NativeDirectoryFolder) {
+		localPickerPath = [...localPickerPath, folder.name];
+		void loadLocalFolderPicker(localPickerPath.join('/'));
+	}
+
+	function navigateLocalPickerUp() {
+		localPickerPath = localPickerPath.slice(0, -1);
+		void loadLocalFolderPicker(localPickerPath.join('/'));
+	}
+
+	async function selectLocalFolderAndDownload() {
+		if (!transferFile || isTransferring || !nativeTreeUri) return;
+		isTransferring = true;
+		showLocalFolderPicker = false;
+		try {
+			const driveFile = await downloadGoogleDriveFile({
+				accessToken: driveAccessToken,
+				fileId: (transferFile as any).fileId ?? '',
+				fileName: transferFile.name,
+				mimeType: (transferFile as any).mimeType,
+				modifiedAt: (transferFile as any).modifiedAt,
+			});
+			const bytes = await driveFile.arrayBuffer();
+			const base64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+			await DirectoryReader.writeFile({
+				treeUri: nativeTreeUri,
+				path: localPickerPath.join('/'),
+				fileName: transferFile.name,
+				mimeType: (transferFile as any).mimeType ?? 'audio/mpeg',
+				data: base64,
+			});
+			addToast({ message: `Downloaded "${transferFile.name}" to phone.`, type: 'info' });
+		} catch (e) {
+			addToast({ message: 'Download failed.', type: 'error' });
+		} finally {
+			isTransferring = false;
+			transferFile = null;
 		}
 	}
 
@@ -3283,6 +3341,51 @@
 	</div>
 
 	{/if}
+
+<!-- ═══════════════════ LOCAL FOLDER PICKER (Android download) ═══ -->
+{#if showLocalFolderPicker}
+<div class="absolute inset-0 z-50 bg-background flex flex-col">
+	<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0">
+		<Button variant="ghost" size="icon" class="w-11 h-11 shrink-0" onclick={() => { showLocalFolderPicker = false; transferFile = null; }}>
+			<ChevronLeft class="w-6 h-6" />
+		</Button>
+		<div class="flex-1 min-w-0">
+			<p class="text-sm font-semibold">Download to phone</p>
+			<p class="text-xs text-muted-foreground">{transferFile?.name ?? ''}</p>
+		</div>
+		<Button variant="ghost" size="sm" onclick={selectLocalFolderAndDownload} disabled={isTransferring}>
+			Save here
+		</Button>
+	</div>
+	<!-- Breadcrumb -->
+	{#if localPickerPath.length > 0}
+	<div class="flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b shrink-0 flex-wrap">
+		<button class="hover:text-foreground" onclick={() => { localPickerPath = []; void loadLocalFolderPicker(''); }}>Root</button>
+		{#each localPickerPath as seg, i}
+			<ChevronRight class="w-3 h-3 shrink-0" />
+			<button class="hover:text-foreground truncate max-w-[100px] {i === localPickerPath.length - 1 ? 'text-foreground font-medium' : ''}" onclick={() => { localPickerPath = localPickerPath.slice(0, i + 1); void loadLocalFolderPicker(localPickerPath.join('/')); }}>{seg}</button>
+		{/each}
+	</div>
+	{/if}
+	<div class="flex-1 overflow-y-auto">
+		{#if localPickerLoading}
+		<div class="flex items-center justify-center py-12"><div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div></div>
+		{:else if localPickerEntries.length === 0}
+		<p class="text-center text-muted-foreground text-sm py-12">No folders here</p>
+		{:else}
+		{#each localPickerEntries as entry}
+			{#if entry.kind === 'folder'}
+			<button class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent text-left" onclick={() => navigateLocalPickerInto(entry)}>
+				<Folder class="w-5 h-5 text-primary shrink-0" />
+				<span class="text-sm truncate">{entry.name}</span>
+			</button>
+			{/if}
+		{/each}
+		{/if}
+	</div>
+</div>
+{/if}
+
 </div>
 
 <!-- ═══════════════════ TRANSFER FOLDER PICKER (Upload to Drive) ═══ -->

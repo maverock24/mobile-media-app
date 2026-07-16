@@ -48,6 +48,7 @@ interface DirectoryReaderPlugin {
 	startAudioScan(options: { treeUri: string; path?: string }): Promise<StartAudioScanResult>;
 	getAudioScanBatch(options: { scanId: string; batchSize?: number }): Promise<AudioScanBatchResult>;
 	cancelAudioScan(options: { scanId: string }): Promise<void>;
+	writeFile(options: { treeUri: string; path?: string; fileName: string; mimeType?: string; data: string }): Promise<{ path: string }>;
 	installApk(options: { path: string }): Promise<void>;
 }
 
