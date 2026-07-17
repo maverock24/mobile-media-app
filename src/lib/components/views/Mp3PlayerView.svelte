@@ -1129,7 +1129,7 @@
 		try {
 			const response = await requestGoogleDriveAccessToken({
 				clientId: googleDriveClientId,
-				prompt: hasValidDriveToken() ? '' : 'consent'
+				prompt: driveAccessToken ? '' : 'consent'
 			});
 
 			driveAccessToken = response.access_token;
