@@ -3176,7 +3176,8 @@
 					{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === getStoredFileKey(entry.file)}
 					{@const isDrive = entry.file.source === 'drive'}
 					<div class="relative overflow-hidden border-b">
-						<!-- Behind-content: upload/download action -->
+						<!-- Behind-content: upload/download action (hidden during loop selection) -->
+						{#if selectedBrowseCount === 0}
 						<div class="absolute inset-y-0 right-0 flex items-center pr-3" style="width: 120px; justify-content: flex-end;">
 							<Button
 								size="sm"
@@ -3200,6 +3201,7 @@
 								{/if}
 							</Button>
 						</div>
+						{/if}
 						<!-- Front: existing row content (swipeable) -->
 						<div
 							use:swipeItem={{ threshold: 120 }}
