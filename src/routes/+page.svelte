@@ -141,24 +141,7 @@
 	});
 
 	// ── Swipe left/right to navigate between tabs ────────────────
-	let swipeStartX = 0;
-	let swipeStartY = 0;
 
-	function onTouchStart(e: TouchEvent) {
-		swipeStartX = e.touches[0].clientX;
-		swipeStartY = e.touches[0].clientY;
-	}
-
-	function onTouchEnd(e: TouchEvent) {
-		const dx = e.changedTouches[0].clientX - swipeStartX;
-		const dy = e.changedTouches[0].clientY - swipeStartY;
-		// Require predominantly horizontal swipe (|dx| > |dy|) and min 60px travel
-		if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-		const ids = tabs.map(t => t.id);
-		const idx = ids.indexOf(activeTab);
-		if (dx < 0 && idx > 0)              setActiveTab(ids[idx - 1]); // swipe left  → tab on the left
-		if (dx > 0 && idx < ids.length - 1) setActiveTab(ids[idx + 1]); // swipe right → tab on the right
-	}
 </script>
 
 <div class="drive-mode-shell flex flex-col h-dvh w-full min-w-0 overflow-hidden relative sm:mx-auto sm:h-[calc(100dvh-2rem)] sm:max-w-3xl sm:rounded-3xl sm:border sm:border-border sm:bg-background/90 sm:shadow-2xl sm:backdrop-blur-xl lg:max-w-5xl" style="z-index:1;">
@@ -168,8 +151,6 @@
 
 	<!-- Content -->
 	<main class="flex-1 overflow-hidden relative"
-		ontouchstart={onTouchStart}
-		ontouchend={onTouchEnd}
 	>
 		<!--
 			Music and Podcast are ALWAYS mounted (CSS hidden, not {#if}).
