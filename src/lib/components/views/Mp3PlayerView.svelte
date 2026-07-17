@@ -1848,7 +1848,9 @@
 		if (audioEl) { audioEl.pause(); audioEl.src = ''; }
 		revokeAll();
 		queueSessionId += 1;
-		const sorted = sortFiles(files);
+		// When loading a loop selection, preserve selection order (first
+		// selected = first played) instead of sorting alphabetically.
+		const sorted = options.selectionLoop ? files : sortFiles(files);
 		tracks = sorted.map((f, i) => {
 			const { title, artist } = parseFilename(f.name);
 			return { id: i, title, artist, filename: f.name, url: '', duration: 0, cleanup: undefined, source: f };
