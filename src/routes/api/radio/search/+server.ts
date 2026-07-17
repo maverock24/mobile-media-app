@@ -4,8 +4,11 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 export const prerender = false;
 
 const RADIO_SERVERS = [
-	'https://all.api.radio-browser.info',
+	'https://de1.api.radio-browser.info',
 	'https://de2.api.radio-browser.info',
+	'https://at1.api.radio-browser.info',
+	'https://nl1.api.radio-browser.info',
+	'https://all.api.radio-browser.info',
 ];
 const DEFAULT_CACHE_CONTROL = 'public, max-age=300';
 
