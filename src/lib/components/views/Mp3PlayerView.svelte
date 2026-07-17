@@ -916,6 +916,20 @@
 			return { files: selectedFiles, selectionLoop: true };
 		}
 
+		// When a search filter is active, the visible list IS the queue —
+		// tapping a result must play that file, and next/prev moves through
+		// the search results. Building the queue from the current folder
+		// here made findIndex miss (result lives in another folder) and
+		// fall back to index 0 — the "wrong track plays when filtered" bug.
+		if (debouncedSearchQuery.trim().length > 0) {
+			return {
+				files: filteredEntries
+					.filter((entry): entry is BrowseEntry & { kind: 'file' } => entry.kind === 'file')
+					.map((entry) => entry.file),
+				selectionLoop: false,
+			};
+		}
+
 		return {
 			files: getCurrentBrowseFileEntries().map((entry) => entry.file),
 			selectionLoop: false,
