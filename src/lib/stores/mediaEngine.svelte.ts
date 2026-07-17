@@ -246,7 +246,6 @@ export const mediaEngine = $state<NowPlayingState & {
 		_streamAudio.addEventListener('waiting', () => { _streamCallbacks.waiting?.(); });
 		_streamAudio.addEventListener('playing', () => { _streamCallbacks.playing?.(); });
 		_streamAudio.addEventListener('error', () => {
-			this.radioPlaying = false;
 			_streamCallbacks.error?.(_streamAudio?.error ?? null);
 		});
 		_streamAudio.addEventListener('ended', () => {
