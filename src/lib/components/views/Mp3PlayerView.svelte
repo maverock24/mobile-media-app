@@ -299,13 +299,23 @@
 	let longPressHandledFileKey = $state<string | null>(null);
 
 	// ── Filtered browse entries (search by name) ─────────────────
-	const filteredEntries = $derived(
-		fileSearchQuery.trim().length === 0
-			? browseEntries
-			: browseEntries.filter(e =>
-				e.name.toLowerCase().includes(fileSearchQuery.toLowerCase())
-			)
-	);
+	const filteredEntries = $derived.by(() => {
+		const query = fileSearchQuery.trim().toLowerCase();
+		if (query.length === 0) return browseEntries;
+
+		return browseEntries.filter(e => {
+			// Files: direct name match
+			if (e.kind === 'file') {
+				return e.name.toLowerCase().includes(query);
+			}
+			// Folders: keep only if they contain at least one matching file
+			const folderPrefix = [...browsePath, e.name].join('/') + '/';
+			return allFiles.some(f => {
+				const rp = f.relativePath || f.name;
+				return rp.startsWith(folderPrefix) && rp.toLowerCase().includes(query);
+			});
+		});
+	});
 	const selectedBrowseCount = $derived(selectedBrowseFileKeys.length);
 	const filteredFavoriteTracks = $derived.by(() => {
 		const query = fileSearchQuery.trim().toLowerCase();
@@ -3021,6 +3031,17 @@
 						onclick={() => (browsePath = browsePath.slice(0, i + 1))}
 					>{seg}</button>
 				{/each}
+			</div>
+
+			<!-- Search filter -->
+			<div class="relative mx-1">
+				<Search class="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+				<input
+					type="text"
+					placeholder="Filter…"
+					bind:value={fileSearchQuery}
+					class="w-24 sm:w-32 h-8 pl-7 pr-2 text-xs rounded-lg border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
+				/>
 			</div>
 
 			<!-- Favorites toggle + Change folder -->
