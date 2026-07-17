@@ -2287,7 +2287,8 @@
 	// ── Google Drive ↔ Local file transfer ─────────────────────
 
 	async function openDriveUploadFolderPicker(file: StoredAudioFile) {
-		if (!driveAccessToken) {
+		const token = await ensureDriveAccessToken(true);
+		if (!token) {
 			addToast({ message: 'Connect to Google Drive first.', type: 'warning' });
 			return;
 		}
@@ -2337,6 +2338,11 @@
 
 	async function selectLocalFolderAndDownload() {
 		if (!transferFile || isTransferring || !nativeTreeUri) return;
+		const token = await ensureDriveAccessToken(true);
+		if (!token) {
+			addToast({ message: 'Drive session expired. Please reconnect.', type: 'warning' });
+			return;
+		}
 		isTransferring = true;
 		showLocalFolderPicker = false;
 		try {
@@ -2406,6 +2412,11 @@
 
 	async function selectDriveFolderAndUpload(folder: GoogleDriveFolder) {
 		if (!transferFile || isTransferring) return;
+		const token = await ensureDriveAccessToken(true);
+		if (!token) {
+			addToast({ message: 'Drive session expired. Please reconnect.', type: 'warning' });
+			return;
+		}
 		isTransferring = true;
 		showDriveFolderPicker = false;
 		try {
@@ -2433,7 +2444,8 @@
 
 	async function downloadToLocalFolder(file: StoredAudioFile) {
 		if (isTransferring) return;
-		if (!driveAccessToken) {
+		const token = await ensureDriveAccessToken(true);
+		if (!token) {
 			addToast({ message: 'Connect to Google Drive first.', type: 'warning' });
 			return;
 		}
