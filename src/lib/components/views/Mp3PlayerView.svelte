@@ -71,7 +71,7 @@
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
-		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download
+		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X
 	} from 'lucide-svelte';
 
 	interface Track {
@@ -3034,14 +3034,23 @@
 			</div>
 
 			<!-- Search filter -->
-			<div class="relative mx-1">
+			<div class="relative flex-1 min-w-0 mx-1">
 				<Search class="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
 				<input
 					type="text"
 					placeholder="Filter…"
 					bind:value={fileSearchQuery}
-					class="w-24 sm:w-32 h-8 pl-7 pr-2 text-xs rounded-lg border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
+					class="w-full h-8 pl-7 pr-7 text-xs rounded-lg border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
 				/>
+				{#if fileSearchQuery}
+					<button
+						class="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+						onclick={() => (fileSearchQuery = '')}
+						aria-label="Clear filter"
+					>
+						<X class="w-3 h-3" />
+					</button>
+				{/if}
 			</div>
 
 			<!-- Favorites toggle + Change folder -->
