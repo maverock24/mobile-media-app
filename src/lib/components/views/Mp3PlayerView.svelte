@@ -505,11 +505,15 @@
 	});
 
 	$effect(() => {
-		const availableBrowseFileKeys = new Set(
-			browseEntries
-				.filter((entry): entry is BrowseEntry & { kind: 'file' } => entry.kind === 'file')
-				.map((entry) => getStoredFileKey(entry.file))
-		);
+		// Prune selected keys only when the file no longer exists in the
+		// library index (allFiles). Pruning against the current folder alone
+		// instantly deselected tracks picked from global search results
+		// (they live in other folders) and killed the loop when navigating.
+		// Before the index is built, fall back to the current folder view.
+		const availableSource = allFiles.length > 0
+			? allFiles
+			: getCurrentBrowseFileEntries().map((entry) => entry.file);
+		const availableBrowseFileKeys = new Set(availableSource.map((file) => getStoredFileKey(file)));
 		const nextSelectedKeys = selectedBrowseFileKeys.filter((key) => availableBrowseFileKeys.has(key));
 		const hasSelectionChanged =
 			nextSelectedKeys.length !== selectedBrowseFileKeys.length ||
@@ -899,9 +903,14 @@
 
 	function getSelectedBrowseFilesInOrder(): StoredAudioFile[] {
 		if (selectedBrowseFileKeys.length === 0) return [];
-		const fileByKey = new Map(
-			getCurrentBrowseFileEntries().map((entry) => [getStoredFileKey(entry.file), entry.file])
-		);
+		// Resolve keys against the whole library index first so selections
+		// made from global search results (files in other folders) resolve;
+		// current folder entries override for freshest metadata.
+		const fileByKey = new Map<string, StoredAudioFile>();
+		for (const file of allFiles) fileByKey.set(getStoredFileKey(file), file);
+		for (const entry of getCurrentBrowseFileEntries()) {
+			fileByKey.set(getStoredFileKey(entry.file), entry.file);
+		}
 		const selectedFiles: StoredAudioFile[] = [];
 		for (const key of selectedBrowseFileKeys) {
 			const file = fileByKey.get(key);
