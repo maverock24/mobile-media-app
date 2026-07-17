@@ -2429,12 +2429,17 @@
 
 	async function downloadToLocalFolder(file: StoredAudioFile) {
 		if (isTransferring) return;
+		if (!driveAccessToken) {
+			addToast({ message: 'Connect to Google Drive first.', type: 'warning' });
+			return;
+		}
 		isTransferring = true;
 		try {
 			if (!('showDirectoryPicker' in window)) {
-				addToast({ message: 'Folder picker not supported in this browser.', type: 'warning' });
+				addToast({ message: 'Folder picker not supported in this browser. Try Chrome or Edge.', type: 'warning', autoDismissMs: 5000 });
 				return;
 			}
+			addToast({ message: 'Choose a folder to save the file…', type: 'info', autoDismissMs: 2500 });
 			const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
 			const driveFile = await downloadGoogleDriveFile({
 				accessToken: driveAccessToken,
@@ -3163,8 +3168,9 @@
 								class="h-9 px-3 text-xs font-semibold gap-1.5 shrink-0"
 								onclick={(e) => {
 									e.stopPropagation();
-									// Reset the swipe position after action
-									const front = (e.currentTarget as HTMLElement).parentElement?.querySelector('[data-swipe-front]') as HTMLElement | null;
+									// Reset the swipe position
+									const wrapper = (e.currentTarget as HTMLElement).closest('.relative.overflow-hidden');
+									const front = wrapper?.querySelector('[data-swipe-front]') as HTMLElement | null;
 									if (front) { front.style.transition = 'transform 0.2s ease'; front.style.transform = ''; }
 									if (isDrive) openLocalDownloadFolderPicker(entry.file);
 									else openDriveUploadFolderPicker(entry.file);
