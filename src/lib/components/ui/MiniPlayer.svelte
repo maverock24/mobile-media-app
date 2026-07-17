@@ -48,26 +48,18 @@
 			: mediaEngine.isPlaying
 	);
 
-	// Which deck label to show: the one that's actually playing, or the
-	// viewed deck if neither is playing.
-	const activePlayingDeck = $derived(
-		mediaEngine.musicPlayingA ? 'A' : mediaEngine.musicPlayingB ? 'B' : mediaEngine.activeMusicDeck
-	);
-
+	// Subtitle shows the selected/viewed deck, not the playing deck.
+	// The play/pause button already reflects playing state per-deck.
 	const displayTitle = $derived(
 		mediaEngine.item?.title ??
-		(mediaEngine.musicPlayingA || mediaEngine.musicPlayingB
-			? `Deck ${mediaEngine.musicPlayingA ? 'A' : 'B'}`
-			: activeTab === 'music' ? `Deck ${mediaEngine.activeMusicDeck}` : undefined)
+		(activeTab === 'music' ? `Deck ${mediaEngine.activeMusicDeck}` : undefined)
 	);
 	const displaySubtitle = $derived(
 		mediaEngine.item
 			? (mediaEngine.source === 'music'
-				? `Deck ${activePlayingDeck} · ${mediaEngine.item.subtitle ?? ''}`
+				? `Deck ${mediaEngine.activeMusicDeck} · ${mediaEngine.item.subtitle ?? ''}`
 				: mediaEngine.item.subtitle)
-			: (mediaEngine.musicPlayingA || mediaEngine.musicPlayingB
-				? `Playing on Deck ${mediaEngine.musicPlayingA ? 'A' : 'B'}`
-				: activeTab === 'music' ? 'No track loaded' : undefined)
+			: (activeTab === 'music' ? 'No track loaded' : undefined)
 	);
 
 	// Always visible on the music tab (so the A/B toggle, play button, and
