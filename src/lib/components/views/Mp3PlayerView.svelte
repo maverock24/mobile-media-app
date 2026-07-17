@@ -282,6 +282,7 @@
 	let transferFile = $state<StoredAudioFile | null>(null);
 	let transferDirection = $state<'upload' | 'download'>('upload');
 	let isTransferring = $state(false);
+	let pendingTransfer = $state(false); // set when waiting for folder selection
 	// Drive folder picker navigation
 	let drivePickerPath = $state<GoogleDriveFolder[]>([]);
 	let drivePickerFolders = $state<GoogleDriveFolder[]>([]);
@@ -2302,7 +2303,8 @@
 		transferDirection = 'download';
 		if (isNativeApp) {
 			if (!nativeTreeUri) {
-				addToast({ message: 'Open a local folder first so the app knows where to save.', type: 'warning', autoDismissMs: 5000 });
+				pendingTransfer = true;
+				await openFolder();
 				return;
 			}
 			showLocalFolderPicker = true;
@@ -2482,6 +2484,17 @@
 			transferFile = null;
 		}
 	}
+
+	// ── Auto-continue pending transfer after folder selection ──
+	$effect(() => {
+		if (pendingTransfer && nativeTreeUri && transferFile) {
+			pendingTransfer = false;
+			if (transferDirection === 'download') {
+				showLocalFolderPicker = true;
+				void loadLocalFolderPicker('');
+			}
+		}
+	});
 
 	// ─────────────────────────────────────────────────────────────
 	// Playback controls
