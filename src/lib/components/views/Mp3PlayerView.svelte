@@ -303,18 +303,13 @@
 		const query = fileSearchQuery.trim().toLowerCase();
 		if (query.length === 0) return browseEntries;
 
-		return browseEntries.filter(e => {
-			// Files: direct name match
-			if (e.kind === 'file') {
-				return e.name.toLowerCase().includes(query);
-			}
-			// Folders: keep only if they contain at least one matching file
-			const folderPrefix = [...browsePath, e.name].join('/') + '/';
-			return allFiles.some(f => {
-				const rp = f.relativePath || f.name;
-				return rp.startsWith(folderPrefix) && rp.toLowerCase().includes(query);
-			});
+		// Global search: flat list of all matching files from the entire
+		// library, sorted by title. Matches against parsed display title.
+		const matches = sortFiles(allFiles).filter(f => {
+			const { title } = parseFilename(f.name);
+			return title.toLowerCase().includes(query);
 		});
+		return matches.map(f => ({ kind: 'file' as const, name: f.name, file: f }));
 	});
 	const selectedBrowseCount = $derived(selectedBrowseFileKeys.length);
 	const filteredFavoriteTracks = $derived.by(() => {
@@ -3019,8 +3014,11 @@
 			</Button>
 			{/if}
 
-			<!-- Breadcrumb -->
+			<!-- Breadcrumb (or search results label) -->
 			<div class="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
+				{#if fileSearchQuery}
+					<span class="text-sm text-muted-foreground truncate">Search results</span>
+				{:else}
 				<button class="text-sm text-muted-foreground hover:text-foreground truncate shrink-0 max-w-[90px]"
 					onclick={() => (browsePath = [])}
 				>{currentLibraryLabel}</button>
@@ -3031,6 +3029,7 @@
 						onclick={() => (browsePath = browsePath.slice(0, i + 1))}
 					>{seg}</button>
 				{/each}
+				{/if}
 			</div>
 
 			<!-- Search filter -->
