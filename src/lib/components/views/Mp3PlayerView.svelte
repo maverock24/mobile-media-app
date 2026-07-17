@@ -2368,13 +2368,24 @@
 				reader.onerror = reject;
 				reader.readAsDataURL(driveFile);
 			});
-			await DirectoryReader.writeFile({
+			const result = await DirectoryReader.writeFile({
 				treeUri: nativeTreeUri,
 				path: localPickerPath.join('/'),
 				fileName: transferFile.name,
 				mimeType: (transferFile as any).mimeType ?? 'audio/mpeg',
 				data: base64,
 			});
+			// Add the new file to the library so it appears immediately
+			const newFile: StoredAudioFile = {
+				source: 'native',
+				name: transferFile.name,
+				relativePath: localPickerPath.length > 0 ? localPickerPath.join('/') + '/' + transferFile.name : transferFile.name,
+				path: result.path,
+				mimeType: (transferFile as any).mimeType ?? 'audio/mpeg',
+				modifiedAt: Date.now(),
+			};
+			allFiles = [...allFiles, newFile];
+			browseVersion++;
 			addToast({ message: `Downloaded "${transferFile.name}" to phone.`, type: 'info' });
 		} catch (e: any) {
 			const msg = e?.message || '';
