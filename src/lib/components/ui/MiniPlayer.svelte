@@ -226,7 +226,7 @@
 					{/if}
 				</div>
 
-				{#if showPodcastSpeedPreset}
+				{#if showPodcastSpeedPreset && activeTab !== 'music'}
 					<div class="absolute right-0 top-1/2 -translate-y-1/2">
 						<button
 							class="mini-player-action mini-player-control-surface h-8 min-w-[3rem] px-2 inline-flex items-center justify-center rounded-full text-xs font-semibold {podcastOneAndHalfActive ? 'border-primary bg-primary/18 text-primary' : 'text-muted-foreground hover:text-foreground'}"
