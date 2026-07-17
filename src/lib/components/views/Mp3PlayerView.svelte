@@ -1129,13 +1129,12 @@
 		try {
 			const response = await requestGoogleDriveAccessToken({
 				clientId: googleDriveClientId,
-				prompt: driveAccessToken ? '' : 'consent'
+				prompt: hasValidDriveToken() ? '' : 'consent'
 			});
 
 			driveAccessToken = response.access_token;
 			driveTokenExpiresAt = Date.now() + Number(response.expires_in ?? 3600) * 1000;
 			driveError = '';
-			// Persist so HMR / page reload can silently restore without re-signing in
 			googleDriveSession.accessToken = driveAccessToken;
 			googleDriveSession.expiresAt = driveTokenExpiresAt;
 			googleDriveSession.persist();
