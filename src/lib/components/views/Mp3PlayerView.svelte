@@ -303,13 +303,19 @@
 		const query = fileSearchQuery.trim().toLowerCase();
 		if (query.length === 0) return browseEntries;
 
-		// Global search: flat list of all matching files from the entire
-		// library, sorted by title. Matches against parsed display title.
-		const matches = sortFiles(allFiles).filter(f => {
-			const { title } = parseFilename(f.name);
-			return title.toLowerCase().includes(query);
-		});
-		return matches.map(f => ({ kind: 'file' as const, name: f.name, file: f }));
+		const matchesQuery = (name: string): boolean => {
+			if (name.toLowerCase().includes(query)) return true;
+			const { title, artist } = parseFilename(name);
+			return title.toLowerCase().includes(query) || artist.toLowerCase().includes(query);
+		};
+
+		// Global search across the whole library when the index is available;
+		// otherwise fall back to filtering the current folder's entries.
+		if (allFiles.length > 0) {
+			const matches = sortFiles(allFiles).filter(f => matchesQuery(f.name));
+			return matches.map(f => ({ kind: 'file' as const, name: f.name, file: f }));
+		}
+		return browseEntries.filter(e => e.kind === 'file' && matchesQuery(e.name));
 	});
 	const selectedBrowseCount = $derived(selectedBrowseFileKeys.length);
 	const filteredFavoriteTracks = $derived.by(() => {
