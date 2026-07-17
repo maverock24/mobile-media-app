@@ -3155,14 +3155,17 @@
 					{@const isSelected = isBrowseFileSelected(entry.file)}
 					{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === getStoredFileKey(entry.file)}
 					{@const isDrive = entry.file.source === 'drive'}
-					{@const rowBg = isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : ''}
-					<div class="relative overflow-hidden border-b {isSelected ? 'bg-primary/12' : ''}">
+					<div class="relative overflow-hidden border-b">
 						<!-- Behind-content: upload/download action -->
-						<div class="absolute inset-y-0 right-0 flex items-center pr-4">
-							<button
-								class="h-9 px-4 rounded-xl text-xs font-semibold text-white flex items-center gap-2 {isDrive ? 'bg-emerald-600' : 'bg-blue-600'}"
+						<div class="absolute inset-y-0 right-0 flex items-center pr-3" style="width: 120px; justify-content: flex-end;">
+							<Button
+								size="sm"
+								class="h-9 px-3 text-xs font-semibold gap-1.5 shrink-0"
 								onclick={(e) => {
 									e.stopPropagation();
+									// Reset the swipe position after action
+									const front = (e.currentTarget as HTMLElement).parentElement?.querySelector('[data-swipe-front]') as HTMLElement | null;
+									if (front) { front.style.transition = 'transform 0.2s ease'; front.style.transform = ''; }
 									if (isDrive) openLocalDownloadFolderPicker(entry.file);
 									else openDriveUploadFolderPicker(entry.file);
 								}}
@@ -3174,11 +3177,12 @@
 									<Upload class="w-4 h-4" />
 									Upload
 								{/if}
-							</button>
+							</Button>
 						</div>
 						<!-- Front: existing row content (swipeable) -->
 						<div
-							use:swipeItem={{ threshold: 80 }}
+							use:swipeItem={{ threshold: 120 }}
+							data-swipe-front
 							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
 						>
 						<button
