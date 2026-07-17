@@ -3191,8 +3191,8 @@
 					{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === getStoredFileKey(entry.file)}
 					{@const isDrive = entry.file.source === 'drive'}
 					<div class="relative overflow-hidden border-b">
-						<!-- Behind-content: upload/download action (hidden during loop selection) -->
-						{#if selectedBrowseCount === 0}
+						<!-- Behind-content: upload/download (hidden during selection or when row is active) -->
+						{#if selectedBrowseCount === 0 && !isSelected && !isCurrentTrack}
 						<div class="absolute inset-y-0 right-0 flex items-center pr-2" style="width: 140px; justify-content: flex-end;">
 							<Button
 								size="sm"
@@ -3221,7 +3221,7 @@
 						<div
 							use:swipeItem={{ threshold: 140 }}
 							data-swipe-front
-							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
+							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'bg-primary/25 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/20 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
 						>
 						<button
 							class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {isSelected || isCurrentTrack ? 'active:bg-primary/18' : listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}"
