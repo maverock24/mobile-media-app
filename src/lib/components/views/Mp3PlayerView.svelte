@@ -299,23 +299,44 @@
 	let longPressHandledFileKey = $state<string | null>(null);
 
 	// ── Filtered browse entries (search by name) ─────────────────
+	// Debounce the raw input so filtering doesn't run per keystroke.
+	let debouncedSearchQuery = $state('');
+	$effect(() => {
+		const q = fileSearchQuery;
+		const timer = setTimeout(() => { debouncedSearchQuery = q; }, 200);
+		return () => clearTimeout(timer);
+	});
+
+	// Search index: sorted files + lowercase haystacks. Rebuilt only when
+	// allFiles changes (library load / scan batch), NOT on every keystroke —
+	// sortFiles + parseFilename over thousands of files per keypress was
+	// freezing the input.
+	const searchIndex = $derived.by(() => {
+		if (allFiles.length === 0) return [] as Array<{ file: StoredAudioFile; haystack: string }>;
+		return sortFiles(allFiles).map((f) => {
+			const { title, artist } = parseFilename(f.name);
+			return { file: f, haystack: `${f.name} ${title} ${artist}`.toLowerCase() };
+		});
+	});
+
+	// Cap rendered results — a broad query (e.g. "a") matching thousands of
+	// rows explodes the DOM and freezes the UI far longer than the filter itself.
+	const SEARCH_RESULT_LIMIT = 300;
 	const filteredEntries = $derived.by(() => {
-		const query = fileSearchQuery.trim().toLowerCase();
+		const query = debouncedSearchQuery.trim().toLowerCase();
 		if (query.length === 0) return browseEntries;
 
-		const matchesQuery = (name: string): boolean => {
-			if (name.toLowerCase().includes(query)) return true;
-			const { title, artist } = parseFilename(name);
-			return title.toLowerCase().includes(query) || artist.toLowerCase().includes(query);
-		};
-
-		// Global search across the whole library when the index is available;
-		// otherwise fall back to filtering the current folder's entries.
-		if (allFiles.length > 0) {
-			const matches = sortFiles(allFiles).filter(f => matchesQuery(f.name));
-			return matches.map(f => ({ kind: 'file' as const, name: f.name, file: f }));
+		if (searchIndex.length > 0) {
+			const out: BrowseEntry[] = [];
+			for (const { file, haystack } of searchIndex) {
+				if (haystack.includes(query)) {
+					out.push({ kind: 'file', name: file.name, file });
+					if (out.length >= SEARCH_RESULT_LIMIT) break;
+				}
+			}
+			return out;
 		}
-		return browseEntries.filter(e => e.kind === 'file' && matchesQuery(e.name));
+		return browseEntries.filter(e => e.kind === 'file' && e.name.toLowerCase().includes(query));
 	});
 	const selectedBrowseCount = $derived(selectedBrowseFileKeys.length);
 
