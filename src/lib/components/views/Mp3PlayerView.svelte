@@ -318,6 +318,16 @@
 		return browseEntries.filter(e => e.kind === 'file' && matchesQuery(e.name));
 	});
 	const selectedBrowseCount = $derived(selectedBrowseFileKeys.length);
+
+	// Kick off a full library scan the first time the user searches while the
+	// index is empty — without this, global search only sees the current
+	// folder because allFiles is only populated by cache restore or manual rescan.
+	$effect(() => {
+		if (fileSearchQuery.trim().length > 0 && allFiles.length === 0
+			&& !libraryScanPromise && (nativeTreeUri || rootDirHandle)) {
+			startLibraryScan(musicSettings.lastFolderName || 'Library');
+		}
+	});
 	const filteredFavoriteTracks = $derived.by(() => {
 		const query = fileSearchQuery.trim().toLowerCase();
 		const favorites = musicSettings.favoriteTracks.map((favorite) => ({
