@@ -93,7 +93,7 @@
 	const googleDriveClientId = getGoogleDriveClientId();
 
 	const LAST_LIBRARY_CACHE_KEY = 'last-library';
-	const BACKGROUND_LIBRARY_SCAN_BATCH_SIZE = 120;
+	const BACKGROUND_LIBRARY_SCAN_BATCH_SIZE = 500;
 	const FOLDER_PLAY_SCAN_BATCH_SIZE = 48;
 	const listTileToneClasses = $derived(getListTileToneClasses(appSettings.listTileTone));
 	const FOLDER_PLAY_INITIAL_BATCH_SIZE = 1;
