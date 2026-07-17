@@ -417,7 +417,11 @@
 			} else {
 				mediaEngine.musicPlayingB = isPlaying;
 			}
-			if (currentTrack) {
+			// Only push track info if this deck is the one playing, or if
+			// no deck is playing at all. Don't overwrite the playing deck's
+			// title just because the user switched views.
+			const otherDeckPlaying = deck === 'A' ? mediaEngine.musicPlayingB : mediaEngine.musicPlayingA;
+			if (currentTrack && (isPlaying || !otherDeckPlaying)) {
 				mediaEngine.setNowPlaying({
 					id:         String(currentTrack.id),
 					source:     'music',
