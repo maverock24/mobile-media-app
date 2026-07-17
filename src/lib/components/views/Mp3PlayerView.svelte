@@ -2343,8 +2343,17 @@
 				mimeType: (transferFile as any).mimeType,
 				modifiedAt: (transferFile as any).modifiedAt,
 			});
-			const bytes = await driveFile.arrayBuffer();
-			const base64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+			// Use FileReader for safe base64 encoding (avoids call-stack
+			// overflow from String.fromCharCode(...spread) on large files)
+			const base64 = await new Promise<string>((resolve, reject) => {
+				const reader = new FileReader();
+				reader.onload = () => {
+					const result = reader.result as string;
+					resolve(result.split(',')[1] ?? result);
+				};
+				reader.onerror = reject;
+				reader.readAsDataURL(driveFile);
+			});
 			await DirectoryReader.writeFile({
 				treeUri: nativeTreeUri,
 				path: localPickerPath.join('/'),
@@ -2357,6 +2366,8 @@
 			const msg = e?.message || '';
 			if (/security|permission/i.test(msg)) {
 				addToast({ message: 'Please re-select your music folder to grant write permission.', type: 'warning', autoDismissMs: 6000 });
+			} else if (/401|unauthorised|token|auth/i.test(msg)) {
+				addToast({ message: 'Google Drive session expired. Reconnect in Settings.', type: 'warning', autoDismissMs: 5000 });
 			} else {
 				addToast({ message: 'Download failed.', type: 'error' });
 			}
@@ -2403,8 +2414,13 @@
 				blob,
 			});
 			addToast({ message: `Uploaded "${transferFile.name}" to Drive.`, type: 'info' });
-		} catch (e) {
-			addToast({ message: 'Upload failed.', type: 'error' });
+		} catch (e: any) {
+			const msg = e?.message || '';
+			if (/401|unauthorised|token|auth/i.test(msg)) {
+				addToast({ message: 'Google Drive session expired. Reconnect in Settings.', type: 'warning', autoDismissMs: 5000 });
+			} else {
+				addToast({ message: 'Upload failed.', type: 'error' });
+			}
 		} finally {
 			isTransferring = false;
 			transferFile = null;

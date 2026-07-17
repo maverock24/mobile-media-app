@@ -26,18 +26,20 @@ export function swipeItem(node: HTMLElement, params: SwipeItemParams = {}) {
 	let startY = 0;
 	let currentX = 0;
 	let dragging = false;
+	let captured = false;
 	let revealed = false;
 
 	function onPointerDown(e: PointerEvent) {
-		// Only handle primary button / touch
 		if (e.pointerType === 'mouse' && e.button !== 0) return;
 		startX = e.clientX;
 		startY = e.clientY;
 		currentX = 0;
 		dragging = true;
+		captured = false;
 		revealed = false;
 		node.style.transition = 'none';
-		node.setPointerCapture(e.pointerId);
+		// Don't capture yet — let taps through to child buttons.
+		// Capture only after the user has dragged past a small threshold.
 	}
 
 	function onPointerMove(e: PointerEvent) {
@@ -45,25 +47,33 @@ export function swipeItem(node: HTMLElement, params: SwipeItemParams = {}) {
 		const dx = e.clientX - startX;
 		const dy = e.clientY - startY;
 
-		// Only track horizontal swipes (ignore vertical scroll)
 		if (Math.abs(dx) < Math.abs(dy) * 1.2) {
-			// User is scrolling vertically — cancel the swipe
 			if (Math.abs(dy) > 10) {
 				dragging = false;
 				node.style.transform = '';
 				node.style.transition = 'transform 0.2s ease';
+				if (captured) node.releasePointerCapture(e.pointerId);
 			}
 			return;
 		}
 
-		// Only allow swiping left (negative dx)
+		// Capture pointer once we know it's a horizontal swipe
+		if (!captured && Math.abs(dx) > 5) {
+			captured = true;
+			try { node.setPointerCapture(e.pointerId); } catch {}
+		}
+
 		currentX = Math.min(0, Math.max(dx, -threshold * 1.5));
 		node.style.transform = `translateX(${currentX}px)`;
 	}
 
-	function onPointerUp(_e: PointerEvent) {
+	function onPointerUp(e: PointerEvent) {
 		if (!dragging) return;
 		dragging = false;
+		if (captured) {
+			try { node.releasePointerCapture(e.pointerId); } catch {}
+			captured = false;
+		}
 		node.style.transition = 'transform 0.2s ease';
 
 		if (currentX <= -threshold) {
