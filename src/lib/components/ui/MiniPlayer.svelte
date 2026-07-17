@@ -48,6 +48,12 @@
 			: mediaEngine.isPlaying
 	);
 
+	// Which deck label to show: the one that's actually playing, or the
+	// viewed deck if neither is playing.
+	const activePlayingDeck = $derived(
+		mediaEngine.musicPlayingA ? 'A' : mediaEngine.musicPlayingB ? 'B' : mediaEngine.activeMusicDeck
+	);
+
 	const displayTitle = $derived(
 		mediaEngine.item?.title ??
 		(mediaEngine.musicPlayingA || mediaEngine.musicPlayingB
@@ -57,7 +63,7 @@
 	const displaySubtitle = $derived(
 		mediaEngine.item
 			? (mediaEngine.source === 'music'
-				? `Deck ${mediaEngine.activeMusicDeck} · ${mediaEngine.item.subtitle ?? ''}`
+				? `Deck ${activePlayingDeck} · ${mediaEngine.item.subtitle ?? ''}`
 				: mediaEngine.item.subtitle)
 			: (mediaEngine.musicPlayingA || mediaEngine.musicPlayingB
 				? `Playing on Deck ${mediaEngine.musicPlayingA ? 'A' : 'B'}`
