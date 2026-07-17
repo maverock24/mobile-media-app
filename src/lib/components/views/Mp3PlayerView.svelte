@@ -2300,7 +2300,11 @@
 	async function openLocalDownloadFolderPicker(file: StoredAudioFile) {
 		transferFile = file;
 		transferDirection = 'download';
-		if (isNativeApp && nativeTreeUri) {
+		if (isNativeApp) {
+			if (!nativeTreeUri) {
+				addToast({ message: 'Open a local folder first so the app knows where to save.', type: 'warning', autoDismissMs: 5000 });
+				return;
+			}
 			showLocalFolderPicker = true;
 			await loadLocalFolderPicker('');
 		} else {
