@@ -197,11 +197,11 @@
 							</button>
 						{/if}
 						<button
-							class="mini-player-action mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+							class="mini-player-action mini-player-control-surface w-12 h-12 flex items-center justify-center rounded-full text-primary hover:text-primary/80"
 							onclick={skipPrevious}
 							aria-label="Previous"
 						>
-							<SkipBack class="w-4 h-4" />
+							<SkipBack class="w-6 h-6" />
 						</button>
 					{/if}
 
@@ -219,11 +219,11 @@
 
 					{#if canSkipNext}
 						<button
-							class="mini-player-action mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+							class="mini-player-action mini-player-control-surface w-12 h-12 flex items-center justify-center rounded-full text-primary hover:text-primary/80"
 							onclick={skipNext}
 							aria-label="Next"
 						>
-							<SkipForward class="w-4 h-4" />
+							<SkipForward class="w-6 h-6" />
 						</button>
 					{/if}
 				</div>
