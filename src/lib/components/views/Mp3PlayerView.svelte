@@ -2353,8 +2353,13 @@
 				data: base64,
 			});
 			addToast({ message: `Downloaded "${transferFile.name}" to phone.`, type: 'info' });
-		} catch (e) {
-			addToast({ message: 'Download failed.', type: 'error' });
+		} catch (e: any) {
+			const msg = e?.message || '';
+			if (/security|permission/i.test(msg)) {
+				addToast({ message: 'Please re-select your music folder to grant write permission.', type: 'warning', autoDismissMs: 6000 });
+			} else {
+				addToast({ message: 'Download failed.', type: 'error' });
+			}
 		} finally {
 			isTransferring = false;
 			transferFile = null;
@@ -2429,7 +2434,12 @@
 			addToast({ message: `Downloaded "${file.name}" to phone.`, type: 'info' });
 		} catch (e: any) {
 			if (e?.name !== 'AbortError') {
-				addToast({ message: 'Download failed.', type: 'error' });
+				const msg = e?.message || '';
+				if (/security|permission/i.test(msg)) {
+					addToast({ message: 'Please re-select your music folder to grant write permission.', type: 'warning', autoDismissMs: 6000 });
+				} else {
+					addToast({ message: 'Download failed.', type: 'error' });
+				}
 			}
 		} finally {
 			isTransferring = false;
