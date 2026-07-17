@@ -131,6 +131,21 @@
 	// connection returns we reload the stream and seek back to where it stopped.
 	let _reconnectListener: (() => void) | null = null;
 
+	/** Retry audioEl.play() on AbortError — remote URLs can abort on Android
+	 *  WebView when the source isn't ready yet after setting src. */
+	function safePlay(onFailure?: () => void) {
+		const tryPlay = (attempt: number) => {
+			audioEl!.play().catch((err: Error) => {
+				if (err?.name === 'AbortError' && attempt < 3) {
+					setTimeout(() => tryPlay(attempt + 1), 150);
+				} else {
+					onFailure?.();
+				}
+			});
+		};
+		tryPlay(0);
+	}
+
 	function cancelNetworkRetry() {
 		if (_reconnectListener) {
 			window.removeEventListener('online', _reconnectListener);
@@ -196,11 +211,9 @@
 			}
 			claimAudio('podcast');
 			isBuffering = true;
-			audioEl.play().catch((err) => {
+			safePlay(() => {
 				isBuffering = false;
-				if (err?.name !== 'AbortError') {
-					addToast({ message: 'Reconnected but failed to resume. Tap play to retry.', type: 'warning', autoDismissMs: 5000 });
-				}
+				addToast({ message: 'Reconnected but failed to resume. Tap play to retry.', type: 'warning', autoDismissMs: 5000 });
 			});
 		};
 		window.addEventListener('online', _reconnectListener);
@@ -797,12 +810,10 @@
 		currentTime = resumeAt > 10 ? resumeAt : 0;
 		syncEpisodeAudioSource(podcast, episode, resumeAt);
 		isBuffering = true;
-		audioEl.play().catch((err) => {
+		safePlay(() => {
 			isBuffering = false;
-			if (err?.name !== 'AbortError') {
-				console.error('[Podcast] play() failed:', err, 'url:', episode.audioUrl);
-				addToast({ message: `Playback failed: ${err?.message ?? 'Unknown error'}`, type: 'error' });
-			}
+			console.error('[Podcast] play() failed:', 'url:', episode.audioUrl);
+			addToast({ message: `Playback failed.`, type: 'error' });
 		});
 	}
 
@@ -841,10 +852,8 @@
 			currentEpisode.episode,
 			getEpisodeResumePosition(currentEpisode.episode)
 		);
-		audioEl.play().catch((err) => {
-			if (err?.name !== 'AbortError') {
-				console.error('[Podcast] resumePlayback() failed:', err);
-			}
+		safePlay(() => {
+			console.error('[Podcast] resumePlayback() failed');
 		});
 	}
 

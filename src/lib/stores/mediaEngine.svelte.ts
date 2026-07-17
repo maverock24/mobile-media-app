@@ -267,9 +267,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		// API — the browser outputs SILENCE for tainted cross-origin media unless
 		// the server sends CORS headers. So we play streams DIRECTLY (no EQ).
 		_streamAudio.src = url;
-		_streamAudio.play().catch((err) => {
-			if (err?.name !== 'AbortError') this.radioPlaying = false;
-		});
+		safeStreamPlay(this);
 	},
 
 	/** Pause the live stream without tearing down the audio element. */
@@ -365,10 +363,25 @@ function stopStreamAudio() {
 	}
 }
 
+/** Retry _streamAudio.play() on AbortError — Android WebView can abort
+ *  when setting a new remote src and calling play() too quickly. */
+function safeStreamPlay(engine: typeof mediaEngine) {
+	const tryPlay = (attempt: number) => {
+		_streamAudio!.play().catch((err: Error) => {
+			if (err?.name === 'AbortError' && attempt < 3) {
+				setTimeout(() => tryPlay(attempt + 1), 150);
+			} else if (err?.name !== 'AbortError') {
+				engine.radioPlaying = false;
+			}
+		});
+	};
+	tryPlay(0);
+}
+
 /** Shared resume logic for the live stream (used by resume() and resumeStream()). */
 function resumeStreamAudio(engine: typeof mediaEngine) {
 	_streamShouldPlay = true;
-	_streamAudio!.play().catch(() => {});
+	safeStreamPlay(engine);
 	engine.radioPlaying = true;
 }
 
