@@ -3193,7 +3193,7 @@
 					<div class="relative overflow-hidden border-b">
 						<!-- Behind-content: upload/download action (hidden during loop selection) -->
 						{#if selectedBrowseCount === 0}
-						<div class="absolute inset-y-0 right-0 flex items-center pr-3" style="width: 120px; justify-content: flex-end;">
+						<div class="absolute inset-y-0 right-0 flex items-center pr-2" style="width: 140px; justify-content: flex-end;">
 							<Button
 								size="sm"
 								class="h-9 px-3 text-xs font-semibold gap-1.5 shrink-0"
@@ -3219,7 +3219,7 @@
 						{/if}
 						<!-- Front: existing row content (swipeable) -->
 						<div
-							use:swipeItem={{ threshold: 120 }}
+							use:swipeItem={{ threshold: 140 }}
 							data-swipe-front
 							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'bg-primary/12 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
 						>
