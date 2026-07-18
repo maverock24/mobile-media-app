@@ -11,6 +11,7 @@
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import { bytesFromBase64, arrayBufferFromBytes, blobFromNativePath } from '$lib/audio/fileResolver';
 	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
+	import type { MediaItem } from '$lib/models/media';
 	import {
 		type StoredAudioFile,
 		type BrowseEntry,
@@ -445,21 +446,55 @@
 		}
 	}
 
-	// ── When this deck is the active music deck AND the user is on the
-	//     music tab, push state to the MiniPlayer. Uses both activeMusicDeck
-	//     and activeTab so it re-fires when returning from podcast/radio.
-	//     Does NOT push when podcast/radio are playing — they own the source. ──
+	// ── Always push per-deck state to the engine so the MiniPlayer can
+	//     show the correct track/time/progress for whichever deck is active,
+	//     even when both decks play simultaneously. The global `item`/
+	//     `currentTime`/`duration` are also set when this deck is the active
+	//     one (and podcast/radio aren't playing), so MediaSession and native
+	//     controls still work. ──
 	$effect(() => {
-		if (mediaEngine.activeMusicDeck === deck && activeTab === 'music'
-			&& !mediaEngine.podcastPlaying && !mediaEngine.radioPlaying) {
+		const isActiveDeck = mediaEngine.activeMusicDeck === deck;
+		const isMusicTab = activeTab === 'music';
+		const musicOwnsDisplay = !mediaEngine.podcastPlaying && !mediaEngine.radioPlaying;
+
+		// Always push per-deck metadata — even when NOT the active deck —
+		// so that deck-switching in the MiniPlayer immediately shows the
+		// right track info without waiting for a re-render.
+		if (deck === 'A') {
+			mediaEngine.deckAItem = currentTrack ? {
+				id:         String(currentTrack.id),
+				source:     'music' as const,
+				title:      currentTrack.title,
+				subtitle:   currentTrack.artist,
+				audioUrl:   '',
+				artworkUrl: undefined,
+				duration:   currentTrack.duration > 0 ? currentTrack.duration : undefined,
+			} : null;
+			mediaEngine.deckACurrentTime = audioEl?.currentTime ?? 0;
+			mediaEngine.deckADuration = isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack?.duration ?? 0);
+		} else {
+			mediaEngine.deckBItem = currentTrack ? {
+				id:         String(currentTrack.id),
+				source:     'music' as const,
+				title:      currentTrack.title,
+				subtitle:   currentTrack.artist,
+				audioUrl:   '',
+				artworkUrl: undefined,
+				duration:   currentTrack.duration > 0 ? currentTrack.duration : undefined,
+			} : null;
+			mediaEngine.deckBCurrentTime = audioEl?.currentTime ?? 0;
+			mediaEngine.deckBDuration = isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack?.duration ?? 0);
+		}
+
+		// When this deck is active + music tab + music owns the display,
+		// also push to global state so that MediaSession + native controls work.
+		if (isActiveDeck && isMusicTab && musicOwnsDisplay) {
 			claimMusicControls();
-			// Sync playing flags regardless of whether a track is loaded
 			if (deck === 'A') {
 				mediaEngine.musicPlayingA = isPlaying;
 			} else {
 				mediaEngine.musicPlayingB = isPlaying;
 			}
-			// Always show the active deck's track info in the MiniPlayer
 			if (currentTrack) {
 				mediaEngine.setNowPlaying({
 					id:         String(currentTrack.id),
@@ -483,7 +518,7 @@
 	function syncTrackToMediaEngine(index: number) {
 		const track = tracks[index];
 		if (!track) return;
-		mediaEngine.setNowPlaying({
+		const item: MediaItem = {
 			id:         String(track.id),
 			source:     'music',
 			title:      track.title,
@@ -491,7 +526,14 @@
 			audioUrl:   '',
 			artworkUrl: undefined,
 			duration:   track.duration > 0 ? track.duration : undefined,
-		}, 'music');
+		};
+		// Push per-deck metadata so MiniPlayer shows correct track on switch
+		if (deck === 'A') {
+			mediaEngine.deckAItem = item;
+		} else {
+			mediaEngine.deckBItem = item;
+		}
+		mediaEngine.setNowPlaying(item, 'music');
 		claimMusicControls();
 	}
 
@@ -539,8 +581,16 @@
 			if (now - _lastTimeUpdate < 250) return;
 			_lastTimeUpdate = now;
 			currentTime = audioEl.currentTime;
-			// Only push progress when music owns the MiniPlayer display.
-			// When podcast/radio is active, they own mediaEngine.currentTime.
+			// Always push per-deck time so the MiniPlayer shows accurate
+			// progress even when another source owns the global display.
+			if (deck === 'A') {
+				mediaEngine.deckACurrentTime = audioEl.currentTime;
+				mediaEngine.deckADuration = isFinite(audioEl.duration) ? audioEl.duration : 0;
+			} else {
+				mediaEngine.deckBCurrentTime = audioEl.currentTime;
+				mediaEngine.deckBDuration = isFinite(audioEl.duration) ? audioEl.duration : 0;
+			}
+			// Only push global progress when music owns the MiniPlayer display.
 			if (mediaEngine.activeMusicDeck === deck && mediaEngine.source === 'music') {
 				mediaEngine.updateTime(audioEl.currentTime, isFinite(audioEl.duration) ? audioEl.duration : 0);
 			}

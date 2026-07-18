@@ -39,11 +39,30 @@
 		}
 	});
 
-	// Play/pause button: when music is the active source, reflect ONLY the
-	// deck you're currently viewing — not the other deck that may be playing
-	// in the background. For podcast/radio, use the global playing flag.
+	// On the music tab, always use the active deck's per-deck state — even
+	// when podcast/radio is playing simultaneously (Deck B background music).
+	// On other tabs, follow the global source (podcast/radio/other).
+	const isMusicTab = $derived(activeTab === 'music');
+	const deckItem = $derived(
+		isMusicTab
+			? (mediaEngine.activeMusicDeck === 'B' ? mediaEngine.deckBItem : mediaEngine.deckAItem)
+			: mediaEngine.item
+	);
+	const deckCurrentTime = $derived(
+		isMusicTab
+			? (mediaEngine.activeMusicDeck === 'B' ? mediaEngine.deckBCurrentTime : mediaEngine.deckACurrentTime)
+			: mediaEngine.currentTime
+	);
+	const deckDuration = $derived(
+		isMusicTab
+			? (mediaEngine.activeMusicDeck === 'B' ? mediaEngine.deckBDuration : mediaEngine.deckADuration)
+			: mediaEngine.duration
+	);
+
+	// Play/pause button: on the music tab, control the active deck only.
+	// On other tabs, use the global playing flag.
 	const isPlaying = $derived(
-		mediaEngine.source === 'music'
+		isMusicTab
 			? (mediaEngine.activeMusicDeck === 'A' ? mediaEngine.musicPlayingA : mediaEngine.musicPlayingB)
 			: mediaEngine.isPlaying
 	);
@@ -51,15 +70,15 @@
 	// Subtitle shows the selected/viewed deck, not the playing deck.
 	// The play/pause button already reflects playing state per-deck.
 	const displayTitle = $derived(
-		mediaEngine.item?.title ??
-		(activeTab === 'music' ? `Deck ${mediaEngine.activeMusicDeck}` : undefined)
+		deckItem?.title ??
+		(isMusicTab ? `Deck ${mediaEngine.activeMusicDeck}` : undefined)
 	);
 	const displaySubtitle = $derived(
-		mediaEngine.item
-			? (mediaEngine.source === 'music'
-				? `Deck ${mediaEngine.activeMusicDeck} · ${mediaEngine.item.subtitle ?? ''}`
-				: mediaEngine.item.subtitle)
-			: (activeTab === 'music' ? 'No track loaded' : undefined)
+		deckItem
+			? (isMusicTab
+				? `Deck ${mediaEngine.activeMusicDeck} · ${deckItem.subtitle ?? ''}`
+				: deckItem.subtitle)
+			: (isMusicTab ? 'No track loaded' : undefined)
 	);
 
 	// Always visible on the music tab (so the A/B toggle, play button, and
@@ -75,8 +94,8 @@
 	);
 
 	const progress = $derived(
-		mediaEngine.duration > 0
-			? (mediaEngine.currentTime / mediaEngine.duration) * 100
+		deckDuration > 0
+			? (deckCurrentTime / deckDuration) * 100
 			: 0
 	);
 
@@ -90,18 +109,17 @@
 	);
 
 	function seekTo(time: number) {
-		const target = Math.max(0, Math.min(time, mediaEngine.duration || 0));
+		const target = Math.max(0, Math.min(time, deckDuration || 0));
 		mediaEngine._onSeek?.(target) ?? mediaEngine.seek(target);
 	}
 
 	function handleSeekInput(event: Event) {
 		const nextProgress = Number((event.target as HTMLInputElement).value);
-		seekTo(mediaEngine.duration > 0 ? (nextProgress / 100) * mediaEngine.duration : 0);
+		seekTo(deckDuration > 0 ? (nextProgress / 100) * deckDuration : 0);
 	}
 
 	function togglePlayback() {
-		// Use the same deck-aware check as the play/pause icon
-		const deckPlaying = mediaEngine.source === 'music'
+		const deckPlaying = isMusicTab
 			? (mediaEngine.activeMusicDeck === 'A' ? mediaEngine.musicPlayingA : mediaEngine.musicPlayingB)
 			: mediaEngine.isPlaying;
 		if (deckPlaying) {
@@ -297,8 +315,8 @@
 					aria-valuenow={Math.round(progress)}
 				/>
 				<div class="flex justify-between text-[10px] text-muted-foreground mt-0.5">
-					<span>{formatTime(mediaEngine.currentTime)}</span>
-					<span>{mediaEngine.duration > 0 ? formatTime(mediaEngine.duration) : '--:--'}</span>
+					<span>{formatTime(deckCurrentTime)}</span>
+					<span>{deckDuration > 0 ? formatTime(deckDuration) : '--:--'}</span>
 				</div>
 			</div>
 		{/if}
