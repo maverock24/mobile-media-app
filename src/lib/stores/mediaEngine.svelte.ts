@@ -1,3 +1,5 @@
+// States: docs/state/audio-playback-lifecycle.md — keep in sync
+
 /**
  * Global media engine — shared now-playing state hub across Music, Podcast,
  * Radio, and the Mixer.
@@ -73,6 +75,16 @@ export const mediaEngine = $state<NowPlayingState & {
 	musicHasSelectedTracks: boolean;
 	activeMusicDeck: 'A' | 'B';
 
+	// --- Per-deck state (for when both decks play simultaneously) ---
+	// Each deck pushes its own now-playing metadata so the MiniPlayer
+	// shows the correct track/time/progress for whichever deck is active.
+	deckAItem:        MediaItem | null;
+	deckBItem:        MediaItem | null;
+	deckACurrentTime: number;
+	deckBCurrentTime: number;
+	deckADuration:    number;
+	deckBDuration:    number;
+
 	// --- Transport fallbacks ---
 	// Views register handlers via setPlaybackHandlers()/setSkipHandlers() so the
 	// MiniPlayer, MediaSession, and native MediaControls can drive the active
@@ -122,6 +134,12 @@ export const mediaEngine = $state<NowPlayingState & {
 	musicSelectionLoopActive: false,
 	musicHasSelectedTracks: false,
 	activeMusicDeck: 'A',
+	deckAItem:        null,
+	deckBItem:        null,
+	deckACurrentTime: 0,
+	deckBCurrentTime: 0,
+	deckADuration:    0,
+	deckBDuration:    0,
 	get isPlaying(): boolean {
 		return this.musicPlayingA || this.musicPlayingB || this.podcastPlaying || this.radioPlaying || this.mixerPlaying;
 	},
@@ -223,6 +241,12 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.currentTime = 0;
 		this.duration = 0;
 		this.source = null;
+		this.deckAItem = null;
+		this.deckBItem = null;
+		this.deckACurrentTime = 0;
+		this.deckBCurrentTime = 0;
+		this.deckADuration = 0;
+		this.deckBDuration = 0;
 	},
 
 	// ─── Live stream playback (radio) ──────────────────────────────────

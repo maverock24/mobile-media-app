@@ -1,3 +1,5 @@
+// States: docs/state/sleep-timer.md — keep in sync
+
 import { mediaEngine } from './mediaEngine.svelte';
 import { sleepTimerSettings } from './settings.svelte';
 import { addToast } from './toastStore.svelte';
