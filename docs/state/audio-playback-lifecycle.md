@@ -1,5 +1,5 @@
 # Audio Playback Lifecycle — State Spec v1
-> **Source:** `src/lib/stores/mediaEngine.svelte.ts` (673L)
+> **Source:** `src/lib/stores/mediaEngine.svelte.ts` (680L)
 > **Authority:** code — the engine is a $state object; views drive their own `<audio>` elements.
 > **Initial:** `IDLE`
 > **Last reconciled:** 2026-07-18
@@ -23,11 +23,11 @@
 | T1 | `IDLE` | `setNowPlaying(item,source)` | — | `LOADED` | item, source, currentTime=0, duration set. Handlers MUST be registered BEFORE the next play. |
 | T2 | `IDLE` | `playStream(url,item)` | — | `PLAYING` | Radio only. Calls `claimAudio('radio')`, sets item/source='radio', creates `_streamAudio`, sets radioPlaying=true, `_streamShouldPlay=true`. Sets internal playback handlers to stream methods. |
 | T3 | `LOADED` | view sets per-source flag=true + audio.play() succeeds | handlers registered | `PLAYING` | `isPlaying→true`. WakeLock acquired (web). MediaSession.playbackState='playing'. MediaControls.updatePlaybackState(isPlaying=true). |
-| T4 | `LOADED` | `clear()` | — | `IDLE` | All flags=false, item=null, source=null, currentTime=0, duration=0, stream stopped, reconnect cancelled. WakeLock released (web). MediaSession.metadata=null. |
+| T4 | `LOADED` | `clear()` | — | `IDLE` | All flags=false, item=null, source=null, currentTime=0, duration=0, per-deck state (deckAItem/deckBItem/deckACurrentTime/deckBCurrentTime/deckADuration/deckBDuration) reset to null/0, stream stopped, reconnect cancelled. WakeLock released (web). MediaSession.metadata=null. |
 | T5 | `LOADED` | new source `setNowPlaying(item,source)` | — | `LOADED` | Old item/source/currentTime/duration overwritten. Old handlers become stale — new view MUST re-register before play. |
 | T6 | `PLAYING` | view sets per-source flag=false (user pause / audio-focus loss / stream pause) | — | `LOADED` | `isPlaying→false`. WakeLock released (web). MediaSession.playbackState='paused'. Item/source preserved. |
 | T7 | `PLAYING` | audio error event | — | `LOADED` | Per-source flag=false. `isPlaying→false`. Item/source preserved. Toast notification via `addToast()`. |
-| T8 | `PLAYING` | `clear()` | — | `IDLE` | Same effects as T4. |
+| T8 | `PLAYING` | `clear()` | — | `IDLE` | Same effects as T4 (including per-deck state reset). |
 | T9 | `PLAYING` | radio stream 'ended' + `_streamShouldPlay==true` | source=='radio' | `STREAM_RECONNECTING` | radioPlaying=false. `reconnectStream(url,item)` called with exponential backoff (`min(1000×2^(n-1), 16000)`ms). Max 5 attempts. |
 | T10 | `PLAYING` | Android `document 'pause'` | `Capacitor.platform=='android' && isPlaying && item!=null` | `BG_RECOVERY` | `backgroundResumeArmed=true`. 180ms then 250ms×3 retry loop calling `_onPlay()`. 5s watchdog interval starts. |
 | T11 | `STREAM_RECONNECTING` | reconnect succeeds (`playStream` re-invoked) | `_streamShouldPlay==true` | `PLAYING` | New `_streamAudio` created, radioPlaying=true. Timer cleared. |
@@ -47,7 +47,7 @@
 - All other flag combinations are exclusive: at most one of {podcastPlaying, radioPlaying, mixerPlaying} may be true.
 - `STREAM_RECONNECTING` only valid when `source=='radio'`.
 - `BG_RECOVERY` only valid on Android (`Capacitor.platform=='android'`). On web it is unreachable.
-- `clear()` is always valid from any state (universal reset).
+- `clear()` is always valid from any state (universal reset). Also resets per-deck state (deckAItem/deckBItem → null, per-deck time/duration → 0).
 - `setNowPlaying` from any state overwrites item/source/currentTime/duration — no guard or precondition.
 
 ---
