@@ -1,3 +1,4 @@
+// States: docs/state/google-drive-auth-sync.md — keep in sync
 import {
 	fetchGoogleDriveUser,
 	getGoogleDriveClientId,
