@@ -3374,7 +3374,7 @@
 					<div class="relative overflow-hidden border-b">
 						<!-- Behind-content: upload/download (hidden during selection or when row is active) -->
 						{#if selectedBrowseCount === 0 && !isSelected && !isCurrentTrack}
-						<div class="absolute inset-y-0 right-0 flex items-center pr-2 gap-1.5" style="width: 210px; justify-content: flex-end;">
+						<div class="absolute inset-y-0 right-0 flex items-center pr-1 gap-1.5" style="width: 210px; justify-content: flex-start;">
 							{#if isFiltered}
 							<Button
 								size="sm"
@@ -3416,7 +3416,7 @@
 						{/if}
 						<!-- Front: existing row content (swipeable) -->
 						<div
-							use:swipeItem={{ threshold: 140 }}
+							use:swipeItem={{ threshold: 160 }}
 							data-swipe-front
 							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'bg-primary/25 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/20 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
 						>
