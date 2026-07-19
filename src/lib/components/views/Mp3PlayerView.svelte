@@ -308,6 +308,20 @@
 		return () => clearTimeout(timer);
 	});
 
+	// Clear browse selection when the user starts typing a filter query.
+	// Filtering is a new browsing context; stale selection state from the
+	// unfiltered view blocks upload/download buttons for ALL entries.
+	// Only fires on the empty→non-empty transition, not on every keystroke.
+	let _lastFilterNonEmpty = $state(false);
+	$effect(() => {
+		const hasFilter = fileSearchQuery.trim().length > 0;
+		if (hasFilter && !_lastFilterNonEmpty && selectedBrowseFileKeys.length > 0) {
+			selectedBrowseFileKeys = [];
+			mediaEngine.musicSelectionLoopActive = false;
+		}
+		_lastFilterNonEmpty = hasFilter;
+	});
+
 	// Search index: sorted files + lowercase haystacks. Rebuilt only when
 	// allFiles changes (library load / scan batch), NOT on every keystroke —
 	// sortFiles + parseFilename over thousands of files per keypress was
