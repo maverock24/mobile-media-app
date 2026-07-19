@@ -3379,11 +3379,11 @@
 					<div class="relative overflow-hidden border-b">
 						<!-- Behind-content: upload/download (hidden during selection or when row is active) -->
 						{#if selectedBrowseCount === 0 && !isSelected && !isCurrentTrack}
-						<div class="absolute inset-y-0 right-0 flex items-center pr-1 gap-1.5" style="width: 210px; justify-content: flex-start;">
+						<div class="absolute inset-y-0 right-0 flex items-center gap-1.5">
 							{#if isFiltered}
 							<Button
 								size="sm"
-								class="h-9 px-2.5 text-xs font-semibold gap-1 shrink-0"
+								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
 								onclick={(e) => {
 								e.stopPropagation();
 								const wrapper = (e.currentTarget as HTMLElement).closest('.relative.overflow-hidden');
@@ -3392,13 +3392,13 @@
 								goToFileFolder(entry.file);
 							}}
 							>
-								<Folder class="w-3.5 h-3.5" />
+								<Folder class="w-3 h-3" />
 								Folder
 							</Button>
 							{/if}
 							<Button
 								size="sm"
-								class="h-9 px-3 text-xs font-semibold gap-1.5 shrink-0"
+								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
 								onclick={(e) => {
 								e.stopPropagation();
 								// Reset the swipe position
