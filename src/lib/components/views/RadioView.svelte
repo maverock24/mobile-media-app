@@ -49,7 +49,13 @@
 				}
 			},
 			() => { isBuffering = true; },
-			() => { isBuffering = false; isPlaying = true; }
+			() => { isBuffering = false; isPlaying = true; },
+			() => {
+				// Stream dropped (server timeout / network loss).
+				// The engine auto-retries with backoff; show reconnecting state.
+				isBuffering = true;
+				isPlaying = false;
+			}
 		);
 	});
 

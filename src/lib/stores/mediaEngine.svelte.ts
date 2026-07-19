@@ -344,7 +344,7 @@ let _streamReconnectUrl: string | null = null;
 let _streamReconnectItem: MediaItem | null = null;
 let _streamReconnectTimer: number | null = null;
 let _streamReconnectAttempts = 0;
-const STREAM_MAX_RECONNECT_ATTEMPTS = 5;
+const STREAM_MAX_RECONNECT_ATTEMPTS = 8;
 
 /** Stream lifecycle callbacks registered by RadioView (collapses the former
  *  _streamError/_streamWaiting/_streamPlaying/_streamEnded fields into one object). */
@@ -367,6 +367,7 @@ function cancelStreamReconnect() {
 function reconnectStream(url: string, item: MediaItem) {
 	cancelStreamReconnect();
 	if (_streamReconnectAttempts >= STREAM_MAX_RECONNECT_ATTEMPTS) {
+		addToast({ message: 'Radio stream lost. Tap play to reconnect.', type: 'warning', autoDismissMs: 0 });
 		return;
 	}
 	_streamReconnectAttempts++;
