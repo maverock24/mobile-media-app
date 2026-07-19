@@ -2401,6 +2401,21 @@
 		showFavoriteTracks = false;
 		browsePath = [...browsePath, name];
 	}
+
+	/** Navigate to the folder containing a file from filtered search results. */
+	function goToFileFolder(file: StoredAudioFile) {
+		const fullPath = getRelativePath(file);
+		const segments = fullPath.split('/');
+		if (segments.length <= 1) {
+			browsePath = [];
+		} else {
+			browsePath = segments.slice(0, -1);
+		}
+		showFavoriteTracks = false;
+		fileSearchQuery = '';
+		selectedBrowseFileKeys = [];
+		mediaEngine.musicSelectionLoopActive = false;
+	}
 	function navigateToParentFolderFromSwipe() {
 		if (browsePath.length === 0) return;
 		showFavoriteTracks = false;
@@ -3355,30 +3370,47 @@
 					{@const isSelected = isBrowseFileSelected(entry.file)}
 					{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === getStoredFileKey(entry.file)}
 					{@const isDrive = entry.file.source === 'drive'}
+					{@const isFiltered = fileSearchQuery.trim().length > 0}
 					<div class="relative overflow-hidden border-b">
 						<!-- Behind-content: upload/download (hidden during selection or when row is active) -->
 						{#if selectedBrowseCount === 0 && !isSelected && !isCurrentTrack}
-						<div class="absolute inset-y-0 right-0 flex items-center pr-2" style="width: 140px; justify-content: flex-end;">
+						<div class="absolute inset-y-0 right-0 flex items-center pr-2 gap-1.5" style="width: 210px; justify-content: flex-end;">
+							{#if isFiltered}
+							<Button
+								size="sm"
+								class="h-9 px-2.5 text-xs font-semibold gap-1 shrink-0"
+								onclick={(e) => {
+								e.stopPropagation();
+								const wrapper = (e.currentTarget as HTMLElement).closest('.relative.overflow-hidden');
+								const front = wrapper?.querySelector('[data-swipe-front]') as HTMLElement | null;
+								if (front) { front.style.transition = 'transform 0.2s ease'; front.style.transform = ''; }
+								goToFileFolder(entry.file);
+							}}
+							>
+								<Folder class="w-3.5 h-3.5" />
+								Folder
+							</Button>
+							{/if}
 							<Button
 								size="sm"
 								class="h-9 px-3 text-xs font-semibold gap-1.5 shrink-0"
 								onclick={(e) => {
-									e.stopPropagation();
-									// Reset the swipe position
-									const wrapper = (e.currentTarget as HTMLElement).closest('.relative.overflow-hidden');
-									const front = wrapper?.querySelector('[data-swipe-front]') as HTMLElement | null;
-									if (front) { front.style.transition = 'transform 0.2s ease'; front.style.transform = ''; }
-									if (isDrive) openLocalDownloadFolderPicker(entry.file);
-									else openDriveUploadFolderPicker(entry.file);
-								}}
+								e.stopPropagation();
+								// Reset the swipe position
+								const wrapper = (e.currentTarget as HTMLElement).closest('.relative.overflow-hidden');
+								const front = wrapper?.querySelector('[data-swipe-front]') as HTMLElement | null;
+								if (front) { front.style.transition = 'transform 0.2s ease'; front.style.transform = ''; }
+								if (isDrive) openLocalDownloadFolderPicker(entry.file);
+								else openDriveUploadFolderPicker(entry.file);
+							}}
 							>
 								{#if isDrive}
 									<Download class="w-4 h-4" />
 									Download
-								{:else}
+							{:else}
 									<Upload class="w-4 h-4" />
 									Upload
-								{/if}
+							{/if}
 							</Button>
 						</div>
 						{/if}
