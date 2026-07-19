@@ -105,6 +105,7 @@
 	$effect(() => {
 		registerAudioSource('podcast', () => {
 			if (!audioEl) return;
+			isPlaying = false;
 			audioEl.pause();
 			// Fully reset so the browser releases the audio channel —
 			// pause() alone can leave residual decoder state that
