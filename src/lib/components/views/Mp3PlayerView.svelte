@@ -423,9 +423,13 @@
 	$effect(() => {
 		const srcId = deck === 'A' ? 'musicA' as const : 'musicB' as const;
 		registerAudioSource(srcId, () => {
-			if (audioEl && isPlaying) {
-				audioEl.pause();
-			}
+			if (!audioEl) return;
+			audioEl.pause();
+			// Fully reset so the browser releases the audio channel —
+			// pause() alone can leave residual decoder state that
+			// causes brief overlap when a new source starts immediately.
+			audioEl.removeAttribute('src');
+			audioEl.load();
 		});
 	});
 
