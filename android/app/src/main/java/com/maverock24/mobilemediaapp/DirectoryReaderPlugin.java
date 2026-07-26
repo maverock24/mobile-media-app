@@ -37,6 +37,16 @@ public class DirectoryReaderPlugin extends Plugin {
 	private static final int DEFAULT_SCAN_BATCH_SIZE = 250;
 	private static final Map<String, AudioScanSession> AUDIO_SCAN_SESSIONS = new ConcurrentHashMap<>();
 
+	private static final String[] SUPPORTED_AUDIO_EXTENSIONS = { ".mp3", ".m4a" };
+
+	private static boolean isSupportedAudioFile(String name) {
+		String lower = name.toLowerCase();
+		for (String ext : SUPPORTED_AUDIO_EXTENSIONS) {
+			if (lower.endsWith(ext)) return true;
+		}
+		return false;
+	}
+
 	private static final String[] CHILD_PROJECTION = new String[] {
 		DocumentsContract.Document.COLUMN_DOCUMENT_ID,
 		DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -172,7 +182,7 @@ public class DirectoryReaderPlugin extends Plugin {
 						continue;
 					}
 
-					if (!name.toLowerCase().endsWith(".mp3")) continue;
+					if (!isSupportedAudioFile(name)) continue;
 
 					Uri docUri = DocumentsContract.buildDocumentUriUsingTree(session.treeUri, docId);
 					files.put(createFileObject(name, docUri.toString(),
@@ -245,7 +255,7 @@ public class DirectoryReaderPlugin extends Plugin {
 							continue;
 						}
 
-						if (!name.toLowerCase().endsWith(".mp3")) continue;
+						if (!isSupportedAudioFile(name)) continue;
 
 						Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
 						entries.put(createFileObject(name, docUri.toString(), relativePath, mime, modified));
@@ -302,7 +312,7 @@ public class DirectoryReaderPlugin extends Plugin {
 							continue;
 						}
 
-						if (!name.toLowerCase().endsWith(".mp3")) continue;
+						if (!isSupportedAudioFile(name)) continue;
 
 						Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
 						files.put(createFileObject(name, docUri.toString(),
