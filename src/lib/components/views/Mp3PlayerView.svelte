@@ -27,6 +27,7 @@
 		mergeStoredFiles,
 		fmtGain,
 		getNextTrackIndex as getNextTrackIndexPure,
+		isSupportedAudioFile,
 		parseFilename,
 		sortFiles as sortStoredFiles,
 		createStoredAudioFile,
@@ -1791,11 +1792,11 @@
 						let count = 0;
 						try {
 							for await (const [n2, h2] of (handle as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-								if (h2.kind === 'file' && n2.toLowerCase().endsWith('.mp3')) count++;
+								if (h2.kind === 'file' && isSupportedAudioFile(n2)) count++;
 							}
 						} catch { /* skip */ }
 						folders.push({ kind: 'folder', name, count });
-					} else if (handle.kind === 'file' && name.toLowerCase().endsWith('.mp3')) {
+					} else if (handle.kind === 'file' && isSupportedAudioFile(name)) {
 						files.push({ kind: 'file', name, file: createStoredAudioFile(await (handle as FileSystemFileHandle).getFile()) });
 					}
 				}
@@ -1830,7 +1831,7 @@
 	async function collectFilesFromDirHandle(dir: FileSystemDirectoryHandle): Promise<File[]> {
 		const result: File[] = [];
 		for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-			if (handle.kind === 'file' && name.toLowerCase().endsWith('.mp3')) {
+			if (handle.kind === 'file' && isSupportedAudioFile(name)) {
 				result.push(await (handle as FileSystemFileHandle).getFile());
 			} else if (handle.kind === 'directory') {
 				result.push(...await collectFilesFromDirHandle(handle as FileSystemDirectoryHandle));
@@ -1845,7 +1846,7 @@
 	): Promise<StoredAudioFile[]> {
 		const result: StoredAudioFile[] = [];
 		for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-			if (handle.kind === 'file' && name.toLowerCase().endsWith('.mp3')) {
+			if (handle.kind === 'file' && isSupportedAudioFile(name)) {
 				const file = await (handle as FileSystemFileHandle).getFile();
 				result.push(createStoredWebAudioFile(file, [...pathSegments, name].join('/')));
 			} else if (handle.kind === 'directory') {
@@ -2128,8 +2129,8 @@
 
 	function handleFolderInput(e: Event) {
 		const input = e.target as HTMLInputElement;
-		const files = Array.from(input.files ?? []).filter(f => f.name.toLowerCase().endsWith('.mp3'));
-		if (files.length === 0) { alert('No MP3 files found in selected folder.'); return; }
+		const files = Array.from(input.files ?? []).filter(f => isSupportedAudioFile(f.name));
+		if (files.length === 0) { alert('No supported audio files found in selected folder.'); return; }
 		rootDirHandle = null;
 		nativeTreeUri = null;
 		musicSettings.nativeTreeUri = '';
@@ -2147,11 +2148,11 @@
 	function handleNativeFileInput(e: Event) {
 		const input = e.target as HTMLInputElement;
 		const files = Array.from(input.files ?? []).filter((file) => {
-			return file.name.toLowerCase().endsWith('.mp3') || file.type.startsWith('audio/');
+			return isSupportedAudioFile(file.name) || file.type.startsWith('audio/');
 		});
 
 		if (files.length === 0) {
-			alert('No MP3 files were selected.');
+			alert('No supported audio files were selected.');
 			input.value = '';
 			return;
 		}
@@ -3048,7 +3049,7 @@
 <input
 	bind:this={folderInputEl}
 	type="file"
-	accept=".mp3,audio/mpeg"
+	accept=".mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a,audio/aac"
 	multiple
 	webkitdirectory
 	class="hidden"
@@ -3058,7 +3059,7 @@
 <input
 	bind:this={nativeFileInputEl}
 	type="file"
-	accept=".mp3,audio/*"
+	accept=".mp3,.m4a,audio/*"
 	multiple
 	class="hidden"
 	onchange={handleNativeFileInput}
@@ -3334,9 +3335,9 @@
 					{#if fileSearchQuery.trim()}
 						No files match “{fileSearchQuery}”
 					{:else if musicSettings.librarySource === 'drive'}
-						{driveSearch ? 'No Google Drive MP3s match your search' : 'No MP3 files were found in Google Drive'}
+						{driveSearch ? 'No Google Drive audio files match your search' : 'No audio files were found in Google Drive'}
 					{:else}
-						No MP3 files or folders here
+						No audio files or folders here
 					{/if}
 				</p>
 			{:else}

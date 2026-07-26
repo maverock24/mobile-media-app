@@ -2,6 +2,7 @@ import { musicSettings } from './settings.svelte';
 import { googleDriveSession } from './googleDriveSession.svelte';
 import { streamGoogleDriveMp3Files } from '$lib/google-drive';
 import { DirectoryReader } from '$lib/native/directory-reader';
+import { isSupportedAudioFile } from '$lib/models/music';
 
 export type StoredAudioFile =
 	| { source: 'web'; name: string; relativePath: string; file: File }
@@ -158,7 +159,7 @@ class LibraryStore {
 	async #rescanDirHandle(handle: FileSystemDirectoryHandle) {
 		const entries: BrowseEntry[] = [];
 		for await (const [name, h] of (handle as any)) {
-			if (h.kind === 'file' && name.toLowerCase().endsWith('.mp3')) {
+			if (h.kind === 'file' && isSupportedAudioFile(name)) {
 				const file = await h.getFile();
 				entries.push({
 					kind: 'file',

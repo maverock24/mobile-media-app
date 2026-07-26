@@ -462,9 +462,10 @@ export async function downloadGoogleDriveJsonFile<T>(accessToken: string, fileId
 	return (await response.json()) as T;
 }
 
-function isMp3File(file: GoogleDriveFile): boolean {
-	const extension = file.fileExtension?.toLowerCase();
-	return extension === 'mp3' || file.mimeType === 'audio/mpeg' || file.name.toLowerCase().endsWith('.mp3');
+import { isSupportedAudioFile, isSupportedAudioMime } from '$lib/models/music';
+
+function isAudioFile(file: GoogleDriveFile): boolean {
+	return isSupportedAudioFile(file.name) || isSupportedAudioMime(file.mimeType);
 }
 
 async function fetchMp3FilesInFolder(accessToken: string, folderId: string): Promise<GoogleDriveFile[]> {
@@ -482,7 +483,7 @@ async function fetchMp3FilesInFolder(accessToken: string, folderId: string): Pro
 		const response = await googleApiFetch<{ nextPageToken?: string; files?: GoogleDriveFile[] }>(
 			'/drive/v3/files', accessToken, searchParams
 		);
-		files.push(...(response.files ?? []).filter(isMp3File));
+		files.push(...(response.files ?? []).filter(isAudioFile));
 		pageToken = response.nextPageToken ?? '';
 	} while (pageToken);
 	return files;
@@ -544,7 +545,7 @@ export async function* streamGoogleDriveMp3Files(
 			const response = await googleApiFetch<{ nextPageToken?: string; files?: GoogleDriveFile[] }>(
 				'/drive/v3/files', accessToken, searchParams
 			);
-			const batch = (response.files ?? []).filter(isMp3File);
+			const batch = (response.files ?? []).filter(isAudioFile);
 			pageToken = response.nextPageToken ?? '';
 			yield { files: batch, foldersScanned: 1, foldersQueued: pageToken ? 1 : 0 };
 		} while (pageToken);

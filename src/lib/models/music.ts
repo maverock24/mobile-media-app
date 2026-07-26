@@ -65,6 +65,36 @@ export const EQ_PRESETS: Record<string, number[]> = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Extensions the music player ("MP3 player") supports. Keep lowercase, no leading dot. */
+export const SUPPORTED_AUDIO_EXTENSIONS = ['mp3', 'm4a'];
+
+const SUPPORTED_EXT_REGEX = new RegExp(
+	'\\.(' + SUPPORTED_AUDIO_EXTENSIONS.join('|') + ')$',
+	'i'
+);
+
+/** Returns true if the filename ends with one of {@link SUPPORTED_AUDIO_EXTENSIONS}. */
+export function isSupportedAudioFile(name: string): boolean {
+	return SUPPORTED_EXT_REGEX.test(name);
+}
+
+/**
+ * Returns true if the MIME type corresponds to a supported audio format.
+ * Checks common MIME strings for MP3 and M4A/AAC.
+ */
+export function isSupportedAudioMime(mimeType?: string | null): boolean {
+	if (!mimeType) return false;
+	const t = mimeType.toLowerCase();
+	return (
+		t === 'audio/mpeg' ||
+		t === 'audio/mp3' ||
+		t === 'audio/mp4' ||
+		t === 'audio/x-m4a' ||
+		t === 'audio/aac' ||
+		t.startsWith('audio/')
+	);
+}
+
 export function getStoredFileKey(source: StoredAudioFile): string {
 	if (source.source === 'drive') return `d:${source.fileId}`;
 	if (source.source === 'native') return `n:${source.relativePath}`;
@@ -137,7 +167,7 @@ export function getRelativePath(file: StoredAudioFile): string {
 }
 
 export function parseFilename(filename: string): { title: string; artist: string } {
-	const name = filename.replace(/\.mp3$/i, '').replace(/_/g, ' ');
+	const name = filename.replace(SUPPORTED_EXT_REGEX, '').replace(/_/g, ' ');
 	const sep = name.indexOf(' - ');
 	if (sep > 0) return { artist: name.slice(0, sep).trim(), title: name.slice(sep + 3).trim() };
 	return { title: name, artist: 'Unknown Artist' };
