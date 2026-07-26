@@ -273,7 +273,9 @@
 			mediaEngine.podcastPlaying = false;
 			// System paused us (Android Doze, audio-focus churn) — try to resume.
 			// Retry up to 3 times with backoff, same pattern as MP3 safePlay.
-			if (!wasUserPaused && currentEpisode) {
+			// Do NOT resume when the audio reached its natural end (ended fires
+			// before pause, so audioEl.ended is already true by here).
+			if (!wasUserPaused && currentEpisode && !audioEl.ended) {
 				const tryResume = (attempt: number) => {
 					audioEl?.play().catch(() => {
 						if (attempt < 3) setTimeout(() => tryResume(attempt + 1), 300 * (attempt + 1));
