@@ -277,6 +277,7 @@
 	let driveSearch      = $state('');
 	let isDriveAuthenticating = $state(false);
 	let isDriveLoading   = $state(false);
+	let _audioErrorRetries = 0;  // guards against infinite error→reload loops
 
 	// ── Transfer state (upload to Drive / download from Drive) ──
 	let showDriveFolderPicker = $state(false);
@@ -623,7 +624,7 @@
 					: t
 			);
 		};
-		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = true;  };
+		const onPlay  = () => { isPlaying = true;  isBuffering = false; _audioErrorRetries = 0; mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = true;  };
 		const onPause = () => {
 			isPlaying = false;
 			mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = false;
@@ -639,7 +640,30 @@
 		};
 		const onWaiting = () => { isBuffering = true; };
 		const onPlaying = () => { isBuffering = false; };
-		const onError = () => { isBuffering = false; void advanceTrack(true, false); };
+		const onError = () => {
+			isBuffering = false;
+			musicSettings.lastTrackTimestamp = 0;
+			// On error, try a forced reload once before advancing to the next
+			// track.  This handles transient read failures (e.g. Capacitor bridge
+			// cold start, SAF permission race) that resolve on retry.
+			if (_audioErrorRetries < 1 && tracks.length > 0) {
+				_audioErrorRetries += 1;
+				const idx = musicSettings.lastTrackIndex;
+				const url = tracks[idx]?.url;
+				if (audioEl && url) {
+					audioEl.src = '';
+					audioEl.src = url;
+					safePlay(() => {
+						_audioErrorRetries = 0;
+						isPlaying = false;
+						void advanceTrack(true, false);
+					});
+					return;
+				}
+			}
+			_audioErrorRetries = 0;
+			void advanceTrack(true, false);
+		};
 		audioEl.volume = effectiveVolume / 100;
 		audioEl.muted  = musicSettings.isMuted;
 		audioEl.playbackRate = musicSettings.playbackSpeed;
@@ -1997,6 +2021,7 @@
 		preloadedTrackIndex = null;
 		preloadRequestId += 1;
 		currentTime = 0; duration = 0; isPlaying = false; isBuffering = false;
+		_audioErrorRetries = 0;
 		trackListLockedByUser = true;
 		mediaEngine.musicSelectionLoopActive = options.selectionLoop ?? false;
 	}
@@ -2783,16 +2808,24 @@
 				return;
 			}
 
-			// Same-track loop (single selected track, or repeat): just seek to
-			// start and play. Avoids the ensureTrackUrl → set src dance which is
-			// a no-op on Android native (Capacitor.convertFileSrc returns the same
-			// bridge URL every time, so audioEl.src = sameUrl doesn't reload).
+			// Same-track loop (single selected track, or repeat).
 			if (nextIndex === idx) {
 				setCurrentTrack(nextIndex);
 				currentTime = 0;
 				musicSettings.lastTrackTimestamp = 0;
 				if (audioEl) {
-					audioEl.currentTime = 0;
+					// If the audio element is in an error state, seek + play won't
+					// work — we must force a reload.  Clear src first because
+					// setting the same URL is a no-op per the HTML spec.
+					if (audioEl.error) {
+						const reloadUrl = tracks[nextIndex]?.url;
+						if (reloadUrl) {
+							audioEl.src = '';
+							audioEl.src = reloadUrl;
+						}
+					} else {
+						audioEl.currentTime = 0;
+					}
 					if (wasPlaying) {
 						isBuffering = false;
 						safePlay(() => { isPlaying = false; });
