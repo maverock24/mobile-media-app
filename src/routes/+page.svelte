@@ -149,28 +149,29 @@
 		<MiniPlayer activeTab={activeTab} position="top" onNavigateTo={navigateToTab} />
 	{/if}
 
-	<!-- Content -->
-	<main class="flex-1 overflow-hidden relative"
-	>
-		<!--
-			Music and Podcast are ALWAYS mounted (CSS hidden, not {#if}).
-			This keeps the <audio> element and all component state alive across
-			tab switches so playback position, tracks, and episode progress are
-			preserved. JS timers and Web Audio context also survive.
-		-->
-		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'music'}>
-			<div class="absolute inset-0" class:hidden={mediaEngine.activeMusicDeck !== 'A'}>
+	<!--
+		Tab panels use visibility + pointer-events instead of display:none.
+		Switching display:none → visible forces the browser to fully re-layout
+		the panel's DOM tree (hundreds of list rows in the music player).
+		visibility:hidden keeps the element in layout so the browser can use
+		the cached layout tree — tab switches become near-instant paint flips.
+		content-visibility:hidden on hidden panels skips rendering entirely.
+	-->
+	<main class="flex-1 overflow-hidden relative" style="contain: layout style;">
+		<div class="absolute inset-0" style="visibility:{activeTab === 'music' ? 'visible' : 'hidden'}; pointer-events:{activeTab === 'music' ? 'auto' : 'none'}; content-visibility:{activeTab === 'music' ? 'visible' : 'hidden'};">
+			{#if mediaEngine.activeMusicDeck === 'A'}
 				<Mp3PlayerView deck="A" {activeTab} />
-			</div>
-			<div class="absolute inset-0" class:hidden={mediaEngine.activeMusicDeck !== 'B'}>
+			{:else}
 				<Mp3PlayerView deck="B" {activeTab} />
-			</div>
+			{/if}
 		</div>
-		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'podcasts'}>
+		<div class="absolute inset-0" style="visibility:{activeTab === 'podcasts' ? 'visible' : 'hidden'}; pointer-events:{activeTab === 'podcasts' ? 'auto' : 'none'}; content-visibility:{activeTab === 'podcasts' ? 'visible' : 'hidden'};">
 			<PodcastView />
 		</div>
-		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'radio'}>
-			<RadioView />
+		<div class="absolute inset-0" style="visibility:{activeTab === 'radio' ? 'visible' : 'hidden'}; pointer-events:{activeTab === 'radio' ? 'auto' : 'none'}; content-visibility:{activeTab === 'radio' ? 'visible' : 'hidden'};">
+			{#if activeTab === 'radio'}
+				<RadioView />
+			{/if}
 		</div>
 		{#if activeTab === 'weather'}
 			<div class="absolute inset-0 overflow-y-auto">

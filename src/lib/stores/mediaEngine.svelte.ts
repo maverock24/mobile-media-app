@@ -447,24 +447,36 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 			}
 		});
 
-		$effect(() => {
-			navigator.mediaSession.setActionHandler('play',          () => mediaEngine._onPlay?.() ?? mediaEngine.resume());
-			navigator.mediaSession.setActionHandler('pause',         () => mediaEngine._onPause?.() ?? mediaEngine.pause());
-			navigator.mediaSession.setActionHandler('stop',          () => mediaEngine._onPause?.() ?? mediaEngine.pause());
-			navigator.mediaSession.setActionHandler('nexttrack',     () => mediaEngine._onNext?.() ?? mediaEngine.next());
-			navigator.mediaSession.setActionHandler('previoustrack', () => mediaEngine._onPrev?.() ?? mediaEngine.prev());
-			navigator.mediaSession.setActionHandler('seekto', (d) => {
-				if (d.seekTime == null) return;
-				mediaEngine._onSeek?.(d.seekTime) ?? mediaEngine.seek(d.seekTime);
-			});
-			navigator.mediaSession.setActionHandler('seekforward', (d) => {
-				const nextTime = mediaEngine.currentTime + (d.seekOffset ?? 30);
-				mediaEngine._onSeek?.(nextTime) ?? mediaEngine.seek(nextTime);
-			});
-			navigator.mediaSession.setActionHandler('seekbackward', (d) => {
-				const nextTime = mediaEngine.currentTime - (d.seekOffset ?? 10);
-				mediaEngine._onSeek?.(nextTime) ?? mediaEngine.seek(nextTime);
-			});
+		// MediaSession action handlers — set once at init. The closures read
+		// mediaEngine._onPlay / _onPause / etc. at invocation time (not capture
+		// time), so they always dispatch to the latest registered handlers.
+		// Using untrack() avoids re-subscribing when a view changes handlers.
+		navigator.mediaSession.setActionHandler('play', () => {
+			untrack(() => mediaEngine._onPlay)?.() ?? mediaEngine.resume();
+		});
+		navigator.mediaSession.setActionHandler('pause', () => {
+			untrack(() => mediaEngine._onPause)?.() ?? mediaEngine.pause();
+		});
+		navigator.mediaSession.setActionHandler('stop', () => {
+			untrack(() => mediaEngine._onPause)?.() ?? mediaEngine.pause();
+		});
+		navigator.mediaSession.setActionHandler('nexttrack', () => {
+			untrack(() => mediaEngine._onNext)?.() ?? mediaEngine.next();
+		});
+		navigator.mediaSession.setActionHandler('previoustrack', () => {
+			untrack(() => mediaEngine._onPrev)?.() ?? mediaEngine.prev();
+		});
+		navigator.mediaSession.setActionHandler('seekto', (d) => {
+			if (d.seekTime == null) return;
+			untrack(() => mediaEngine._onSeek)?.(d.seekTime) ?? mediaEngine.seek(d.seekTime);
+		});
+		navigator.mediaSession.setActionHandler('seekforward', (d) => {
+			const nextTime = untrack(() => mediaEngine.currentTime) + (d.seekOffset ?? 30);
+			untrack(() => mediaEngine._onSeek)?.(nextTime) ?? mediaEngine.seek(nextTime);
+		});
+		navigator.mediaSession.setActionHandler('seekbackward', (d) => {
+			const nextTime = untrack(() => mediaEngine.currentTime) - (d.seekOffset ?? 10);
+			untrack(() => mediaEngine._onSeek)?.(nextTime) ?? mediaEngine.seek(nextTime);
 		});
 	});
 }
@@ -595,13 +607,13 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		$effect(() => {
 			mediaActionHandle = MediaControls.addListener('mediaAction', (event) => {
 				switch (event.action) {
-					case 'play':          mediaEngine._onPlay?.() ?? mediaEngine.resume(); break;
-					case 'pause':         mediaEngine._onPause?.() ?? mediaEngine.pause();  break;
-					case 'nexttrack':     mediaEngine._onNext?.() ?? mediaEngine.next();    break;
-					case 'previoustrack': mediaEngine._onPrev?.() ?? mediaEngine.prev();    break;
+					case 'play':          untrack(() => mediaEngine._onPlay)?.() ?? mediaEngine.resume(); break;
+					case 'pause':         untrack(() => mediaEngine._onPause)?.() ?? mediaEngine.pause();  break;
+					case 'nexttrack':     untrack(() => mediaEngine._onNext)?.() ?? mediaEngine.next();    break;
+					case 'previoustrack': untrack(() => mediaEngine._onPrev)?.() ?? mediaEngine.prev();    break;
 					case 'seekto':
 						if (event.positionSec != null) {
-							mediaEngine._onSeek?.(event.positionSec) ?? mediaEngine.seek(event.positionSec);
+							untrack(() => mediaEngine._onSeek)?.(event.positionSec) ?? mediaEngine.seek(event.positionSec!);
 						}
 						break;
 				}

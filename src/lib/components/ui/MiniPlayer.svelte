@@ -99,6 +99,43 @@
 			: 0
 	);
 
+	// CSS-driven progress bar: the fill div uses transition:width for smooth
+	// animation between 4Hz ticks, and the range input overlay handles seeking.
+	// During drag we disable the transition so the bar follows the finger instantly.
+	let seekDragging = $state(false);
+	let dragProgress = $state(0);
+	const displayProgress = $derived(seekDragging ? dragProgress : progress);
+
+	function handleSeekPointerDown(e: PointerEvent) {
+		seekDragging = true;
+		dragProgress = progress;
+		updateDragFromEvent(e);
+	}
+
+	function handleSeekPointerMove(e: PointerEvent) {
+		if (!seekDragging) return;
+		updateDragFromEvent(e);
+	}
+
+	function handleSeekPointerUp(e: PointerEvent) {
+		if (!seekDragging) return;
+		seekDragging = false;
+		updateDragFromEvent(e);
+		const target = deckDuration > 0 ? (dragProgress / 100) * deckDuration : 0;
+		seekTo(Math.max(0, Math.min(target, deckDuration || 0)));
+	}
+
+	function updateDragFromEvent(e: PointerEvent) {
+		const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+		dragProgress = x * 100;
+	}
+
+	function handleSeekInput(event: Event) {
+		const nextProgress = Number((event.target as HTMLInputElement).value);
+		seekTo(deckDuration > 0 ? (nextProgress / 100) * deckDuration : 0);
+	}
+
 	const canSeek = $derived(mediaEngine.source === 'music' || mediaEngine.source === 'podcast');
 	const canSkipPrevious = $derived(mediaEngine._onPrev !== null);
 	const canSkipNext = $derived(mediaEngine._onNext !== null);
@@ -111,11 +148,6 @@
 	function seekTo(time: number) {
 		const target = Math.max(0, Math.min(time, deckDuration || 0));
 		mediaEngine._onSeek?.(target) ?? mediaEngine.seek(target);
-	}
-
-	function handleSeekInput(event: Event) {
-		const nextProgress = Number((event.target as HTMLInputElement).value);
-		seekTo(deckDuration > 0 ? (nextProgress / 100) * deckDuration : 0);
 	}
 
 	function togglePlayback() {
@@ -304,16 +336,36 @@
 
 		{#if canSeek}
 			<div class="px-3 pb-2">
-				<input
-					class="mini-player-seek w-full h-2 rounded-full appearance-none cursor-pointer bg-muted accent-primary"
-					type="range"
-					min="0"
-					max="100"
-					value={progress}
-					oninput={handleSeekInput}
+				<!-- CSS-driven progress bar with transparent seek overlay.
+				     The fill div animates smoothly via CSS transition between ticks.
+				     During pointer drag we disable the transition for instant feedback. -->
+				<div
+					class="relative w-full h-4 flex items-center cursor-pointer touch-none select-none"
+					role="slider"
+					tabindex="0"
 					aria-label="Seek"
-					aria-valuenow={Math.round(progress)}
-				/>
+					aria-valuemin="0"
+					aria-valuemax="100"
+					aria-valuenow={Math.round(displayProgress)}
+					onpointerdown={handleSeekPointerDown}
+					onpointermove={handleSeekPointerMove}
+					onpointerup={handleSeekPointerUp}
+					onpointerleave={() => { if (seekDragging) { seekDragging = false; } }}
+					onpointercancel={() => { if (seekDragging) { seekDragging = false; } }}
+				>
+					<!-- Track background -->
+					<div class="absolute inset-x-0 h-2 rounded-full bg-muted"></div>
+					<!-- Fill bar -- transition gives smooth animation between 4Hz ticks -->
+					<div
+						class="absolute inset-y-0 left-0 h-2 rounded-full bg-primary"
+						style="width:{displayProgress}%;{seekDragging ? '' : 'transition: width 250ms linear;'}"
+					></div>
+					<!-- Thumb dot -->
+					<div
+						class="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-primary shadow-md shadow-primary/40 {seekDragging ? 'scale-125' : ''}"
+						style="left:calc({displayProgress}% - 7px);"
+					></div>
+				</div>
 				<div class="flex justify-between text-[10px] text-muted-foreground mt-0.5">
 					<span>{formatTime(deckCurrentTime)}</span>
 					<span>{deckDuration > 0 ? formatTime(deckDuration) : '--:--'}</span>

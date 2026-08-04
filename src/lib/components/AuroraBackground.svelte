@@ -192,8 +192,10 @@
 	let stars: Star[] = [];
 
 	function initStars(w: number, h: number) {
-		// 88% tiny, 8% mid, 4% bright — heavily weighted toward small stars
-		stars = Array.from({ length: 600 }, () => {
+		// 88% tiny, 8% mid, 4% bright — heavily weighted toward small stars.
+		// Use fewer stars on narrow (mobile) viewports to reduce GPU load.
+		const count = w < 500 ? 200 : 600;
+		stars = Array.from({ length: count }, () => {
 			const roll = Math.random();
 			const isBright = roll < 0.04;
 			const isMid    = roll < 0.12;
@@ -442,9 +444,21 @@
 		if (Capacitor.isNativePlatform()) return;
 		resize();
 		window.addEventListener('resize', resize);
+
+		// Pause the animation loop when the tab is hidden to save GPU/CPU.
+		const onVisibilityChange = () => {
+			if (document.visibilityState === 'visible') {
+				if (!raf) raf = requestAnimationFrame(frame);
+			} else {
+				if (raf) { cancelAnimationFrame(raf); raf = 0; }
+			}
+		};
+		document.addEventListener('visibilitychange', onVisibilityChange);
+
 		raf = requestAnimationFrame(frame);
 		return () => {
 			window.removeEventListener('resize', resize);
+			document.removeEventListener('visibilitychange', onVisibilityChange);
 			cancelAnimationFrame(raf);
 		};
 	});

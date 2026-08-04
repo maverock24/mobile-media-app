@@ -68,7 +68,7 @@ export const musicSettings = persisted('music-settings', {
 		webViewLink?: string;
 	}>,
 	browsePath: [] as string[],
-});
+}, { debounceMs: 5000 });
 
 // ─────────────────────────────────────────────────────────────
 // Podcast settings
@@ -178,4 +178,4 @@ votes:        number;
 
 export const radioData = persisted('radio-data', {
 favorites: [] as RadioStation[],
-});
+}, { debounceMs: 3000 });

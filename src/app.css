@@ -587,6 +587,34 @@
   }
 }
 
+/* ── Performance: replace backdrop-filter with solid backgrounds on frequently-
+   repainting elements (MiniPlayer, tab bar). On mobile, backdrop-filter forces
+   rasterization of the backdrop on every repaint — expensive for elements that
+   update 4Hz (seek bar, time display) or toggle on tap. */
+.mini-player-root {
+	background: hsl(218 55% 7% / 0.98) !important;
+	backdrop-filter: none !important;
+}
+
+/* The bottom tab bar — use the role attribute to target it without
+   needing to escape the tailwind fractional class name. */
+div[role="tablist"] {
+	background: hsl(218 55% 7% / 0.98) !important;
+	backdrop-filter: none !important;
+}
+
+/* Layout containment for tab panels — prevents layout recalculation from
+   cascading out of a single tab panel into the shell when content changes. */
+main[style*="contain"] > .absolute.inset-0 {
+	contain: layout style;
+}
+
+/* Promote the MiniPlayer seek bar to its own compositor layer so dragging it
+   doesn't repaint the entire mini-player. */
+.mini-player-seek {
+	will-change: transform;
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -324,20 +324,71 @@
 		_lastFilterNonEmpty = hasFilter;
 	});
 
-	// Search index: sorted files + lowercase haystacks. Rebuilt only when
-	// allFiles changes (library load / scan batch), NOT on every keystroke —
-	// sortFiles + parseFilename over thousands of files per keypress was
-	// freezing the input.
-	const searchIndex = $derived.by(() => {
-		if (allFiles.length === 0) return [] as Array<{ file: StoredAudioFile; haystack: string }>;
-		return sortFiles(allFiles).map((f) => {
-			const { title, artist } = parseFilename(f.name);
-			return { file: f, haystack: `${f.name} ${title} ${artist}`.toLowerCase() };
-		});
+	// Search index: sorted files + lowercase haystacks. Built incrementally
+	// across batch loads so sortFiles + parseFilename don't re-run over the
+	// entire growing array on every incremental library scan batch.
+	let _searchIndexSortedLength = 0;
+	let _searchIndexSorted: Array<{ file: StoredAudioFile; haystack: string }> = [];
+	$effect(() => {
+		const total = allFiles.length;
+		if (total === _searchIndexSortedLength) return;
+		if (total === 0) {
+			_searchIndexSorted = [];
+			_searchIndexSortedLength = 0;
+			return;
+		}
+		// On first build or reset, sort the full array; on incremental batches,
+		// sort only the new slice and merge (the incoming slice is already sorted
+		// within itself from the source, so we benchmark vs full re-sort).
+		if (_searchIndexSortedLength === 0) {
+			_searchIndexSorted = sortFiles(allFiles).map((f) => {
+				const { title, artist } = parseFilename(f.name);
+				return { file: f, haystack: `${f.name} ${title} ${artist}`.toLowerCase() };
+			});
+		} else {
+			const newSlice = allFiles.slice(_searchIndexSortedLength);
+			const newEntries = sortFiles(newSlice).map((f) => {
+				const { title, artist } = parseFilename(f.name);
+				return { file: f, haystack: `${f.name} ${title} ${artist}`.toLowerCase() };
+			});
+			// Merge the pre-sorted index with the new sorted batch
+			_searchIndexSorted = mergeSortedIndex(_searchIndexSorted, newEntries);
+		}
+		_searchIndexSortedLength = total;
 	});
 
+	function mergeSortedIndex(
+		existing: Array<{ file: StoredAudioFile; haystack: string }>,
+		incoming: Array<{ file: StoredAudioFile; haystack: string }>,
+	): Array<{ file: StoredAudioFile; haystack: string }> {
+		const merged = new Array(existing.length + incoming.length);
+		let ei = 0, ii = 0, mi = 0;
+		const getKey = (entry: { file: StoredAudioFile }) => {
+			if (musicSettings.sortOrder === 'title') return parseFilename(entry.file.name).title;
+			if (musicSettings.sortOrder === 'artist') return parseFilename(entry.file.name).artist;
+			return entry.file.name;
+		};
+		while (ei < existing.length && ii < incoming.length) {
+			const aKey = getKey(existing[ei]);
+			const bKey = getKey(incoming[ii]);
+			if (aKey.localeCompare(bKey, undefined, { numeric: true }) <= 0) {
+				merged[mi++] = existing[ei++];
+			} else {
+				merged[mi++] = incoming[ii++];
+			}
+		}
+		while (ei < existing.length) merged[mi++] = existing[ei++];
+		while (ii < incoming.length) merged[mi++] = incoming[ii++];
+		return merged;
+	}
+
+	// Expose the search index as a reactive alias for the filteredEntries derivation
+	const searchIndex = $derived(_searchIndexSorted);
+
 	// Cap rendered results — a broad query (e.g. "a") matching thousands of
-	// rows explodes the DOM and freezes the UI far longer than the filter itself.
+	// rows explodes the DOM and freezes the UI. In search mode, limit to the
+	// first N results. In browse mode (no filter), use CSS content-visibility
+	// for automatic viewport-based culling of off-screen rows.
 	const SEARCH_RESULT_LIMIT = 300;
 	const filteredEntries = $derived.by(() => {
 		const query = debouncedSearchQuery.trim().toLowerCase();
@@ -355,6 +406,19 @@
 		}
 		return browseEntries.filter(e => e.kind === 'file' && e.name.toLowerCase().includes(query));
 	});
+
+	// When browsing without a search filter, cap the rendered DOM at the same
+	// limit to keep layout/paint costs bounded even for very large folders.
+	// The full list is still available for selection and playback; this only
+	// limits what's in the DOM at once.
+	const BROWSE_RENDER_LIMIT = 500;
+	const renderableEntries = $derived(
+		debouncedSearchQuery.trim().length === 0 && filteredEntries.length > BROWSE_RENDER_LIMIT
+			? filteredEntries.slice(0, BROWSE_RENDER_LIMIT)
+			: filteredEntries
+	);
+	const entriesRenderCount = $derived(renderableEntries.length);
+	const hasMoreEntries = $derived(filteredEntries.length > entriesRenderCount);
 	const selectedBrowseCount = $derived(selectedBrowseFileKeys.length);
 
 	// Kick off a full library scan the first time the user searches while the
@@ -2526,7 +2590,7 @@
 		showLocalFolderPicker = false;
 		try {
 			const driveFile = await downloadGoogleDriveFile({
-				accessToken: driveAccessToken,
+				accessToken: token,
 				fileId: (transferFile as any).fileId ?? '',
 				fileName: transferFile.name,
 				mimeType: (transferFile as any).mimeType,
@@ -2613,7 +2677,7 @@
 			const file = await materializeStoredFile(transferFile, true);
 			const blob = new Blob([await file.arrayBuffer()], { type: file.type || 'audio/mpeg' });
 			await uploadGoogleDriveFile({
-				accessToken: driveAccessToken,
+				accessToken: token,
 				parentFolderId: folder.id,
 				fileName: transferFile.name,
 				blob,
@@ -2648,7 +2712,7 @@
 			addToast({ message: 'Choose a folder to save the file…', type: 'info', autoDismissMs: 2500 });
 			const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
 			const driveFile = await downloadGoogleDriveFile({
-				accessToken: driveAccessToken,
+				accessToken: token,
 				fileId: (file as any).fileId ?? '',
 				fileName: file.name,
 				mimeType: (file as any).mimeType,
@@ -2664,8 +2728,10 @@
 				const msg = e?.message || '';
 				if (/security|permission/i.test(msg)) {
 					addToast({ message: 'Please re-select your music folder to grant write permission.', type: 'warning', autoDismissMs: 6000 });
+				} else if (/401|unauthorised|token|auth|expired/i.test(msg)) {
+					addToast({ message: 'Google Drive session expired. Reconnect in Settings.', type: 'warning', autoDismissMs: 5000 });
 				} else {
-					addToast({ message: 'Download failed.', type: 'error' });
+					addToast({ message: `Download failed: ${msg || 'Unknown error'}`, type: 'error' });
 				}
 			}
 		} finally {
@@ -3302,7 +3368,7 @@
 		{/if}
 
 		<!-- Entry list -->
-		<div class="flex-1 overflow-y-auto min-h-0">
+		<div class="flex-1 overflow-y-auto min-h-0 browse-list-container">
 
 			{#if showFavoriteTracks}
 				{#if filteredFavoriteTracks.length === 0}
@@ -3322,7 +3388,7 @@
 				{:else}
 					{#each filteredFavoriteTracks as entry}
 						{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === entry.favorite.key}
-						<div class="list-row-surface flex items-center gap-2 px-4 py-2 border-b transition-colors {isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}">
+						<div class="browse-list-row list-row-surface flex items-center gap-2 px-4 py-2 border-b transition-colors {isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}">
 							<button
 								class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {entry.file ? (isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/30 active:bg-primary/15' : listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80') : 'opacity-60'}"
 								onclick={() => playFavoriteTrack(entry.favorite)}
@@ -3374,11 +3440,11 @@
 					{/if}
 				</p>
 			{:else}
-				{#each filteredEntries as entry}
+				{#each renderableEntries as entry}
 					{#if entry.kind === 'folder'}
 					{@const folderKey = [...browsePath, entry.name].join('/')}
 					<!-- Folder row -->
-					<div class="list-row-surface flex items-center gap-3 px-4 py-3 border-b transition-colors {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}">
+					<div class="browse-list-row list-row-surface flex items-center gap-3 px-4 py-3 border-b transition-colors {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}">
 						<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
 							<Folder class="w-4.5 h-4.5 text-primary" />
 						</div>
@@ -3410,7 +3476,7 @@
 					{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === getStoredFileKey(entry.file)}
 					{@const isDrive = entry.file.source === 'drive'}
 					{@const isFiltered = fileSearchQuery.trim().length > 0}
-					<div class="relative overflow-hidden border-b">
+					<div class="browse-list-row relative overflow-hidden border-b">
 						<!-- Behind-content: upload/download (hidden during selection or when row is active) -->
 						{#if selectedBrowseCount === 0 && !isSelected && !isCurrentTrack}
 						<div class="absolute inset-y-0 right-0 flex items-center gap-1.5">
@@ -3511,6 +3577,16 @@
 					</div>
 					{/if}
 				{/each}
+				{#if hasMoreEntries}
+					<p class="text-center text-muted-foreground text-xs py-4 border-t border-border/50">
+						Showing {entriesRenderCount} of {filteredEntries.length} files
+						{#if debouncedSearchQuery.trim().length === 0}
+							— use search to find specific files
+						{:else}
+							— refine your search for more results
+						{/if}
+					</p>
+				{/if}
 			{/if}
 		</div>
 
@@ -3861,6 +3937,26 @@
 {/if}
 
 <style>
+	/* ── Virtualized list rows — content-visibility: auto tells the browser to skip
+	   layout/paint for off-screen rows. contain-intrinsic-size gives the scrollbar
+	   a reasonable estimate before rows are measured. ── */
+	.browse-list-row {
+		content-visibility: auto;
+		contain-intrinsic-size: auto 56px;
+	}
+
+	/* The container that holds the list — contain: strict gives the browser a
+	   hard layout boundary so inner reflows don't cascade upward. */
+	.browse-list-container {
+		contain: layout style;
+	}
+
+	/* ── Player view container — contain: layout style isolates repaints from
+	   the browse view and vice versa. ── */
+	.player-view-container {
+		contain: layout style;
+	}
+
 	@keyframes bar1 { 0%, 100% { height: 30%; } 50% { height: 90%; } }
 	@keyframes bar2 { 0%, 100% { height: 90%; } 50% { height: 30%; } }
 </style>
