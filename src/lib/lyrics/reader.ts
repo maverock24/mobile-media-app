@@ -3,13 +3,13 @@
  *
  * Strategy (in order):
  * 1. Look for a .lrc file alongside the audio file (same path, .lrc extension)
+ *    using Capacitor's file bridge (works with SAF tree URIs on Android).
  * 2. Return 'none' if nothing found
  */
 
 import { Capacitor } from '@capacitor/core';
-import { Filesystem, Directory } from '@capacitor/filesystem';
 import { parseLrc } from './lrc';
-import type { LyricsResult, LrcLine } from './types';
+import type { LyricsResult } from './types';
 
 /**
  * Given the absolute native path of an audio file (e.g.
@@ -20,20 +20,19 @@ function lrcPathFromAudio(audioPath: string): string {
 }
 
 /**
- * Try to read a .lrc file from the device filesystem.
+ * Try to read a .lrc file using Capacitor's file bridge (convertFileSrc).
+ * This works with both direct file paths and SAF tree URI files because
+ * Capacitor's localhost bridge server has access to all granted file URIs.
  * Returns parsed lines or null if the file doesn't exist / can't be read.
  */
-async function readLrcFromPath(path: string): Promise<LrcLine[] | null> {
+async function readLrcViaBridge(path: string): Promise<string | null> {
 	try {
-		// Use Capacitor Filesystem to read the .lrc as text
-		const result = await Filesystem.readFile({
-			path,
-			directory: Directory.External,
-		});
-		const text = result.data as string;
-		if (!text || text.trim().length === 0) return null;
-		const lines = parseLrc(text);
-		return lines.length > 0 ? lines : null;
+		const bridgeUrl = Capacitor.convertFileSrc(path);
+		if (bridgeUrl === path) return null; // Capacitor couldn't convert — not a valid file path
+		const response = await fetch(bridgeUrl);
+		if (!response.ok) return null;
+		const text = await response.text();
+		return text?.trim() || null;
 	} catch {
 		return null;
 	}
@@ -52,8 +51,11 @@ export async function resolveLyrics(file: {
 	if (file.source !== 'native' || !file.path) return { source: 'none' };
 
 	const lrcPath = lrcPathFromAudio(file.path);
-	const lines = await readLrcFromPath(lrcPath);
-	if (lines) return { source: 'lrc', lines };
+	const text = await readLrcViaBridge(lrcPath);
+	if (text) {
+		const lines = parseLrc(text);
+		if (lines.length > 0) return { source: 'lrc', lines };
+	}
 
 	return { source: 'none' };
 }
