@@ -43,52 +43,54 @@
 	// when podcast/radio is playing simultaneously (Deck B background music).
 	// On other tabs, follow the global source (podcast/radio/other).
 	const isMusicTab = $derived(activeTab === 'music');
+
+	// When Deck B is the active deck, always show its per-deck state —
+	// even when browsing podcasts, radio, or settings. Otherwise Deck B's
+	// playback is invisible outside the music tab.
+	const showDeckB = $derived(mediaEngine.activeMusicDeck === 'B');
 	const deckItem = $derived(
-		isMusicTab
-			? (mediaEngine.activeMusicDeck === 'B' ? mediaEngine.deckBItem : mediaEngine.deckAItem)
+		showDeckB ? (mediaEngine.deckBItem ?? mediaEngine.item)
+			: isMusicTab ? mediaEngine.deckAItem
 			: mediaEngine.item
 	);
 	const deckCurrentTime = $derived(
-		isMusicTab
-			? (mediaEngine.activeMusicDeck === 'B' ? mediaEngine.deckBCurrentTime : mediaEngine.deckACurrentTime)
+		showDeckB ? (mediaEngine.deckBCurrentTime || mediaEngine.currentTime)
+			: isMusicTab ? mediaEngine.deckACurrentTime
 			: mediaEngine.currentTime
 	);
 	const deckDuration = $derived(
-		isMusicTab
-			? (mediaEngine.activeMusicDeck === 'B' ? mediaEngine.deckBDuration : mediaEngine.deckADuration)
+		showDeckB ? (mediaEngine.deckBDuration || mediaEngine.duration)
+			: isMusicTab ? mediaEngine.deckADuration
 			: mediaEngine.duration
 	);
 
-	// Play/pause button: on the music tab, control the active deck only.
-	// On other tabs, use the global playing flag.
+	// Play/pause: on music tab, control the visible deck. On other tabs,
+	// control globally — unless Deck B is active, in which case control B.
 	const isPlaying = $derived(
-		isMusicTab
-			? (mediaEngine.activeMusicDeck === 'A' ? mediaEngine.musicPlayingA : mediaEngine.musicPlayingB)
+		showDeckB ? mediaEngine.musicPlayingB
+			: isMusicTab ? mediaEngine.musicPlayingA
 			: mediaEngine.isPlaying
 	);
 
-	// Subtitle shows the selected/viewed deck, not the playing deck.
-	// The play/pause button already reflects playing state per-deck.
 	const displayTitle = $derived(
 		deckItem?.title ??
 		(isMusicTab ? `Deck ${mediaEngine.activeMusicDeck}` : undefined)
 	);
 	const displaySubtitle = $derived(
 		deckItem
-			? (isMusicTab
+			? (isMusicTab || showDeckB
 				? `Deck ${mediaEngine.activeMusicDeck} · ${deckItem.subtitle ?? ''}`
 				: deckItem.subtitle)
 			: (isMusicTab ? 'No track loaded' : undefined)
 	);
 
-	// Always visible on the music tab (so the A/B toggle, play button, and
-	// volume slider are always accessible). For other tabs, only show when
-	// something is playing or a track is loaded.
+	// Always visible on the music tab (A/B toggle, play button, volume).
+	// Also visible when Deck B is active (so its playback is shown).
+	// Otherwise only when something is playing.
 	const visible = $derived(
 		activeTab === 'music' ||
+		showDeckB ||
 		mediaEngine.item !== null ||
-		mediaEngine.musicPlayingA ||
-		mediaEngine.musicPlayingB ||
 		mediaEngine.podcastPlaying ||
 		mediaEngine.radioPlaying
 	);
