@@ -171,9 +171,7 @@
 			<PodcastView />
 		</div>
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'radio'}>
-			{#if activeTab === 'radio'}
-				<RadioView />
-			{/if}
+			<RadioView />
 		</div>
 		{#if activeTab === 'weather'}
 			<div class="absolute inset-0 overflow-y-auto">

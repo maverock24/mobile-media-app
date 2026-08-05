@@ -18,8 +18,8 @@ export const lyricsStore = $state({
 /** Get the text of the currently active LRC line, or empty string if none. */
 export function getCurrentLyricLine(): string {
 	const d = lyricsStore.data;
-	if (d.source !== 'lrc' || d.lines.length === 0) return '';
-	void mediaEngine.currentTime; // reactive dependency
+	if (d.source !== 'lrc' || !d.lines || d.lines.length === 0) return '';
+	void mediaEngine.currentTime;
 	const idx = findActiveLineIndex(d.lines, mediaEngine.currentTime);
 	if (idx < 0) return d.lines[0]?.text ?? '';
 	return d.lines[idx].text;
@@ -27,7 +27,8 @@ export function getCurrentLyricLine(): string {
 
 /** Whether lyrics are currently available to display. */
 export function hasLyrics(): boolean {
-	return lyricsStore.data.source === 'lrc' && lyricsStore.data.lines.length > 0;
+	const d = lyricsStore.data;
+	return d.source === 'lrc' && Array.isArray(d.lines) && d.lines.length > 0;
 }
 
 /**
