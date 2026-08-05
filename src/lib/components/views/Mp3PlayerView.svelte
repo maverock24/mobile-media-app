@@ -2349,16 +2349,24 @@
 			}
 			return false;
 		}
-		// Do NOT call audioEl.load() — calling load() then play() immediately causes an AbortError
-		// ("play() request was interrupted by a new load request") in Chromium/Android WebView.
-		// Setting src and calling play() directly is sufficient; the browser loads internally.
+		// Do NOT call audioEl.load() — calling load() then play() immediately causes
+		// an AbortError in Chromium/Android WebView.
 		audioEl.src = url;
 		syncTrackToMediaEngine(index);
 		void preloadNextTrack(index);
+
+		// Set playing flag BEFORE claimAudio — same fix as resumePlayback.
+		const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
+		mediaEngine[deckFlag] = true;
+
 		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
 		initAudioContext();
 		isBuffering = true;
-		safePlay(() => { isBuffering = false; isPlaying = false; });
+		safePlay(() => {
+			isBuffering = false;
+			isPlaying = false;
+			mediaEngine[deckFlag] = false;
+		});
 		return true;
 	}
 
@@ -2997,11 +3005,16 @@
 				audioEl.src = url;
 				syncTrackToMediaEngine(nextIndex);
 				void preloadNextTrack(nextIndex);
+
+				// Set playing flag BEFORE claimAudio — same fix as resumePlayback.
+				const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
+				mediaEngine[deckFlag] = true;
+
 				claimAudio(deck === 'A' ? 'musicA' : 'musicB');
 				initAudioContext();
 				if (wasPlaying) {
 					isBuffering = true;
-					safePlay(() => { isPlaying = false; isBuffering = false; });
+					safePlay(() => { isPlaying = false; isBuffering = false; mediaEngine[deckFlag] = false; });
 				}
 			}
 		} finally {
