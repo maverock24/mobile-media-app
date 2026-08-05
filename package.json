@@ -68,5 +68,5 @@
 			"netlify-cli"
 		]
 	},
-	"packageManager": "pnpm@11",
+	"packageManager": "pnpm@11"
 }
