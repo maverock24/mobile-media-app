@@ -10,7 +10,8 @@
 	} from '$lib/stores/sleepTimer.svelte';
 	import { triggerToggleHaptic } from '$lib/native/haptics';
 	import { formatClock as formatTime } from '$lib/models/music';
-	import { Play, Pause, SkipBack, SkipForward, Moon, X, Repeat, Volume2 } from 'lucide-svelte';
+	import { hasLyrics, getCurrentLyricLine } from '$lib/stores/lyrics.svelte';
+	import { Play, Pause, SkipBack, SkipForward, Moon, X, Repeat, Volume2, ScrollText } from 'lucide-svelte';
 
 	interface Props {
 		/** The currently selected tab. */
@@ -144,6 +145,8 @@
 	const sleepTimerLabel = $derived(
 		sleepTimer.isActive ? formatSleepTimerRemaining(sleepTimer.remainingMs) : 'Off'
 	);
+	const lyricLine = $derived(getCurrentLyricLine());
+	const showLyrics = $derived(hasLyrics());
 
 	function seekTo(time: number) {
 		const target = Math.max(0, Math.min(time, deckDuration || 0));
@@ -218,6 +221,12 @@
 			>
 				<p class="mini-player-info-title text-sm font-semibold leading-tight truncate">{displayTitle}</p>
 				<p class="mini-player-info-subtitle text-xs text-muted-foreground leading-tight truncate mt-0.5">{displaySubtitle}</p>
+				{#if showLyrics && lyricLine}
+					<p class="text-xs text-primary/70 leading-tight truncate mt-1 flex items-center gap-1">
+						<ScrollText class="w-3 h-3 shrink-0" />
+						{lyricLine}
+					</p>
+				{/if}
 			</button>
 
 			<div class="relative min-h-[3.5rem]">

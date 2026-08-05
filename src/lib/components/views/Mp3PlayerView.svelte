@@ -9,8 +9,7 @@
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
 	import LyricsPanel from '$lib/components/music/LyricsPanel.svelte';
-	import { resolveLyrics } from '$lib/lyrics/reader';
-	import type { LyricsResult } from '$lib/lyrics/types';
+	import { resolveTrackLyrics, lyricsStore, clearLyrics } from '$lib/stores/lyrics.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import { bytesFromBase64, arrayBufferFromBytes, blobFromNativePath } from '$lib/audio/fileResolver';
 	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
@@ -252,10 +251,6 @@
 	let showPanel   = $state<'none' | 'speed' | 'eq' | 'lyrics'>('none');
 	let isRestoring = $state(false);  // set to true by init effect on Android native only
 
-	// ── Lyrics state ──
-	let lyricsData    = $state<LyricsResult>({ source: 'none' });
-	let lyricsLoading = $state(false);
-
 	let preloadedTrackIndex = $state<number | null>(null);
 	let preloadRequestId = 0;
 	// Prevents background folder scans from overwriting the track list after the user has
@@ -482,26 +477,15 @@
 		musicSettings.lastTrackKey || (currentTrack ? getStoredFileKey(currentTrack.source) : '')
 	);
 
-	// ── Resolve lyrics when the current track changes ──
+	// ── Auto-resolve lyrics whenever the playing track changes ──
 	$effect(() => {
 		const track = currentTrack;
-		if (!track || showPanel === 'none') {
-			lyricsData = { source: 'none' };
+		if (!track || !isPlaying) {
+			// Don't clear on pause — keep lyrics visible so user can read
 			return;
 		}
-		if (track.source.source !== 'native' || !track.source.path) {
-			lyricsData = { source: 'none' };
-			return;
-		}
-		// Only resolve if lyrics panel is open or was recently opened
-		lyricsLoading = true;
-		resolveLyrics(track.source).then((result) => {
-			lyricsData = result;
-		}).catch(() => {
-			lyricsData = { source: 'none' };
-		}).finally(() => {
-			lyricsLoading = false;
-		});
+		const key = getStoredFileKey(track.source);
+		void resolveTrackLyrics(track.source, key);
 	});
 
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
@@ -3789,8 +3773,8 @@
 
 	<!-- Lyrics panel -->
 	{#if showPanel === 'lyrics'}
-		<div class="border-t bg-card/95 shrink-0 {lyricsLoading ? 'opacity-60' : ''}" style="max-height:40dvh;">
-			<LyricsPanel lyrics={lyricsData} currentTimeSec={currentTime} />
+		<div class="border-t bg-card/95 shrink-0 {lyricsStore.loading ? 'opacity-60' : ''}" style="max-height:40dvh;">
+			<LyricsPanel lyrics={lyricsStore.data} currentTimeSec={currentTime} />
 		</div>
 	{/if}
 
