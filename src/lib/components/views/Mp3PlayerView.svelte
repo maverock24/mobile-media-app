@@ -8,6 +8,9 @@
 	import Input from '$lib/components/ui/Input.svelte';
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
+	import LyricsPanel from '$lib/components/music/LyricsPanel.svelte';
+	import { resolveLyrics } from '$lib/lyrics/reader';
+	import type { LyricsResult } from '$lib/lyrics/types';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import { bytesFromBase64, arrayBufferFromBytes, blobFromNativePath } from '$lib/audio/fileResolver';
 	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
@@ -73,7 +76,8 @@
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
-		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X
+		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X,
+		ScrollText
 	} from 'lucide-svelte';
 
 	interface Track {
@@ -245,8 +249,12 @@
 	// ── Swipe left in full player → go back to browse list ───────
 	// Wired via use:swipeBack on the player container in the template below.
 
-	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
+	let showPanel   = $state<'none' | 'speed' | 'eq' | 'lyrics'>('none');
 	let isRestoring = $state(false);  // set to true by init effect on Android native only
+
+	// ── Lyrics state ──
+	let lyricsData    = $state<LyricsResult>({ source: 'none' });
+	let lyricsLoading = $state(false);
 
 	let preloadedTrackIndex = $state<number | null>(null);
 	let preloadRequestId = 0;
@@ -473,6 +481,28 @@
 	const currentMusicTrackKey = $derived(
 		musicSettings.lastTrackKey || (currentTrack ? getStoredFileKey(currentTrack.source) : '')
 	);
+
+	// ── Resolve lyrics when the current track changes ──
+	$effect(() => {
+		const track = currentTrack;
+		if (!track || showPanel === 'none') {
+			lyricsData = { source: 'none' };
+			return;
+		}
+		if (track.source.source !== 'native' || !track.source.path) {
+			lyricsData = { source: 'none' };
+			return;
+		}
+		// Only resolve if lyrics panel is open or was recently opened
+		lyricsLoading = true;
+		resolveLyrics(track.source).then((result) => {
+			lyricsData = result;
+		}).catch(() => {
+			lyricsData = { source: 'none' };
+		}).finally(() => {
+			lyricsLoading = false;
+		});
+	});
 
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
 	const currentLibraryLabel = $derived(
@@ -3051,7 +3081,7 @@
 		musicSettings.isMuted = musicSettings.deckBVolume === 0;
 	}
 	function toggleMute() { musicSettings.isMuted = !musicSettings.isMuted; }
-	function togglePanel(p: 'speed' | 'eq') {
+	function togglePanel(p: 'speed' | 'eq' | 'lyrics') {
 		showPanel = showPanel === p ? 'none' : p;
 		if (showPanel !== 'none') initAudioContext();
 	}
@@ -3757,6 +3787,13 @@
 		/>
 	{/if}
 
+	<!-- Lyrics panel -->
+	{#if showPanel === 'lyrics'}
+		<div class="border-t bg-card/95 shrink-0 {lyricsLoading ? 'opacity-60' : ''}" style="max-height:40dvh;">
+			<LyricsPanel lyrics={lyricsData} currentTimeSec={currentTime} />
+		</div>
+	{/if}
+
 	<!-- Bottom toolbar -->
 	<div class="border-t bg-background px-3 pt-3 pb-4 shrink-0 flex gap-3">
 		<button
@@ -3767,6 +3804,15 @@
 			onclick={() => { showQueue = !showQueue; showPanel = 'none'; }}>
 			<FolderOpen class="w-7 h-7" />
 			<span class="text-[11px] font-semibold tracking-wide">Browse</span>
+		</button>
+		<button
+			class="flex-1 flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all active:scale-95
+				{showPanel === 'lyrics'
+					? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30'
+					: 'bg-secondary/60 text-muted-foreground hover:bg-secondary'}"
+			onclick={() => togglePanel('lyrics')}>
+			<ScrollText class="w-7 h-7" />
+			<span class="text-[11px] font-semibold tracking-wide">Lyrics</span>
 		</button>
 		<button
 			class="flex-1 flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all active:scale-95
