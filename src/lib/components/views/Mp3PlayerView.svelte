@@ -804,22 +804,36 @@
 	 *  fail with various errors when the Capacitor bridge isn't ready yet
 	 *  (especially after pause→play on local files). Uses up to 8 retries
 	 *  on native with 300ms backoff (total ~2.4s), reloading src between
-	 *  attempts to recover from stale bridge connections. Web stays at
-	 *  3×150ms for AbortError only. */
+	 *  attempts to recover from stale bridge connections. Each attempt has
+	 *  a 4s timeout to prevent hanging on a never-resolving play() promise.
+	 *  Web stays at 3×150ms for AbortError only. */
 	function safePlay(onFailure?: () => void, onSuccess?: () => void) {
 		const maxRetries = isNativeApp ? 8 : 3;
 		const retryDelayMs = isNativeApp ? 300 : 150;
+		const playTimeoutMs = isNativeApp ? 4000 : 0;
 		let _safePlayReloaded = false;
 		const tryPlay = (attempt: number) => {
-			audioEl!.play().then(() => {
-				onSuccess?.();
+			const playPromise = audioEl!.play();
+			const timeoutPromise = playTimeoutMs > 0
+				? new Promise<void>((_, reject) => setTimeout(() => reject(new Error('play() timed out')), playTimeoutMs))
+				: null;
+			const race = timeoutPromise ? Promise.race([playPromise.then(() => 'success' as const), timeoutPromise.then(() => 'timeout' as const)]) : playPromise.then(() => 'success' as const);
+			race.then((result) => {
+				if (result === 'success') {
+					onSuccess?.();
+				} else {
+					// timeout — treated as failure
+					if (attempt < maxRetries) {
+						setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
+					} else {
+						onFailure?.();
+					}
+				}
 			}).catch((err: Error) => {
 				const shouldRetry = isNativeApp
-					? attempt < maxRetries  // retry ALL errors on native
+					? attempt < maxRetries
 					: err?.name === 'AbortError' && attempt < maxRetries;
 				if (shouldRetry) {
-					// On native, force-reload the src on the 2nd retry to recover
-					// from stale Capacitor bridge connections after pause.
 					if (isNativeApp && attempt === 2 && !_safePlayReloaded && audioEl?.src) {
 						_safePlayReloaded = true;
 						const currentSrc = audioEl.src;
