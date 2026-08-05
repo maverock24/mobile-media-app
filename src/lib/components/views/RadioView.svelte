@@ -107,6 +107,7 @@
 	function resumePlayback() {
 		if (!currentStation || mediaEngine.isPlaying) return;
 		void triggerPlaybackHaptic(true);
+		mediaEngine.radioPlaying = true;
 		claimAudio('radio');
 		isBuffering = true;
 		mediaEngine.resumeStream();

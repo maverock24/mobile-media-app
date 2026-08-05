@@ -219,10 +219,12 @@
 					if (audioEl.currentTime < positionSec) audioEl.currentTime = positionSec;
 				}, { once: true });
 			}
+			mediaEngine.podcastPlaying = true;
 			claimAudio('podcast');
 			isBuffering = true;
 			safePlay(() => {
 				isBuffering = false;
+				mediaEngine.podcastPlaying = false;
 				addToast({ message: 'Reconnected but failed to resume. Tap play to retry.', type: 'warning', autoDismissMs: 5000 });
 			});
 		};
@@ -864,6 +866,7 @@
 		if (!audioEl || !currentEpisode || isPlaying) return;
 		_userPaused = false;
 		void triggerPlaybackHaptic(true);
+		mediaEngine.podcastPlaying = true;
 		claimAudio('podcast');
 		syncEpisodeAudioSource(
 			currentEpisode.podcast,
@@ -871,6 +874,7 @@
 			getEpisodeResumePosition(currentEpisode.episode)
 		);
 		safePlay(() => {
+			mediaEngine.podcastPlaying = false;
 			console.error('[Podcast] resumePlayback() failed');
 		});
 	}

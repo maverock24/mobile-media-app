@@ -3043,11 +3043,16 @@
 				audioEl.src = url;
 				syncTrackToMediaEngine(prevIndex);
 				void preloadNextTrack(prevIndex);
+
+				// Set playing flag BEFORE claimAudio.
+				const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
+				mediaEngine[deckFlag] = true;
+
 				claimAudio(deck === 'A' ? 'musicA' : 'musicB');
 				initAudioContext();
 				if (wasPlaying) {
 					isBuffering = true;
-					safePlay(() => { isPlaying = false; isBuffering = false; });
+					safePlay(() => { isPlaying = false; isBuffering = false; mediaEngine[deckFlag] = false; });
 				}
 			}
 		} finally {
