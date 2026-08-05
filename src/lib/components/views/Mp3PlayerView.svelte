@@ -2349,18 +2349,20 @@
 			}
 			return false;
 		}
-		// Do NOT call audioEl.load() — calling load() then play() immediately causes
-		// an AbortError in Chromium/Android WebView.
+		// initAudioContext MUST be called BEFORE setting audioEl.src —
+		// createMediaElementSource must connect to the audio element
+		// before it starts loading, or it fails on Android WebView.
+		initAudioContext();
+
 		audioEl.src = url;
 		syncTrackToMediaEngine(index);
 		void preloadNextTrack(index);
 
-		// Set playing flag BEFORE claimAudio — same fix as resumePlayback.
+		// Set playing flag BEFORE claimAudio.
 		const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
 		mediaEngine[deckFlag] = true;
 
 		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
-		initAudioContext();
 		isBuffering = true;
 		safePlay(() => {
 			isBuffering = false;
@@ -3000,18 +3002,21 @@
 					isPlaying = false; isBuffering = false;
 					return;
 				}
-				// Release old URL only after new URL is ready so streaming doesn't error
+				// Release old URL only after new URL is ready
 				releaseTrackUrl(idx);
+
+				// initAudioContext MUST be before setting audioEl.src.
+				initAudioContext();
+
 				audioEl.src = url;
 				syncTrackToMediaEngine(nextIndex);
 				void preloadNextTrack(nextIndex);
 
-				// Set playing flag BEFORE claimAudio — same fix as resumePlayback.
+				// Set playing flag BEFORE claimAudio.
 				const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
 				mediaEngine[deckFlag] = true;
 
 				claimAudio(deck === 'A' ? 'musicA' : 'musicB');
-				initAudioContext();
 				if (wasPlaying) {
 					isBuffering = true;
 					safePlay(() => { isPlaying = false; isBuffering = false; mediaEngine[deckFlag] = false; });
@@ -3040,6 +3045,10 @@
 				}
 				// Release old URL only after new URL is ready
 				releaseTrackUrl(oldIndex);
+
+				// initAudioContext MUST be before setting audioEl.src.
+				initAudioContext();
+
 				audioEl.src = url;
 				syncTrackToMediaEngine(prevIndex);
 				void preloadNextTrack(prevIndex);
@@ -3049,7 +3058,6 @@
 				mediaEngine[deckFlag] = true;
 
 				claimAudio(deck === 'A' ? 'musicA' : 'musicB');
-				initAudioContext();
 				if (wasPlaying) {
 					isBuffering = true;
 					safePlay(() => { isPlaying = false; isBuffering = false; mediaEngine[deckFlag] = false; });
