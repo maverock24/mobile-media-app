@@ -253,7 +253,12 @@ export const mediaEngine = $state<NowPlayingState & {
 	/** Begin playing a live stream URL through a dedicated audio element. */
 	playStream(url: string, item: MediaItem) {
 		claimAudio('radio');
-		_streamShouldPlay = true;
+		// IMPORTANT: set _streamShouldPlay AFTER tearing down the old stream.
+		// If the old stream's 'ended' event fires during stopStreamAudio() (which
+		// can happen when src is cleared on a live stream), and _streamShouldPlay
+		// is already true, the ended handler calls reconnectStream() → schedules
+		// playStream() ~1s later → kills the new stream we're about to create,
+		// causing the "stops immediately after starting" bug.
 		// Route MiniPlayer / web mediaSession / native transport controls to the live
 		// stream so pause/resume act on _streamAudio instead of a no-op fallback.
 		this.setPlaybackHandlers(
@@ -264,6 +269,10 @@ export const mediaEngine = $state<NowPlayingState & {
 		stopStreamAudio();
 		_streamAudio = new Audio();
 		_streamAudio.preload = 'none';
+
+		// Only now mark that the user wants playback — after the old stream is
+		// fully torn down and can no longer fire spurious 'ended' events.
+		_streamShouldPlay = true;
 
 		_streamAudio.addEventListener('play', () => { this.radioPlaying = true; _streamCallbacks.playing?.(); });
 		_streamAudio.addEventListener('pause', () => { this.radioPlaying = false; });
