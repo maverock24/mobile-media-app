@@ -2819,11 +2819,7 @@
 		initAudioContext();
 
 		// Set playing flag BEFORE claimAudio so mediaEngine.isPlaying never
-		// transiently drops to false while we pause other sources. Without this,
-		// the isPlaying→false transition triggers native abandonAudioFocus(),
-		// and the subsequent isPlaying→true (when 'play' fires) triggers
-		// requestAudioFocus() — rapid abandon+request within milliseconds
-		// confuses Android into pausing the just-started audio element.
+		// transiently drops to false while we pause other sources.
 		const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
 		mediaEngine[deckFlag] = true;
 
@@ -2837,18 +2833,36 @@
 			}
 			audioEl.src = url;
 			syncTrackToMediaEngine(musicSettings.lastTrackIndex);
+		} else if (isNativeApp && audioEl.src) {
+			// On native Android, the Capacitor localhost bridge closes its HTTP
+			// connection when audioEl.pause() is called. Calling play() on a
+			// stale connection fails silently or with network errors. Force a
+			// fresh connection by toggling the src — this re-establishes the
+			// bridge without losing the playback position.
+			const resumePos = audioEl.currentTime;
+			const currentSrc = audioEl.src;
+			audioEl.src = '';
+			audioEl.src = currentSrc;
+			// Restore position — Capacitor serves local files with range
+			// support so seeking works immediately after setting src.
+			if (resumePos > 0.5) audioEl.currentTime = resumePos;
 		}
 		void preloadNextTrack(musicSettings.lastTrackIndex);
 		safePlay(
 			() => {
-				// Playback failed after all retries — clear playing flag + reset
-				// audio element so next attempt starts fresh.
+				// Playback failed after all retries — reset audio element and
+				// clear cached URL so next attempt gets a fresh Capacitor bridge.
 				isBuffering = false;
 				mediaEngine[deckFlag] = false;
 				if (audioEl) {
-					audioEl.removeAttribute('src');
+					audioEl.src = '';
 					audioEl.load();
 				}
+				// Clear the cached track URL so ensureTrackUrl generates a
+				// fresh Capacitor bridge URL on the next attempt instead of
+				// reusing a potentially stale one.
+				const track = tracks[musicSettings.lastTrackIndex];
+				if (track) track.url = '';
 			},
 		);
 	}
