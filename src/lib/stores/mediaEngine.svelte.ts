@@ -252,6 +252,10 @@ export const mediaEngine = $state<NowPlayingState & {
 	// ─── Live stream playback (radio) ──────────────────────────────────
 	/** Begin playing a live stream URL through a dedicated audio element. */
 	playStream(url: string, item: MediaItem) {
+		// Set playing flag BEFORE claimAudio so isPlaying never transiently
+		// drops to false — prevents rapid focus abandon→request on Android.
+		this.radioPlaying = true;
+
 		claimAudio('radio');
 		// IMPORTANT: set _streamShouldPlay AFTER tearing down the old stream.
 		// If the old stream's 'ended' event fires during stopStreamAudio() (which

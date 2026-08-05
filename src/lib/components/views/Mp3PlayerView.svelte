@@ -2789,10 +2789,21 @@
 
 		void triggerPlaybackHaptic(true);
 		initAudioContext();
+
+		// Set playing flag BEFORE claimAudio so mediaEngine.isPlaying never
+		// transiently drops to false while we pause other sources. Without this,
+		// the isPlaying→false transition triggers native abandonAudioFocus(),
+		// and the subsequent isPlaying→true (when 'play' fires) triggers
+		// requestAudioFocus() — rapid abandon+request within milliseconds
+		// confuses Android into pausing the just-started audio element.
+		const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
+		mediaEngine[deckFlag] = true;
+
 		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
 		if (!audioEl.src || audioEl.src === window.location.href) {
 			const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
 			if (!url) {
+				mediaEngine[deckFlag] = false;
 				alert('Unable to load this track.');
 				return;
 			}
@@ -2800,15 +2811,12 @@
 			syncTrackToMediaEngine(musicSettings.lastTrackIndex);
 		}
 		void preloadNextTrack(musicSettings.lastTrackIndex);
-		// On failure, reset the audio element so the next resume attempt forces a
-		// fresh src load — the audio element can get stuck after pause→play on
-		// Android WebView, and without clearing src, repeated play() calls keep
-		// failing silently (the "press 8 times before it works" bug).
 		safePlay(
 			() => {
-				// Playback failed after all retries — clear src to force reload
-				// on next attempt instead of retrying a stuck audio element.
+				// Playback failed after all retries — clear playing flag + reset
+				// audio element so next attempt starts fresh.
 				isBuffering = false;
+				mediaEngine[deckFlag] = false;
 				if (audioEl) {
 					audioEl.removeAttribute('src');
 					audioEl.load();

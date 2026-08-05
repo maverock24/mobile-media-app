@@ -815,6 +815,11 @@
 		cancelNetworkRetry(); // clear any pending retry for the previous episode
 		podcastSettings.playbackSpeed = 1.0; // reset speed for each new episode so the 1.5x button is off by default
 		void triggerPlaybackHaptic(true);
+
+		// Set playing flag BEFORE claimAudio so isPlaying never transiently
+		// drops to false — prevents rapid focus abandon→request on Android.
+		mediaEngine.podcastPlaying = true;
+
 		claimAudio('podcast');
 		currentEpisode = { podcast, episode };
 		const resumeAt = getEpisodeResumePosition(episode);
@@ -824,6 +829,7 @@
 		isBuffering = true;
 		safePlay(() => {
 			isBuffering = false;
+			mediaEngine.podcastPlaying = false;
 			console.error('[Podcast] play() failed:', 'url:', episode.audioUrl);
 			addToast({ message: `Playback failed.`, type: 'error' });
 		});
