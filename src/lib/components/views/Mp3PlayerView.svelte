@@ -8,8 +8,6 @@
 	import Input from '$lib/components/ui/Input.svelte';
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
-	import LyricsPanel from '$lib/components/music/LyricsPanel.svelte';
-	import { resolveTrackLyrics, lyricsStore, clearLyrics } from '$lib/stores/lyrics.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import { bytesFromBase64, arrayBufferFromBytes, blobFromNativePath } from '$lib/audio/fileResolver';
 	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
@@ -75,8 +73,7 @@
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
-		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X,
-		ScrollText
+		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X
 	} from 'lucide-svelte';
 
 	interface Track {
@@ -248,7 +245,7 @@
 	// ── Swipe left in full player → go back to browse list ───────
 	// Wired via use:swipeBack on the player container in the template below.
 
-	let showPanel   = $state<'none' | 'speed' | 'eq' | 'lyrics'>('none');
+	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
 	let isRestoring = $state(false);  // set to true by init effect on Android native only
 
 	let preloadedTrackIndex = $state<number | null>(null);
@@ -476,21 +473,6 @@
 	const currentMusicTrackKey = $derived(
 		musicSettings.lastTrackKey || (currentTrack ? getStoredFileKey(currentTrack.source) : '')
 	);
-
-	// ── Auto-resolve lyrics whenever the playing track changes ──
-	$effect(() => {
-		try {
-			const track = currentTrack;
-			if (!track || !isPlaying) return;
-			// Skip lyrics resolution when radio is also playing — avoids
-			// Capacitor bridge concurrency issues on Android.
-			if (mediaEngine.radioPlaying) return;
-			const key = getStoredFileKey(track.source);
-			void resolveTrackLyrics(track.source, key);
-		} catch {
-			// Lyrics resolution must never crash playback.
-		}
-	});
 
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
 	const currentLibraryLabel = $derived(
@@ -3095,7 +3077,7 @@
 		musicSettings.isMuted = musicSettings.deckBVolume === 0;
 	}
 	function toggleMute() { musicSettings.isMuted = !musicSettings.isMuted; }
-	function togglePanel(p: 'speed' | 'eq' | 'lyrics') {
+	function togglePanel(p: 'speed' | 'eq') {
 		showPanel = showPanel === p ? 'none' : p;
 		if (showPanel !== 'none') initAudioContext();
 	}
@@ -3801,13 +3783,6 @@
 		/>
 	{/if}
 
-	<!-- Lyrics panel -->
-	{#if showPanel === 'lyrics'}
-		<div class="border-t bg-card/95 shrink-0 {lyricsStore.loading ? 'opacity-60' : ''}" style="max-height:40dvh;">
-			<LyricsPanel lyrics={lyricsStore.data} currentTimeSec={currentTime} />
-		</div>
-	{/if}
-
 	<!-- Bottom toolbar -->
 	<div class="border-t bg-background px-3 pt-3 pb-4 shrink-0 flex gap-3">
 		<button
@@ -3818,15 +3793,6 @@
 			onclick={() => { showQueue = !showQueue; showPanel = 'none'; }}>
 			<FolderOpen class="w-7 h-7" />
 			<span class="text-[11px] font-semibold tracking-wide">Browse</span>
-		</button>
-		<button
-			class="flex-1 flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all active:scale-95
-				{showPanel === 'lyrics'
-					? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30'
-					: 'bg-secondary/60 text-muted-foreground hover:bg-secondary'}"
-			onclick={() => togglePanel('lyrics')}>
-			<ScrollText class="w-7 h-7" />
-			<span class="text-[11px] font-semibold tracking-wide">Lyrics</span>
 		</button>
 		<button
 			class="flex-1 flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all active:scale-95
