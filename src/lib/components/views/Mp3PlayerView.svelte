@@ -801,14 +801,18 @@
 	}
 
 	/** Retry audioEl.play() on AbortError — Android WebView can abort when
-	 *  the source isn't ready yet, especially after setting src. */
+	 *  the source isn't ready yet, especially after setting src. Uses up to 6
+	 *  retries with 150ms→300ms→450ms→... backoff (total ~3.15s) to handle cold
+	 *  Capacitor bridge starts and slow local file resolution. */
 	function safePlay(onFailure?: () => void, onSuccess?: () => void) {
+		const maxRetries = isNativeApp ? 6 : 3;
+		const retryDelayMs = isNativeApp ? 250 : 150;
 		const tryPlay = (attempt: number) => {
 			audioEl!.play().then(() => {
 				onSuccess?.();
 			}).catch((err: Error) => {
-				if (err?.name === 'AbortError' && attempt < 3) {
-					setTimeout(() => tryPlay(attempt + 1), 150);
+				if (err?.name === 'AbortError' && attempt < maxRetries) {
+					setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
 				} else {
 					onFailure?.();
 				}
@@ -2796,7 +2800,21 @@
 			syncTrackToMediaEngine(musicSettings.lastTrackIndex);
 		}
 		void preloadNextTrack(musicSettings.lastTrackIndex);
-		safePlay();
+		// On failure, reset the audio element so the next resume attempt forces a
+		// fresh src load — the audio element can get stuck after pause→play on
+		// Android WebView, and without clearing src, repeated play() calls keep
+		// failing silently (the "press 8 times before it works" bug).
+		safePlay(
+			() => {
+				// Playback failed after all retries — clear src to force reload
+				// on next attempt instead of retrying a stuck audio element.
+				isBuffering = false;
+				if (audioEl) {
+					audioEl.removeAttribute('src');
+					audioEl.load();
+				}
+			},
+		);
 	}
 
 	async function selectTrack(index: number) {

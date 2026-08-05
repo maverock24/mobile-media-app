@@ -139,12 +139,15 @@
 	let _reconnectListener: (() => void) | null = null;
 
 	/** Retry audioEl.play() on AbortError — remote URLs can abort on Android
-	 *  WebView when the source isn't ready yet after setting src. */
+	 *  WebView when the source isn't ready yet after setting src. Uses up to 6
+	 *  retries on native (3 on web) with longer backoff for cold Capacitor starts. */
 	function safePlay(onFailure?: () => void) {
+		const maxRetries = Capacitor.isNativePlatform() ? 6 : 3;
+		const retryDelayMs = Capacitor.isNativePlatform() ? 250 : 150;
 		const tryPlay = (attempt: number) => {
 			audioEl!.play().catch((err: Error) => {
-				if (err?.name === 'AbortError' && attempt < 3) {
-					setTimeout(() => tryPlay(attempt + 1), 150);
+				if (err?.name === 'AbortError' && attempt < maxRetries) {
+					setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
 				} else {
 					onFailure?.();
 				}
