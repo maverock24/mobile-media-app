@@ -605,7 +605,7 @@ div[role="tablist"] {
 
 /* Layout containment for tab panels — prevents layout recalculation from
    cascading out of a single tab panel into the shell when content changes. */
-main[style*="contain"] > .absolute.inset-0 {
+main.overflow-hidden.relative > .absolute.inset-0 {
 	contain: layout style;
 }
 

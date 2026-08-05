@@ -149,26 +149,25 @@
 		<MiniPlayer activeTab={activeTab} position="top" onNavigateTo={navigateToTab} />
 	{/if}
 
-	<!--
-		Tab panels use visibility + pointer-events instead of display:none.
-		Switching display:none → visible forces the browser to fully re-layout
-		the panel's DOM tree (hundreds of list rows in the music player).
-		visibility:hidden keeps the element in layout so the browser can use
-		the cached layout tree — tab switches become near-instant paint flips.
-		content-visibility:hidden on hidden panels skips rendering entirely.
-	-->
+	<!-- Content -->
 	<main class="flex-1 overflow-hidden relative" style="contain: layout style;">
-		<div class="absolute inset-0" style="visibility:{activeTab === 'music' ? 'visible' : 'hidden'}; pointer-events:{activeTab === 'music' ? 'auto' : 'none'}; content-visibility:{activeTab === 'music' ? 'visible' : 'hidden'};">
+		<!--
+			Music decks are mounted one at a time via {#if}. The wrapper
+			uses class:hidden (display:none) which does NOT pause audio —
+			the <audio> element keeps playing even when the tab is hidden.
+			Do NOT use content-visibility:hidden here — it suspends media.
+		-->
+		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'music'}>
 			{#if mediaEngine.activeMusicDeck === 'A'}
 				<Mp3PlayerView deck="A" {activeTab} />
 			{:else}
 				<Mp3PlayerView deck="B" {activeTab} />
 			{/if}
 		</div>
-		<div class="absolute inset-0" style="visibility:{activeTab === 'podcasts' ? 'visible' : 'hidden'}; pointer-events:{activeTab === 'podcasts' ? 'auto' : 'none'}; content-visibility:{activeTab === 'podcasts' ? 'visible' : 'hidden'};">
+		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'podcasts'}>
 			<PodcastView />
 		</div>
-		<div class="absolute inset-0" style="visibility:{activeTab === 'radio' ? 'visible' : 'hidden'}; pointer-events:{activeTab === 'radio' ? 'auto' : 'none'}; content-visibility:{activeTab === 'radio' ? 'visible' : 'hidden'};">
+		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'radio'}>
 			{#if activeTab === 'radio'}
 				<RadioView />
 			{/if}
