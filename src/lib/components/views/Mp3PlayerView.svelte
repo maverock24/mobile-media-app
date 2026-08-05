@@ -479,13 +479,17 @@
 
 	// ── Auto-resolve lyrics whenever the playing track changes ──
 	$effect(() => {
-		const track = currentTrack;
-		if (!track || !isPlaying) {
-			// Don't clear on pause — keep lyrics visible so user can read
-			return;
+		try {
+			const track = currentTrack;
+			if (!track || !isPlaying) return;
+			// Skip lyrics resolution when radio is also playing — avoids
+			// Capacitor bridge concurrency issues on Android.
+			if (mediaEngine.radioPlaying) return;
+			const key = getStoredFileKey(track.source);
+			void resolveTrackLyrics(track.source, key);
+		} catch {
+			// Lyrics resolution must never crash playback.
 		}
-		const key = getStoredFileKey(track.source);
-		void resolveTrackLyrics(track.source, key);
 	});
 
 	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
