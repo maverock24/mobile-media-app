@@ -800,18 +800,32 @@
 		}
 	}
 
-	/** Retry audioEl.play() on AbortError — Android WebView can abort when
-	 *  the source isn't ready yet, especially after setting src. Uses up to 6
-	 *  retries with 150ms→300ms→450ms→... backoff (total ~3.15s) to handle cold
-	 *  Capacitor bridge starts and slow local file resolution. */
+	/** Retry audioEl.play() on failure — Android WebView can abort or
+	 *  fail with various errors when the Capacitor bridge isn't ready yet
+	 *  (especially after pause→play on local files). Uses up to 8 retries
+	 *  on native with 300ms backoff (total ~2.4s), reloading src between
+	 *  attempts to recover from stale bridge connections. Web stays at
+	 *  3×150ms for AbortError only. */
 	function safePlay(onFailure?: () => void, onSuccess?: () => void) {
-		const maxRetries = isNativeApp ? 6 : 3;
-		const retryDelayMs = isNativeApp ? 250 : 150;
+		const maxRetries = isNativeApp ? 8 : 3;
+		const retryDelayMs = isNativeApp ? 300 : 150;
+		let _safePlayReloaded = false;
 		const tryPlay = (attempt: number) => {
 			audioEl!.play().then(() => {
 				onSuccess?.();
 			}).catch((err: Error) => {
-				if (err?.name === 'AbortError' && attempt < maxRetries) {
+				const shouldRetry = isNativeApp
+					? attempt < maxRetries  // retry ALL errors on native
+					: err?.name === 'AbortError' && attempt < maxRetries;
+				if (shouldRetry) {
+					// On native, force-reload the src on the 2nd retry to recover
+					// from stale Capacitor bridge connections after pause.
+					if (isNativeApp && attempt === 2 && !_safePlayReloaded && audioEl?.src) {
+						_safePlayReloaded = true;
+						const currentSrc = audioEl.src;
+						audioEl.src = '';
+						audioEl.src = currentSrc;
+					}
 					setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
 				} else {
 					onFailure?.();
