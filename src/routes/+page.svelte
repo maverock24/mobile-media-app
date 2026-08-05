@@ -152,17 +152,20 @@
 	<!-- Content -->
 	<main class="flex-1 overflow-hidden relative" style="contain: layout style;">
 		<!--
-			Music decks are mounted one at a time via {#if}. The wrapper
-			uses class:hidden (display:none) which does NOT pause audio —
-			the <audio> element keeps playing even when the tab is hidden.
-			Do NOT use content-visibility:hidden here — it suspends media.
+			Both music decks are ALWAYS mounted so they can play
+			simultaneously (Deck B can mix with podcast/radio, both
+			decks can play at the same time). class:hidden (display:none)
+			does NOT pause audio — the <audio> elements keep playing.
+			Only one deck's UI is visible at a time, controlled by
+			mediaEngine.activeMusicDeck.
 		-->
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'music'}>
-			{#if mediaEngine.activeMusicDeck === 'A'}
+			<div class="absolute inset-0" class:hidden={mediaEngine.activeMusicDeck !== 'A'}>
 				<Mp3PlayerView deck="A" {activeTab} />
-			{:else}
+			</div>
+			<div class="absolute inset-0" class:hidden={mediaEngine.activeMusicDeck !== 'B'}>
 				<Mp3PlayerView deck="B" {activeTab} />
-			{/if}
+			</div>
 		</div>
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'podcasts'}>
 			<PodcastView />
