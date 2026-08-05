@@ -44,8 +44,9 @@ export function claimAudio(id: AudioSourceId): void {
 		if (id === 'musicB' && (other === 'podcast' || other === 'radio')) continue;
 		_stopFns[other]?.();
 	}
-	// Stop any active live stream unless this is a radio claim
-	if (id !== 'radio') stopStreamAudio();
+	// Stop any active live stream unless this is a radio or deck-B claim —
+	// deck B can mix with radio.
+	if (id !== 'radio' && id !== 'musicB') stopStreamAudio();
 }
 
 export interface NowPlayingState {
