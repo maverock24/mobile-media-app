@@ -940,10 +940,8 @@
 	}
 
 	function resolveFavoriteTrackFile(favorite: FavoriteTrack): StoredAudioFile | null {
-		// Guard against malformed tracks (track.source could be null/undefined
-		// if state is corrupted or a reactive cycle left stale references).
 		const loadedFile = allFiles.find((file) => getStoredFileKey(file) === favorite.key)
-			?? tracks.find((track) => track?.source != null && getStoredFileKey(track.source) === favorite.key)?.source;
+			?? tracks.find((track) => getStoredFileKey(track.source) === favorite.key)?.source;
 		if (loadedFile) return loadedFile;
 
 		if (favorite.source === 'native' && favorite.path) {
