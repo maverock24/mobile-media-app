@@ -432,7 +432,9 @@
 	});
 	const filteredFavoriteTracks = $derived.by(() => {
 		const query = fileSearchQuery.trim().toLowerCase();
-		const favorites = musicSettings.favoriteTracks.map((favorite) => ({
+		// Guard against corrupt persisted data — favoriteTracks must be an array
+		const tracksList = Array.isArray(musicSettings.favoriteTracks) ? musicSettings.favoriteTracks : [];
+		const favorites = tracksList.map((favorite) => ({
 			favorite,
 			file: resolveFavoriteTrackFile(favorite),
 		}));
@@ -938,8 +940,10 @@
 	}
 
 	function resolveFavoriteTrackFile(favorite: FavoriteTrack): StoredAudioFile | null {
+		// Guard against malformed tracks (track.source could be null/undefined
+		// if state is corrupted or a reactive cycle left stale references).
 		const loadedFile = allFiles.find((file) => getStoredFileKey(file) === favorite.key)
-			?? tracks.find((track) => getStoredFileKey(track.source) === favorite.key)?.source;
+			?? tracks.find((track) => track?.source != null && getStoredFileKey(track.source) === favorite.key)?.source;
 		if (loadedFile) return loadedFile;
 
 		if (favorite.source === 'native' && favorite.path) {
@@ -971,26 +975,31 @@
 
 	function isFavoriteTrack(file: StoredAudioFile): boolean {
 		const key = getStoredFileKey(file);
-		return musicSettings.favoriteTracks.some((favorite) => favorite.key === key);
+		return Array.isArray(musicSettings.favoriteTracks)
+			? musicSettings.favoriteTracks.some((favorite) => favorite.key === key)
+			: false;
 	}
 
 	function toggleFavoriteTrack(file: StoredAudioFile): void {
 		const favorite = createFavoriteTrack(file);
-		const exists = musicSettings.favoriteTracks.some((entry) => entry.key === favorite.key);
+		const current = Array.isArray(musicSettings.favoriteTracks) ? musicSettings.favoriteTracks : [];
+		const exists = current.some((entry) => entry.key === favorite.key);
 		musicSettings.favoriteTracks = exists
-			? musicSettings.favoriteTracks.filter((entry) => entry.key !== favorite.key)
-			: [...musicSettings.favoriteTracks, favorite];
+			? current.filter((entry) => entry.key !== favorite.key)
+			: [...current, favorite];
 	}
 
 	function removeFavoriteTrack(key: string): void {
-		musicSettings.favoriteTracks = musicSettings.favoriteTracks.filter((favorite) => favorite.key !== key);
+		const current = Array.isArray(musicSettings.favoriteTracks) ? musicSettings.favoriteTracks : [];
+		musicSettings.favoriteTracks = current.filter((favorite) => favorite.key !== key);
 	}
 
 	function getResolvedFavoriteTrackFiles(): StoredAudioFile[] {
 		const seen = new Set<string>();
 		const files: StoredAudioFile[] = [];
 
-		for (const favorite of musicSettings.favoriteTracks) {
+		const favorites = Array.isArray(musicSettings.favoriteTracks) ? musicSettings.favoriteTracks : [];
+		for (const favorite of favorites) {
 			const file = resolveFavoriteTrackFile(favorite);
 			if (!file) continue;
 			const key = getStoredFileKey(file);
