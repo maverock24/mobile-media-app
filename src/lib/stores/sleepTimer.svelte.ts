@@ -26,8 +26,10 @@ function setTimerActive(endsAt: number) {
 }
 
 function stopPlaybackForSleepTimer() {
-	if (!mediaEngine.isPlaying) return;
-	mediaEngine._onPause?.() ?? mediaEngine.pause();
+	try {
+		if (!mediaEngine.isPlaying) return;
+		mediaEngine._onPause?.() ?? mediaEngine.pause();
+	} catch { /* mediaEngine callbacks may throw during bridge failures */ }
 }
 
 function stopTicking() {
@@ -45,21 +47,24 @@ function ensureTicking() {
 	}
 
 function expireSleepTimer() {
-	const hadActiveTimer = sleepTimer.endsAt > 0;
-	const wasPlaying = mediaEngine.isPlaying;
-	setTimerActive(0);
-	sleepTimer.remainingMs = 0;
-	stopTicking();
-	if (!hadActiveTimer) return;
-	stopPlaybackForSleepTimer();
-	addToast({
-		message: wasPlaying ? 'Sleep timer stopped playback.' : 'Sleep timer finished.',
-		type: 'info',
-		autoDismissMs: 3500,
-	});
+	try {
+		const hadActiveTimer = sleepTimer.endsAt > 0;
+		const wasPlaying = mediaEngine.isPlaying;
+		setTimerActive(0);
+		sleepTimer.remainingMs = 0;
+		stopTicking();
+		if (!hadActiveTimer) return;
+		stopPlaybackForSleepTimer();
+		addToast({
+			message: wasPlaying ? 'Sleep timer stopped playback.' : 'Sleep timer finished.',
+			type: 'info',
+			autoDismissMs: 3500,
+		});
+	} catch { /* timer expiry during bridge failure — state already cleared */ }
 	}
 
 export function syncSleepTimer() {
+	try {
 	sleepTimer.lastDurationMin = sleepTimerSettings.lastDurationMin;
 	const endsAt = sleepTimerSettings.endsAt;
 	if (!endsAt) {
@@ -78,6 +83,7 @@ export function syncSleepTimer() {
 	}
 
 	ensureTicking();
+	} catch { /* timer sync during bridge failure — will retry on next tick */ }
 	}
 
 export function setSleepTimer(minutes: number) {

@@ -663,50 +663,56 @@
 		// Throttle timeupdate to ~4Hz — smooth for seek bar, 15× less CPU than 60fps
 		let _lastTimeUpdate = 0;
 		const onTimeUpdate = () => {
-			if (seekingValue !== null) return;
-			const now = Date.now();
-			if (now - _lastTimeUpdate < 250) return;
-			_lastTimeUpdate = now;
-			currentTime = audioEl.currentTime;
-			// Always push per-deck time so the MiniPlayer shows accurate
-			// progress even when another source owns the global display.
-			if (deck === 'A') {
-				mediaEngine.deckACurrentTime = audioEl.currentTime;
-				mediaEngine.deckADuration = isFinite(audioEl.duration) ? audioEl.duration : 0;
-			} else {
-				mediaEngine.deckBCurrentTime = audioEl.currentTime;
-				mediaEngine.deckBDuration = isFinite(audioEl.duration) ? audioEl.duration : 0;
-			}
-			// Only push global progress when music owns the MiniPlayer display.
-			if (mediaEngine.activeMusicDeck === deck && mediaEngine.source === 'music') {
-				mediaEngine.updateTime(audioEl.currentTime, isFinite(audioEl.duration) ? audioEl.duration : 0);
-			}
+			try {
+				if (seekingValue !== null) return;
+				if (!audioEl) return;
+				const now = Date.now();
+				if (now - _lastTimeUpdate < 250) return;
+				_lastTimeUpdate = now;
+				currentTime = audioEl.currentTime;
+				// Always push per-deck time so the MiniPlayer shows accurate
+				// progress even when another source owns the global display.
+				if (deck === 'A') {
+					mediaEngine.deckACurrentTime = audioEl.currentTime;
+					mediaEngine.deckADuration = isFinite(audioEl.duration) ? audioEl.duration : 0;
+				} else {
+					mediaEngine.deckBCurrentTime = audioEl.currentTime;
+					mediaEngine.deckBDuration = isFinite(audioEl.duration) ? audioEl.duration : 0;
+				}
+				// Only push global progress when music owns the MiniPlayer display.
+				if (mediaEngine.activeMusicDeck === deck && mediaEngine.source === 'music') {
+					mediaEngine.updateTime(audioEl.currentTime, isFinite(audioEl.duration) ? audioEl.duration : 0);
+				}
+			} catch { /* audioEl.currentTime can throw if bridge is broken */ }
 		};
 		const onLoadedMetadata = () => {
-			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
-			tracks = tracks.map((t, i) =>
-				i === musicSettings.lastTrackIndex
-					? { ...t, duration: isFinite(audioEl.duration) ? Math.round(audioEl.duration) : 0 }
-					: t
-			);
+			try {
+				if (!audioEl) return;
+				duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
+				tracks = tracks.map((t, i) =>
+					i === musicSettings.lastTrackIndex
+						? { ...t, duration: isFinite(audioEl.duration) ? Math.round(audioEl.duration) : 0 }
+						: t
+				);
+			} catch { /* duration may be unavailable on broken bridge */ }
 		};
-		const onPlay  = () => { isPlaying = true;  isBuffering = false; _audioErrorRetries = 0; mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = true;  };
-		const onPause = () => {
+		const onPlay  = () => { try { isPlaying = true;  isBuffering = false; _audioErrorRetries = 0; mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = true;  } catch { /* state update */ } };
+		const onPause = () => { try {
 			isPlaying = false;
 			mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = false;
 			musicSettings.lastTrackTimestamp = 0;
-		};
-		const onEnded = () => {
+		} catch { /* state update */ } };
+		const onEnded = () => { try {
 			// Track finished — clear any saved resume position
 			isBuffering = false;
 			musicSettings.lastTrackTimestamp = 0;
 			if (mediaEngine.musicSelectionLoopActive) { void advanceTrack(true, false); }
 			else if (musicSettings.isRepeat) { audioEl.currentTime = 0; safePlay(); }
 			else void advanceTrack(true, false);
-		};
-		const onWaiting = () => { isBuffering = true; };
-		const onPlaying = () => { isBuffering = false; };
-		const onError = () => {
+		} catch { /* track ended during bridge failure */ } };
+		const onWaiting = () => { try { isBuffering = true; } catch { /* no-op */ } };
+		const onPlaying = () => { try { isBuffering = false; } catch { /* no-op */ } };
+		const onError = () => { try {
 			isBuffering = false;
 			musicSettings.lastTrackTimestamp = 0;
 			// On error, try a forced reload once before advancing to the next
@@ -729,7 +735,7 @@
 			}
 			_audioErrorRetries = 0;
 			void advanceTrack(true, false);
-		};
+		} catch { /* error recovery failed — best-effort, will retry on next event */ } };
 		audioEl.volume = effectiveVolume / 100;
 		audioEl.muted  = musicSettings.isMuted;
 		audioEl.playbackRate = musicSettings.playbackSpeed;
@@ -815,7 +821,20 @@
 		const playTimeoutMs = isNativeApp ? 4000 : 0;
 		let _safePlayReloaded = false;
 		const tryPlay = (attempt: number) => {
-			const playPromise = audioEl!.play();
+			// Guard against synchronous DOMException throws (e.g. broken
+			// Capacitor bridge after SD card removal on Android WebView).
+			let playPromise: Promise<void>;
+			try {
+				playPromise = audioEl?.play() ?? Promise.reject(new Error('No audio element'));
+			} catch (e) {
+				// play() threw synchronously — treat as immediate failure
+				if (attempt < maxRetries) {
+					setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
+				} else {
+					onFailure?.();
+				}
+				return;
+			}
 			const timeoutPromise = playTimeoutMs > 0
 				? new Promise<void>((_, reject) => setTimeout(() => reject(new Error('play() timed out')), playTimeoutMs))
 				: null;
@@ -2804,17 +2823,22 @@
 	// Playback controls
 	// ─────────────────────────────────────────────────────────────
 	async function togglePlay() {
-		if (isPlaying) { audioEl.pause(); }
-		else void resumePlayback();
+		try {
+			if (isPlaying) { audioEl?.pause(); }
+			else void resumePlayback();
+		} catch { /* bridge failure — best-effort */ }
 	}
 
 	function pausePlayback() {
-		if (!audioEl || !currentTrack || !isPlaying) return;
-		void triggerPlaybackHaptic(false);
-		audioEl.pause();
+		try {
+			if (!audioEl || !currentTrack || !isPlaying) return;
+			void triggerPlaybackHaptic(false);
+			audioEl.pause();
+		} catch { /* haptics or audio element failure */ }
 	}
 
 	async function resumePlayback() {
+		try {
 		if (!audioEl || isPlaying) return;
 
 		// Loop selection takes priority — start or restart the loop even if no
@@ -2882,6 +2906,13 @@
 				if (track) track.url = '';
 			},
 		);
+		} catch { /* resume failed (SD card removed, bridge broken) — stop cleanly */
+			isPlaying = false;
+			isBuffering = false;
+			const flag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
+			mediaEngine[flag] = false;
+			if (audioEl) { audioEl.src = ''; audioEl.load(); }
+		}
 	}
 
 	async function selectTrack(index: number) {
