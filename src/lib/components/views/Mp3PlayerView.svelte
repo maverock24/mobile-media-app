@@ -1101,9 +1101,10 @@
 				return;
 			}
 
-			loadTracks(files, 'Favorite Tracks');
-			const sortedFiles = sortFiles(files);
-			const nextIndex = sortedFiles.findIndex((file) => getStoredFileKey(file) === favorite.key);
+			// Load tracks in display order (not sorted), so playback follows
+			// the same order the user sees in the favorites list.
+			loadTracks(files, 'Favorite Tracks', { preserveOrder: true });
+			const nextIndex = files.findIndex((file) => getStoredFileKey(file) === favorite.key);
 			setCurrentTrack(Math.max(0, nextIndex));
 			currentTime = 0;
 			duration = 0;
@@ -2124,15 +2125,15 @@
 	// ─────────────────────────────────────────────────────────────
 	// loadTracks — internal, always called with sorted stored entries
 	// ─────────────────────────────────────────────────────────────
-	function loadTracks(files: StoredAudioFile[], folder: string, options: { selectionLoop?: boolean } = {}) {
+	function loadTracks(files: StoredAudioFile[], folder: string, options: { selectionLoop?: boolean; preserveOrder?: boolean } = {}) {
 		// Clear the audio src before revoking blob URLs to prevent a stale error event
 		// from firing advanceTrack while the new track is still loading.
 		if (audioEl) { audioEl.pause(); audioEl.src = ''; }
 		revokeAll();
 		queueSessionId += 1;
-		// When loading a loop selection, preserve selection order (first
-		// selected = first played) instead of sorting alphabetically.
-		const sorted = options.selectionLoop ? files : sortFiles(files);
+		// preserveOrder or selectionLoop: keep the original file order.
+		// Otherwise sort by the user's chosen sort order.
+		const sorted = (options.preserveOrder || options.selectionLoop) ? files : sortFiles(files);
 		tracks = sorted.map((f, i) => {
 			const { title, artist } = parseFilename(f.name);
 			return { id: i, title, artist, filename: f.name, url: '', duration: 0, cleanup: undefined, source: f };
