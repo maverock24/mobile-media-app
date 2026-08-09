@@ -3021,10 +3021,37 @@
 			musicSettings.lastTrackTimestamp = 0;
 			currentTime = 0; duration = 0;
 			if (audioEl && tracks[nextIndex]) {
-				const url = await ensureTrackUrl(nextIndex, interactiveAuth);
-				if (!url) {
+				// Try to load the next track; if it fails, auto-advance
+				// past broken tracks until we find a playable one or
+				// exhaust the queue.
+				let attemptIndex = nextIndex;
+				let attemptCount = 0;
+				const maxAttempts = tracks.length;
+				let foundUrl: string | null = null;
+
+				while (attemptCount < maxAttempts) {
+					const url = await ensureTrackUrl(attemptIndex, interactiveAuth);
+					if (url) {
+						foundUrl = url;
+						break;
+					}
+					// Track is broken — advance to next and try again
+					const nextAttempt = getNextTrackIndex(attemptIndex);
+					if (nextAttempt === null || nextAttempt === nextIndex) break;
+					attemptIndex = nextAttempt;
+					attemptCount++;
+				}
+
+				if (!foundUrl) {
+					// No playable track found in the entire queue
 					isPlaying = false; isBuffering = false;
 					return;
+				}
+
+				// If we skipped broken tracks, update lastTrackIndex to the
+				// track that actually loaded.
+				if (attemptIndex !== nextIndex) {
+					setCurrentTrack(attemptIndex);
 				}
 				// Release old URL only after new URL is ready
 				releaseTrackUrl(idx);
@@ -3032,9 +3059,9 @@
 				// initAudioContext MUST be before setting audioEl.src.
 				initAudioContext();
 
-				audioEl.src = url;
-				syncTrackToMediaEngine(nextIndex);
-				void preloadNextTrack(nextIndex);
+				audioEl.src = foundUrl;
+				syncTrackToMediaEngine(attemptIndex);
+				void preloadNextTrack(attemptIndex);
 
 				// Set playing flag BEFORE claimAudio.
 				const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
