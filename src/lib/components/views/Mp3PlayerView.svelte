@@ -2683,17 +2683,22 @@
 				mimeType: (transferFile as any).mimeType ?? 'audio/mpeg',
 				data: base64,
 			});
-			// Add the new file to the library so it appears immediately
-			const newFile: StoredAudioFile = {
-				source: 'native',
-				name: transferFile.name,
-				relativePath: localPickerPath.length > 0 ? localPickerPath.join('/') + '/' + transferFile.name : transferFile.name,
-				path: result.path,
-				mimeType: (transferFile as any).mimeType ?? 'audio/mpeg',
-				modifiedAt: Date.now(),
-			};
-			allFiles = [...allFiles, newFile];
-			browseVersion++;
+			// Add the new file to the device library so it appears immediately
+			// when browsing local files. In Drive view the source file is already
+			// listed (and must keep its "Download" action), so injecting a native
+			// copy here would show an "Upload" button instead of the download one.
+			if (musicSettings.librarySource !== 'drive') {
+				const newFile: StoredAudioFile = {
+					source: 'native',
+					name: transferFile.name,
+					relativePath: localPickerPath.length > 0 ? localPickerPath.join('/') + '/' + transferFile.name : transferFile.name,
+					path: result.path,
+					mimeType: (transferFile as any).mimeType ?? 'audio/mpeg',
+					modifiedAt: Date.now(),
+				};
+				allFiles = [...allFiles, newFile];
+				browseVersion++;
+			}
 			addToast({ message: `Downloaded "${transferFile.name}" to phone.`, type: 'info' });
 		} catch (e: any) {
 			const msg = e?.message || '';
@@ -3637,8 +3642,8 @@
 					{@const isDrive = entry.file.source === 'drive'}
 					{@const isFiltered = fileSearchQuery.trim().length > 0}
 					<div class="browse-list-row relative overflow-hidden border-b">
-						<!-- Behind-content: upload/download (hidden during selection or when row is active) -->
-						{#if selectedBrowseCount === 0 && !isSelected && !isCurrentTrack}
+						<!-- Behind-content: upload/download (hidden during loop selection) -->
+						{#if selectedBrowseCount === 0}
 						<div class="absolute inset-y-0 right-0 flex items-center gap-1.5">
 							{#if isFiltered}
 							<Button
@@ -3683,7 +3688,8 @@
 						<div
 							use:swipeItem={{ threshold: 160 }}
 							data-swipe-front
-							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'bg-primary/25 ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'bg-primary/20 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
+							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
+							style={isSelected ? 'background-color: hsl(190 62% 20%)' : isCurrentTrack ? 'background-color: hsl(190 58% 17%)' : ''}
 						>
 						<button
 							class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {isSelected || isCurrentTrack ? 'active:bg-primary/18' : listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}"
