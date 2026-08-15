@@ -356,10 +356,10 @@
 					onpointercancel={() => { if (seekDragging) { seekDragging = false; } }}
 				>
 					<!-- Track background -->
-					<div class="absolute inset-x-0 h-2 rounded-full bg-muted"></div>
+					<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-2 rounded-full bg-muted"></div>
 					<!-- Fill bar -- transition gives smooth animation between 4Hz ticks -->
 					<div
-						class="absolute inset-y-0 left-0 h-2 rounded-full bg-primary"
+						class="absolute left-0 top-1/2 -translate-y-1/2 h-2 rounded-full bg-primary"
 						style="width:{displayProgress}%;{seekDragging ? '' : 'transition: width 250ms linear;'}"
 					></div>
 					<!-- Thumb dot -->
