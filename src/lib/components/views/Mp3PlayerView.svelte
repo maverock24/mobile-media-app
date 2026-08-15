@@ -91,6 +91,8 @@
 	const deckVolKey = $derived(deck === 'A' ? 'deckAVolume' as const : 'deckBVolume' as const);
 	// Deck A always plays at full volume. Deck B uses its independent volume slider.
 	const effectiveVolume = $derived(deck === 'A' ? 100 : musicSettings.deckBVolume);
+	// Per-deck playback speed — Deck A and Deck B keep independent speeds.
+	const effectiveSpeed = $derived(deck === 'A' ? musicSettings.deckASpeed : musicSettings.deckBSpeed);
 	const googleDriveConfigured = isGoogleDriveConfigured();
 	const googleDriveClientId = getGoogleDriveClientId();
 
@@ -744,7 +746,7 @@
 		} catch { /* error recovery failed — best-effort, will retry on next event */ } };
 		audioEl.volume = effectiveVolume / 100;
 		audioEl.muted  = musicSettings.isMuted;
-		audioEl.playbackRate = musicSettings.playbackSpeed;
+		audioEl.playbackRate = effectiveSpeed;
 		audioEl.addEventListener('timeupdate',     onTimeUpdate);
 		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
 		audioEl.addEventListener('play',    onPlay);
@@ -771,7 +773,7 @@
 	});
 
 	// ── Sync playback speed ──
-	$effect(() => { if (audioEl) audioEl.playbackRate = musicSettings.playbackSpeed; });
+	$effect(() => { if (audioEl) audioEl.playbackRate = effectiveSpeed; });
 
 	// ── Auto-save to Drive when key music settings change ──
 	$effect(() => {
@@ -779,7 +781,8 @@
 		void musicSettings.driveFolderId;
 		void musicSettings.driveFolderName;
 		void musicSettings.favoriteFolders;
-		void musicSettings.playbackSpeed;
+		void musicSettings.deckASpeed;
+		void musicSettings.deckBSpeed;
 		void musicSettings.equalizerPreset;
 		void musicSettings.sortOrder;
 		driveConfigSync.scheduleSave();
@@ -3878,10 +3881,10 @@
 	<div class="border-t bg-card/95 px-4 pt-3 pb-3 shrink-0">
 		<p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Playback Speed</p>
 		<div class="flex flex-wrap gap-2">
-			{#each [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0] as speed}
+			{#each [0.5, 0.75, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0] as speed}
 				<button
-					class="px-3 py-1.5 rounded-full text-sm font-medium border transition-colors {musicSettings.playbackSpeed === speed ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-accent'}"
-					onclick={() => (musicSettings.playbackSpeed = speed)}
+					class="px-3 py-1.5 rounded-full text-sm font-medium border transition-colors {effectiveSpeed === speed ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-accent'}"
+					onclick={() => { if (deck === 'A') musicSettings.deckASpeed = speed; else musicSettings.deckBSpeed = speed; }}
 				>{speed}×</button>
 			{/each}
 		</div>
@@ -3917,7 +3920,7 @@
 					: 'bg-secondary/60 text-muted-foreground hover:bg-secondary'}"
 			onclick={() => togglePanel('speed')}>
 			<Gauge class="w-7 h-7" />
-			<span class="text-[11px] font-semibold tracking-wide">{musicSettings.playbackSpeed}×</span>
+			<span class="text-[11px] font-semibold tracking-wide">{effectiveSpeed}×</span>
 		</button>
 		<button
 			class="flex-1 flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all active:scale-95

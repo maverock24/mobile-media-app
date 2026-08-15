@@ -158,7 +158,8 @@ class DriveConfigSync {
 				if (m.driveFolderId      !== undefined) musicSettings.driveFolderId      = m.driveFolderId;
 				if (m.driveFolderName    !== undefined) musicSettings.driveFolderName    = m.driveFolderName;
 				if (m.favoriteFolders    !== undefined) musicSettings.favoriteFolders    = m.favoriteFolders;
-				if (m.playbackSpeed      !== undefined) musicSettings.playbackSpeed      = m.playbackSpeed;
+				if (m.deckASpeed         !== undefined) musicSettings.deckASpeed         = m.deckASpeed;
+				if (m.deckBSpeed         !== undefined) musicSettings.deckBSpeed         = m.deckBSpeed;
 				if (m.equalizerPreset    !== undefined) musicSettings.equalizerPreset    = m.equalizerPreset as typeof musicSettings.equalizerPreset;
 				if (m.eqBands            !== undefined) musicSettings.eqBands            = m.eqBands;
 				if (m.sortOrder          !== undefined) musicSettings.sortOrder          = m.sortOrder as typeof musicSettings.sortOrder;
@@ -258,7 +259,8 @@ class DriveConfigSync {
 					driveFolderId:     musicSettings.driveFolderId,
 					driveFolderName:   musicSettings.driveFolderName,
 					favoriteFolders:   musicSettings.favoriteFolders,
-					playbackSpeed:     musicSettings.playbackSpeed,
+					deckASpeed:        musicSettings.deckASpeed,
+					deckBSpeed:        musicSettings.deckBSpeed,
 					equalizerPreset:   musicSettings.equalizerPreset,
 					eqBands:           [...musicSettings.eqBands],
 					sortOrder:         musicSettings.sortOrder,

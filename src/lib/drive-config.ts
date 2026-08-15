@@ -47,7 +47,8 @@ export interface DriveConfigMusicSettings {
 	driveFolderId: string;
 	driveFolderName: string;
 	favoriteFolders: DriveConfigFavoriteFolder[];
-	playbackSpeed: number;
+	deckASpeed: number;
+	deckBSpeed: number;
 	equalizerPreset: string;
 	eqBands: number[];
 	sortOrder: string;

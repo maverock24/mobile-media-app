@@ -47,7 +47,8 @@ export const musicSettings = persisted('music-settings', {
 	crossfadeDuration: 0,   // seconds (0 = disabled)
 	equalizerPreset: 'flat' as 'flat' | 'bass' | 'treble' | 'vocal' | 'classical' | 'custom',
 	eqBands: [0, 0, 0, 0, 0, 0] as number[],  // gains in dB: 60Hz 170Hz 350Hz 1kHz 3.5kHz 10kHz
-	playbackSpeed: 1.0,
+	deckASpeed: 1.0,
+	deckBSpeed: 1.0,
 	showAlbumArt: true,
 	autoPlay: false,
 	rewindOnPrev: true,    // restart track if >3s in, on prev press
@@ -69,6 +70,13 @@ export const musicSettings = persisted('music-settings', {
 	}>,
 	browsePath: [] as string[],
 }, { debounceMs: 5000 });
+
+// Migrate the legacy single playbackSpeed to per-deck speeds (Deck A / Deck B).
+const _legacyMusicSpeed = (musicSettings as unknown as { playbackSpeed?: number }).playbackSpeed;
+if (typeof _legacyMusicSpeed === 'number' && _legacyMusicSpeed > 0) {
+	musicSettings.deckASpeed = _legacyMusicSpeed;
+	musicSettings.deckBSpeed = _legacyMusicSpeed;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Podcast settings
