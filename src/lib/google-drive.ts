@@ -605,6 +605,7 @@ export async function downloadGoogleDriveFile(options: {
 	fileName: string;
 	mimeType?: string;
 	modifiedAt?: number;
+	onProgress?: (loaded: number, total: number) => void;
 }): Promise<File> {
 	const response = await fetch(`https://www.googleapis.com/drive/v3/files/${options.fileId}?alt=media`, {
 		headers: {
@@ -617,7 +618,33 @@ export async function downloadGoogleDriveFile(options: {
 		throw new Error(message || `Unable to download Google Drive file (${response.status}).`);
 	}
 
+	const contentLength = Number(response.headers.get('Content-Length') ?? 0);
+	const contentType = response.headers.get('Content-Type') ?? options.mimeType ?? 'audio/mpeg';
+
+	// Stream the response body so we can report progress for large files.
+	if (response.body && options.onProgress) {
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let loaded = 0;
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (value) {
+				chunks.push(value);
+				loaded += value.byteLength;
+				options.onProgress(loaded, contentLength || loaded);
+			}
+		}
+		const blob = new Blob(chunks as unknown as BlobPart[], { type: contentType });
+		options.onProgress(loaded, contentLength || loaded);
+		return new File([blob], options.fileName, {
+			type: options.mimeType ?? blob.type ?? 'audio/mpeg',
+			lastModified: options.modifiedAt ?? Date.now()
+		});
+	}
+
 	const blob = await response.blob();
+	options.onProgress?.(blob.size, contentLength || blob.size);
 	return new File([blob], options.fileName, {
 		type: options.mimeType ?? blob.type ?? 'audio/mpeg',
 		lastModified: options.modifiedAt ?? Date.now()

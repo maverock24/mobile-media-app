@@ -285,7 +285,13 @@
 	let transferFile = $state<StoredAudioFile | null>(null);
 	let transferDirection = $state<'upload' | 'download'>('upload');
 	let isTransferring = $state(false);
-	let pendingTransfer = $state(false); // set when waiting for folder selection
+	let transferProgress = $state<{ loaded: number; total: number } | null>(null);
+	let transferPhase = $state<'downloading' | 'saving'>('downloading');
+	const transferProgressPct = $derived(
+		transferProgress && transferProgress.total > 0
+			? Math.min(100, Math.round((transferProgress.loaded / transferProgress.total) * 100))
+			: null
+	);
 	// Drive folder picker navigation
 	let drivePickerPath = $state<GoogleDriveFolder[]>([]);
 	let drivePickerFolders = $state<GoogleDriveFolder[]>([]);
@@ -2614,8 +2620,15 @@
 		transferDirection = 'download';
 		if (isNativeApp) {
 			if (!nativeTreeUri) {
-				pendingTransfer = true;
+				// First download: the selected root folder is the destination —
+				// start immediately instead of opening a second picker.
+				localPickerPath = [];
 				await openFolder();
+				if (nativeTreeUri && transferFile) {
+					await selectLocalFolderAndDownload();
+				} else {
+					transferFile = null;
+				}
 				return;
 			}
 			showLocalFolderPicker = true;
@@ -2657,6 +2670,8 @@
 		}
 		isTransferring = true;
 		showLocalFolderPicker = false;
+		transferPhase = 'downloading';
+		transferProgress = { loaded: 0, total: 0 };
 		try {
 			const driveFile = await downloadGoogleDriveFile({
 				accessToken: token,
@@ -2664,7 +2679,12 @@
 				fileName: transferFile.name,
 				mimeType: (transferFile as any).mimeType,
 				modifiedAt: (transferFile as any).modifiedAt,
+				onProgress: (loaded, total) => {
+					transferProgress = { loaded, total };
+				}
 			});
+			transferPhase = 'saving';
+			transferProgress = null;
 			// Use FileReader for safe base64 encoding (avoids call-stack
 			// overflow from String.fromCharCode(...spread) on large files)
 			const base64 = await new Promise<string>((resolve, reject) => {
@@ -2712,6 +2732,8 @@
 		} finally {
 			isTransferring = false;
 			transferFile = null;
+			transferProgress = null;
+			transferPhase = 'downloading';
 		}
 	}
 
@@ -2778,6 +2800,8 @@
 			return;
 		}
 		isTransferring = true;
+		transferPhase = 'downloading';
+		transferProgress = { loaded: 0, total: 0 };
 		try {
 			if (!('showDirectoryPicker' in window)) {
 				addToast({ message: 'Folder picker not supported in this browser. Try Chrome or Edge.', type: 'warning', autoDismissMs: 5000 });
@@ -2791,7 +2815,12 @@
 				fileName: file.name,
 				mimeType: (file as any).mimeType,
 				modifiedAt: (file as any).modifiedAt,
+				onProgress: (loaded, total) => {
+					transferProgress = { loaded, total };
+				}
 			});
+			transferPhase = 'saving';
+			transferProgress = null;
 			const newHandle = await dirHandle.getFileHandle(file.name, { create: true });
 			const writable = await newHandle.createWritable();
 			await writable.write(driveFile);
@@ -2811,19 +2840,10 @@
 		} finally {
 			isTransferring = false;
 			transferFile = null;
+			transferProgress = null;
+			transferPhase = 'downloading';
 		}
 	}
-
-	// ── Auto-continue pending transfer after folder selection ──
-	$effect(() => {
-		if (pendingTransfer && nativeTreeUri && transferFile) {
-			pendingTransfer = false;
-			if (transferDirection === 'download') {
-				showLocalFolderPicker = true;
-				void loadLocalFolderPicker('');
-			}
-		}
-	});
 
 	// ─────────────────────────────────────────────────────────────
 	// Playback controls
@@ -3499,6 +3519,30 @@
 			<div class="h-1 rounded-full bg-muted overflow-hidden">
 				<div class="h-full bg-primary rounded-full transition-[width] duration-300" style="width: {scanProgress.pct}%"></div>
 			</div>
+		</div>
+		{/if}
+
+		<!-- Download/upload progress -->
+		{#if isTransferring && transferFile}
+		<div class="px-4 py-2 border-b shrink-0 bg-muted/20">
+			<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1.5">
+				<div class="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin shrink-0"></div>
+				<span class="flex-1 truncate">
+					{#if transferDirection === 'download'}
+						{transferPhase === 'downloading' ? 'Downloading' : 'Saving'} {transferFile.name}
+					{:else}
+						Uploading {transferFile.name}
+					{/if}
+					{#if transferDirection === 'download' && transferPhase === 'downloading' && transferProgressPct !== null}
+						· {transferProgressPct}%
+					{/if}
+				</span>
+			</div>
+			{#if transferDirection === 'download' && transferPhase === 'downloading' && transferProgressPct !== null}
+			<div class="h-1 rounded-full bg-muted overflow-hidden">
+				<div class="h-full bg-primary rounded-full transition-[width] duration-150" style="width: {transferProgressPct}%"></div>
+			</div>
+			{/if}
 		</div>
 		{/if}
 
