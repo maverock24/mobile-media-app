@@ -10,6 +10,8 @@ import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.support.v4.media.MediaBrowserCompat;
 import android.support.v4.media.MediaMetadataCompat;
@@ -30,11 +32,18 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 	private static final String CHANNEL_ID = "media_playback";
 	private static final int NOTIFICATION_ID = 4242;
 	private static final String WAKELOCK_TAG = "mediaHub:audioPlayback";
+	// How long to keep the CPU wakelock after playback pauses before releasing it.
+	// Gives the JS background watchdog time to auto-resume an OS-initiated pause
+	// (screen lock / Doze / bedtime mode) while still avoiding indefinite battery
+	// drain when the user deliberately pauses.
+	private static final long WAKELOCK_RELEASE_GRACE_MS = 90_000L;
 
 	private MediaSessionCompat mediaSession;
 	private AudioManager audioManager;
 	private PowerManager.WakeLock wakeLock;
 	private AudioFocusRequest focusRequest;
+	private final Handler wakelockHandler = new Handler(Looper.getMainLooper());
+	private final Runnable wakelockReleaseRunnable = () -> releaseWakeLock();
 	// True only while this service holds audio focus. Guards requestAudioFocus() /
 	// abandonAudioFocus() so they act on the play/pause TRANSITION rather than on
 	// every updateService() call — see requestAudioFocus() for why re-requesting
@@ -202,12 +211,23 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 	}
 
 	public void holdWakeLock() {
+		wakelockHandler.removeCallbacks(wakelockReleaseRunnable);
 		if (wakeLock != null && !wakeLock.isHeld()) {
 			wakeLock.acquire();
 		}
 	}
 
+	/** Release the CPU wakelock shortly after playback pauses. Delaying the
+	 *  release keeps the CPU awake long enough for the JS background watchdog to
+	 *  auto-resume an OS-initiated pause (screen lock / Doze / bedtime mode),
+	 *  while still releasing eventually when the user genuinely pauses. */
+	public void scheduleWakeLockRelease() {
+		wakelockHandler.removeCallbacks(wakelockReleaseRunnable);
+		wakelockHandler.postDelayed(wakelockReleaseRunnable, WAKELOCK_RELEASE_GRACE_MS);
+	}
+
 	public void releaseWakeLock() {
+		wakelockHandler.removeCallbacks(wakelockReleaseRunnable);
 		if (wakeLock != null && wakeLock.isHeld()) {
 			wakeLock.release();
 		}

@@ -545,10 +545,12 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		let backgroundResumeArmed = false;
 		let backgroundResumeAttempts = 0;
 		let backgroundWatchdog: number | null = null;
+		let backgroundUserPaused = false;
 
 		const clearBackgroundResume = () => {
 			backgroundResumeArmed = false;
 			backgroundResumeAttempts = 0;
+			backgroundUserPaused = false;
 			if (backgroundResumeTimer != null) {
 				window.clearTimeout(backgroundResumeTimer);
 				backgroundResumeTimer = null;
@@ -562,8 +564,15 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		const tryResumeAfterBackgroundPause = () => {
 			backgroundResumeTimer = null;
 			if (!backgroundResumeArmed || mediaEngine.item == null) return;
-			if (mediaEngine.isPlaying) {
+			if (backgroundUserPaused) {
 				clearBackgroundResume();
+				return;
+			}
+			if (mediaEngine.isPlaying) {
+				// Still playing — keep the watchdog armed so a LATER OS-initiated
+				// pause (screen lock + Doze / bedtime mode / OEM battery optimisation)
+				// is still auto-resumed. Clearing here left a gap where a pause
+				// arriving after this 180ms check was never recovered.
 				return;
 			}
 
@@ -574,13 +583,7 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 			}
 		};
 
-		const handleDocumentPause = () => {
-			if (Capacitor.getPlatform() !== 'android') return;
-			if (!mediaEngine.isPlaying || mediaEngine.item == null) {
-				clearBackgroundResume();
-				return;
-			}
-
+		const armBackgroundResume = () => {
 			backgroundResumeArmed = true;
 			backgroundResumeAttempts = 0;
 			if (backgroundResumeTimer != null) {
@@ -588,16 +591,17 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 			}
 			backgroundResumeTimer = window.setTimeout(tryResumeAfterBackgroundPause, 180);
 
-			// Start a long-running watchdog that checks every 5 seconds while the
-			// app is backgrounded. The initial 180ms / 250ms×3 retry handles the
-			// immediate Android auto-pause on activity pause, but the OS can also
-			// pause the audio element MINUTES later (Doze throttling, audio-focus
-			// churn from notifications, OEM battery optimisation). Radio streams
-			// are immune (continuous HTTP connection), but local-file and
-			// progressive-download playback (MP3, podcast) needs ongoing recovery.
+			// Long-running watchdog: checks every 5s while the app is backgrounded
+			// so local-file / progressive playback (MP3, podcast) recovers from an
+			// OS-initiated pause that arrives at any time — not just within the
+			// first 180ms / 250ms×3 window.
 			if (backgroundWatchdog == null) {
 				backgroundWatchdog = window.setInterval(() => {
 					if (!backgroundResumeArmed) {
+						clearBackgroundResume();
+						return;
+					}
+					if (backgroundUserPaused) {
 						clearBackgroundResume();
 						return;
 					}
@@ -608,8 +612,17 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 			}
 		};
 
+		const handleDocumentPause = () => {
+			if (Capacitor.getPlatform() !== 'android') return;
+			if (!mediaEngine.isPlaying || mediaEngine.item == null) {
+				clearBackgroundResume();
+				return;
+			}
+			armBackgroundResume();
+		};
+
 		const handleDocumentResume = () => {
-			if (backgroundResumeArmed && mediaEngine.item != null && !mediaEngine.isPlaying) {
+			if (backgroundResumeArmed && !backgroundUserPaused && mediaEngine.item != null && !mediaEngine.isPlaying) {
 				mediaEngine._onPlay?.() ?? mediaEngine.resume();
 			}
 			clearBackgroundResume();
@@ -621,8 +634,19 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		$effect(() => {
 			mediaActionHandle = MediaControls.addListener('mediaAction', (event) => {
 				switch (event.action) {
-					case 'play':          untrack(() => mediaEngine._onPlay)?.() ?? mediaEngine.resume(); break;
-					case 'pause':         untrack(() => mediaEngine._onPause)?.() ?? mediaEngine.pause();  break;
+					case 'play':
+						backgroundUserPaused = false;
+						untrack(() => mediaEngine._onPlay)?.() ?? mediaEngine.resume();
+						// If still backgrounded (lock-screen play), re-arm the watchdog so a
+						// subsequent OS auto-pause is recovered too.
+						if (document.visibilityState === 'hidden' && mediaEngine.item != null) {
+							armBackgroundResume();
+						}
+						break;
+					case 'pause':
+						backgroundUserPaused = true;
+						untrack(() => mediaEngine._onPause)?.() ?? mediaEngine.pause();
+						break;
 					case 'nexttrack':     untrack(() => mediaEngine._onNext)?.() ?? mediaEngine.next();    break;
 					case 'previoustrack': untrack(() => mediaEngine._onPrev)?.() ?? mediaEngine.prev();    break;
 					case 'seekto':

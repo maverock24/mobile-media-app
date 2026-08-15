@@ -253,11 +253,12 @@ public class MediaControlsPlugin extends Plugin {
 			playbackService.abandonAudioFocus();
 		}
 
-		// 4. WakeLock — hold while playing
+		// 4. WakeLock — hold while playing; grace-release when paused so the JS
+		//    background watchdog can still auto-resume an OS-initiated pause.
 		if (isPlaying) {
 			playbackService.holdWakeLock();
 		} else {
-			playbackService.releaseWakeLock();
+			playbackService.scheduleWakeLockRelease();
 		}
 
 		// 5. Update Foreground Notification
