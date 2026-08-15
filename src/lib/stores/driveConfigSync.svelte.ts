@@ -34,9 +34,21 @@ import { normalizeListTileTone } from '$lib/utils/listTileTone';
 
 export type SyncStatus = 'idle' | 'syncing' | 'saved' | 'error';
 
-// ISO timestamp of the last local write — updated whenever save() is called
-// Used for conflict resolution: only apply Drive config if it's newer.
+// ISO timestamp of the last local write — updated whenever local state changes.
+// Persisted so conflict resolution survives app restarts (without this, every
+// launch treats local as "epoch 0" and a stale Drive config overwrites local
+// changes — e.g. a newly subscribed podcast reverting on reopen).
+const LOCAL_SAVED_AT_KEY = 'drive-config-local-saved-at';
 let localSavedAt = '';
+if (typeof localStorage !== 'undefined') {
+	localSavedAt = localStorage.getItem(LOCAL_SAVED_AT_KEY) ?? '';
+}
+
+function persistLocalSavedAt(): void {
+	if (typeof localStorage !== 'undefined') {
+		localStorage.setItem(LOCAL_SAVED_AT_KEY, localSavedAt);
+	}
+}
 
 class DriveConfigSync {
 	accessToken  = $state('');
@@ -225,6 +237,7 @@ class DriveConfigSync {
 			if (config.radioFavorites !== undefined) radioData.favorites = config.radioFavorites;
 
 			localSavedAt = config.savedAt;
+			persistLocalSavedAt();
 			this.lastSyncedAt = new Date();
 			this.status = 'saved';
 			return config;
@@ -314,6 +327,7 @@ class DriveConfigSync {
 			config.savedAt = now;
 			await uploadDriveConfig(this.accessToken, config);
 			localSavedAt = now;
+			persistLocalSavedAt();
 			this.pendingSave = false;
 			this.lastSyncedAt = new Date();
 			this.status = 'saved';
@@ -327,6 +341,10 @@ class DriveConfigSync {
 		if (!this.hasSession) {
 			return;
 		}
+		// Mark local state as modified immediately (before the debounced upload)
+		// so a restart keeps local changes even if the upload never completed.
+		localSavedAt = new Date().toISOString();
+		persistLocalSavedAt();
 		if (this.saveTimer) clearTimeout(this.saveTimer);
 		this.saveTimer = setTimeout(() => {
 			this.saveTimer = null;

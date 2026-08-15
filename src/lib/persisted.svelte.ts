@@ -61,26 +61,35 @@ export function persisted<T extends object>(key: string, defaults: T, opts?: {
 
 		if (typeof window === 'undefined') return;
 
-		const flushBeforeUnload = () => {
-			// Flush immediately on unload — can't wait for debounce
+		const flushPending = () => {
 			if (_debounceTimer !== null) { clearTimeout(_debounceTimer); _debounceTimer = null; }
 			flushToLocalStorage();
 		};
+
+		const flushBeforeUnload = () => {
+			// Flush immediately on unload — can't wait for debounce
+			flushPending();
+		};
 		const flushWhenHidden = () => {
 			if (document.visibilityState === 'hidden') {
-				if (_debounceTimer !== null) { clearTimeout(_debounceTimer); _debounceTimer = null; }
-				flushToLocalStorage();
+				flushPending();
 			}
 		};
 
 		window.addEventListener('pagehide', flushBeforeUnload);
 		window.addEventListener('beforeunload', flushBeforeUnload);
 		document.addEventListener('visibilitychange', flushWhenHidden);
+		// Capacitor native apps don't reliably update document.visibilityState
+		// when the app is backgrounded or closed (the WebView keeps reporting
+		// 'visible'). Flush pending debounced writes on the Capacitor 'pause'
+		// lifecycle event so changes aren't lost when the app is killed.
+		document.addEventListener('pause', flushPending);
 
 		return () => {
 			window.removeEventListener('pagehide', flushBeforeUnload);
 			window.removeEventListener('beforeunload', flushBeforeUnload);
 			document.removeEventListener('visibilitychange', flushWhenHidden);
+			document.removeEventListener('pause', flushPending);
 		};
 	});
 
