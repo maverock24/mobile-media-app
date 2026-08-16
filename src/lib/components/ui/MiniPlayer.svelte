@@ -10,7 +10,7 @@
 	} from '$lib/stores/sleepTimer.svelte';
 	import { triggerToggleHaptic } from '$lib/native/haptics';
 	import { formatClock as formatTime } from '$lib/models/music';
-	import { Play, Pause, SkipBack, SkipForward, Moon, X, Repeat, Volume2 } from 'lucide-svelte';
+	import { Play, Pause, SkipBack, SkipForward, Moon, X, Repeat, Volume2, Gauge } from 'lucide-svelte';
 
 	interface Props {
 		/** The currently selected tab. */
@@ -22,6 +22,7 @@
 	}
 	let { activeTab, position = 'bottom', onNavigateTo }: Props = $props();
 	let showSleepTimerOptions = $state(false);
+	let showMusicSpeedOptions = $state(false);
 
 	const ownerTab = $derived.by(() => {
 		switch (mediaEngine.source) {
@@ -146,6 +147,9 @@
 	const sleepTimerLabel = $derived(
 		sleepTimer.isActive ? formatSleepTimerRemaining(sleepTimer.remainingMs) : 'Off'
 	);
+	// The mini-player speed button always controls Deck A's playback speed
+	// (a dedicated Deck A speed control, independent of the active deck).
+	const deckASpeed = $derived(musicSettings.deckASpeed);
 
 	function seekTo(time: number) {
 		const target = Math.max(0, Math.min(time, deckDuration || 0));
@@ -179,6 +183,18 @@
 
 	function toggleSleepTimerOptions() {
 		showSleepTimerOptions = !showSleepTimerOptions;
+		if (showSleepTimerOptions) showMusicSpeedOptions = false;
+	}
+
+	function toggleMusicSpeedOptions() {
+		showMusicSpeedOptions = !showMusicSpeedOptions;
+		if (showMusicSpeedOptions) showSleepTimerOptions = false;
+	}
+
+	function applyMusicSpeed(speed: number) {
+		musicSettings.deckASpeed = speed;
+		showMusicSpeedOptions = false;
+		void triggerToggleHaptic(true);
 	}
 
 	function clearSleepTimerFromMiniPlayer() {
@@ -223,7 +239,7 @@
 			</button>
 
 			<div class="relative min-h-[3.5rem]">
-				<div class="absolute left-0 top-1/2 -translate-y-1/2">
+				<div class="absolute left-0 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
 					<button
 						class="mini-player-action mini-player-sleep mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
 						onclick={toggleSleepTimerOptions}
@@ -232,6 +248,18 @@
 					>
 						<Moon class="w-4 h-4 {sleepTimer.isActive ? 'text-primary' : ''}" />
 					</button>
+					{#if activeTab === 'music'}
+						<button
+							class="mini-player-action mini-player-control-surface h-9 min-w-[2.75rem] px-2 inline-flex items-center justify-center gap-1 rounded-full text-xs font-semibold {showMusicSpeedOptions ? 'border-primary bg-primary/18 text-primary' : 'text-muted-foreground hover:text-foreground'}"
+							onclick={toggleMusicSpeedOptions}
+							aria-label="Playback speed"
+							aria-pressed={showMusicSpeedOptions}
+							title="Playback speed · Deck A"
+						>
+							<Gauge class="w-4 h-4" />
+							{deckASpeed}×
+						</button>
+					{/if}
 				</div>
 
 				<div class="flex items-center justify-center gap-3">
@@ -333,6 +361,24 @@
 						{/each}
 					</div>
 				{/if}
+			</div>
+		{/if}
+
+		{#if showMusicSpeedOptions}
+			<div class="px-3 pb-2 space-y-2">
+				<div class="flex items-center justify-between text-[11px] text-muted-foreground">
+					<span>Playback speed · Deck A</span>
+				</div>
+				<div class="flex flex-wrap gap-2">
+					{#each [0.5, 0.75, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0] as speed}
+						<button
+							class="mini-player-chip mini-player-control-surface px-3 py-1.5 rounded-full text-xs {deckASpeed === speed ? 'border-primary bg-primary/18 text-primary font-medium' : 'text-foreground'}"
+							onclick={() => applyMusicSpeed(speed)}
+						>
+							{speed}×
+						</button>
+					{/each}
+				</div>
 			</div>
 		{/if}
 
