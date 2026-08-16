@@ -824,6 +824,10 @@
 
 		claimAudio('podcast');
 		currentEpisode = { podcast, episode };
+		// Record this as the last-played episode immediately so a close-while-
+		// playing restores the correct episode (previously only updated on pause).
+		podcastData.lastEpisodeId = episode.id;
+		podcastData.lastPodcastId = podcast.id;
 		const resumeAt = getEpisodeResumePosition(episode);
 		duration = episode.duration;
 		currentTime = resumeAt > 10 ? resumeAt : 0;
