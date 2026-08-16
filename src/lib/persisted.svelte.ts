@@ -6,13 +6,12 @@
  *   const prefs = persisted('my-key', { volume: 80, theme: 'dark' });
  *   prefs.volume = 60;  // automatically saved
  */
-export function persisted<T extends object>(key: string, defaults: T, opts?: {
-	/** Debounce delay in ms before writing to localStorage (default: 2500).
-	 *  Use a longer value for stores with large arrays that change rarely. */
+import { untrack } from 'svelte';
+
+export function persisted<T extends object>(key: string, defaults: T, _opts?: {
+	/** @deprecated Kept for API compatibility — writes are now synchronous. */
 	debounceMs?: number;
 }): T {
-	const debounceMs = opts?.debounceMs ?? 2500;
-
 	let stored: T = defaults;
 	if (typeof localStorage !== 'undefined') {
 		try {
@@ -31,28 +30,24 @@ export function persisted<T extends object>(key: string, defaults: T, opts?: {
 		localStorage.setItem(key, JSON.stringify(state));
 	}
 
-	let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
+	// Write synchronously on every change. A debounce (previously 2.5s) caused
+	// data loss on Android when the app was backgrounded/killed before the timer
+	// fired — e.g. a newly subscribed podcast reverting on reopen. All persisted
+	// stores change at discrete, low-frequency events (subscribe, pause, settings
+	// toggle, …), so a synchronous write is cheap and guarantees persistence.
+	//
+	// untrack() is critical: JSON.stringify(state) reads every nested field, and
+	// doing that inside the tracking $effect would create reactive dependencies on
+	// all of them (e.g. favoriteTracks[42].title). We only want top-level keys.
 	function scheduleFlush() {
-		if (_debounceTimer !== null) clearTimeout(_debounceTimer);
-		_debounceTimer = setTimeout(() => {
-			_debounceTimer = null;
-			flushToLocalStorage();
-		}, debounceMs);
+		untrack(() => flushToLocalStorage());
 	}
 
-	// Watch for any change and write back to localStorage (debounced).
-	// Important: we touch ONLY top-level keys to establish reactivity — NOT
-	// JSON.stringify(state) which would create reactive dependencies on every
-	// nested field (e.g. favoriteTracks[42].title).  Touching just the top-level
-	// keys means adding/removing items or replacing arrays triggers persist,
-	// but mutating a nested object inside an array does not (which is correct —
-	// the serialize is a deep copy anyway, so identity changes are enough).
 	$effect.root(() => {
 		$effect(() => {
 			// Read each top-level key to establish fine-grained reactivity.
 			// Using Object.keys(defaults) ensures we only track keys that exist
-			// at init time; if later code adds new keys we won't track them,
-			// but that's rare and the unload flush catches them anyway.
+			// at init time.
 			for (const k of Object.keys(defaults)) {
 				void (state as Record<string, unknown>)[k];
 			}
@@ -61,35 +56,23 @@ export function persisted<T extends object>(key: string, defaults: T, opts?: {
 
 		if (typeof window === 'undefined') return;
 
-		const flushPending = () => {
-			if (_debounceTimer !== null) { clearTimeout(_debounceTimer); _debounceTimer = null; }
-			flushToLocalStorage();
-		};
-
-		const flushBeforeUnload = () => {
-			// Flush immediately on unload — can't wait for debounce
-			flushPending();
-		};
+		const flushNow = () => flushToLocalStorage();
 		const flushWhenHidden = () => {
-			if (document.visibilityState === 'hidden') {
-				flushPending();
-			}
+			if (document.visibilityState === 'hidden') flushNow();
 		};
 
-		window.addEventListener('pagehide', flushBeforeUnload);
-		window.addEventListener('beforeunload', flushBeforeUnload);
+		window.addEventListener('pagehide', flushNow);
+		window.addEventListener('beforeunload', flushNow);
 		document.addEventListener('visibilitychange', flushWhenHidden);
 		// Capacitor native apps don't reliably update document.visibilityState
-		// when the app is backgrounded or closed (the WebView keeps reporting
-		// 'visible'). Flush pending debounced writes on the Capacitor 'pause'
-		// lifecycle event so changes aren't lost when the app is killed.
-		document.addEventListener('pause', flushPending);
+		// when backgrounded/closed — also flush on the Capacitor 'pause' event.
+		document.addEventListener('pause', flushNow);
 
 		return () => {
-			window.removeEventListener('pagehide', flushBeforeUnload);
-			window.removeEventListener('beforeunload', flushBeforeUnload);
+			window.removeEventListener('pagehide', flushNow);
+			window.removeEventListener('beforeunload', flushNow);
 			document.removeEventListener('visibilitychange', flushWhenHidden);
-			document.removeEventListener('pause', flushPending);
+			document.removeEventListener('pause', flushNow);
 		};
 	});
 
