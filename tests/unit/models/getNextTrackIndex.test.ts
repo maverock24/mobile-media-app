@@ -36,14 +36,37 @@ describe('getNextTrackIndex — selection loop', () => {
 	});
 });
 
-describe('getNextTrackIndex — repeat (single-track repeat)', () => {
-	it('wraps at the end when isRepeat is on', () => {
-		expect(getNextTrackIndex(2, { trackCount: 3, isRepeat: true })).toBe(0);
+describe('BUG: single-track queue loops forever even when looping is off', () => {
+	// The player queues the whole folder/source. A queue with exactly one
+	// track must STOP when that track ends unless the user explicitly asked
+	// to loop (isRepeat/selectionLoop). Currently `trackCount === 1` returns
+	// 0 unconditionally, so the last (and only) track repeats forever.
+	it('stops at end of a single-track queue with no loop flag', () => {
+		expect(getNextTrackIndex(0, { trackCount: 1 })).toBeNull();
 	});
 
-	it('isRepeat and selectionLoop are interchangeable for wrap-around', () => {
-		expect(getNextTrackIndex(2, { trackCount: 3, isRepeat: true, selectionLoop: false }))
-			.toBe(getNextTrackIndex(2, { trackCount: 3, isRepeat: false, selectionLoop: true }));
+	it('stops a single-track queue when only shuffle is on', () => {
+		expect(getNextTrackIndex(0, { trackCount: 1, isShuffle: true })).toBeNull();
+	});
+
+	it('still loops a single track when isRepeat is on', () => {
+		expect(getNextTrackIndex(0, { trackCount: 1, isRepeat: true })).toBe(0);
+	});
+});
+
+describe('getNextTrackIndex — repeat (repeat-one, does not loop the list)', () => {
+	// isRepeat is repeat-ONE: the track repeats itself via onEnded, so it
+	// must not wrap the queue to track 0 when the list ends.
+	it('advances within the list when isRepeat is on', () => {
+		expect(getNextTrackIndex(0, { trackCount: 3, isRepeat: true })).toBe(1);
+	});
+
+	it('does NOT wrap at the end when only isRepeat is on', () => {
+		expect(getNextTrackIndex(2, { trackCount: 3, isRepeat: true })).toBeNull();
+	});
+
+	it('selectionLoop is the flag that wraps the list', () => {
+		expect(getNextTrackIndex(2, { trackCount: 3, selectionLoop: true })).toBe(0);
 	});
 });
 

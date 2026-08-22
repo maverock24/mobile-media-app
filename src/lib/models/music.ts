@@ -231,8 +231,9 @@ export function fmtGain(g: number): string { return (g > 0 ? '+' : '') + g; }
  *  - `trackCount === 0` → null (empty queue)
  *  - shuffle (and count > 1): return `preloadedIndex` if it's a distinct valid
  *    index, else a random index != currentIndex.
- *  - otherwise sequential: at the last index, wrap to 0 only when repeat or
- *    selectionLoop is on; otherwise return null (stop). Advance otherwise.
+ *  - otherwise sequential: at the last index, wrap to 0 only when selectionLoop
+ *    is on; otherwise return null (stop). Advance otherwise. `isRepeat` is
+ *    repeat-one (the track repeats itself in onEnded) and does NOT wrap the list.
  *  - a single-track queue with repeat/selectionLoop returns 0 (loop itself). */
 export function getNextTrackIndex(
 	currentIndex: number,
@@ -247,7 +248,10 @@ export function getNextTrackIndex(
 ): number | null {
 	const { trackCount, isShuffle, isRepeat, selectionLoop, preloadedIndex } = opts;
 	if (trackCount === 0) return null;
-	if (trackCount === 1) return 0;
+	// A single-track queue only loops when the user asked for it; otherwise
+	// the last (and only) track must stop at the end instead of repeating
+	// forever.
+	if (trackCount === 1) return isRepeat || selectionLoop ? 0 : null;
 
 	if (isShuffle) {
 		if (preloadedIndex != null && preloadedIndex !== currentIndex && preloadedIndex < trackCount) {
@@ -261,7 +265,10 @@ export function getNextTrackIndex(
 		return nextIndex;
 	}
 
+	// Only selectionLoop wraps the list. `isRepeat` is repeat-one (the track
+	// repeats itself via the onEnded handler), so it must NOT wrap the queue
+	// to track 0 when the list ends.
 	const atEnd = currentIndex === trackCount - 1;
-	if (atEnd && !isRepeat && !selectionLoop) return null;
+	if (atEnd && !selectionLoop) return null;
 	return atEnd ? 0 : currentIndex + 1;
 }
