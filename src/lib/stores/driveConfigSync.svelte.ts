@@ -338,18 +338,30 @@ class DriveConfigSync {
 
 	/** Schedule a debounced save (3 s after last call). */
 	scheduleSave() {
-		if (!this.hasSession) {
-			return;
-		}
 		// Mark local state as modified immediately (before the debounced upload)
 		// so a restart keeps local changes even if the upload never completed.
-		localSavedAt = new Date().toISOString();
-		persistLocalSavedAt();
-		if (this.saveTimer) clearTimeout(this.saveTimer);
-		this.saveTimer = setTimeout(() => {
-			this.saveTimer = null;
-			void this.save();
-		}, 3000);
+		//
+		// If there is no Drive session (offline / expired token), still record the
+		// local change when the user has synced before — otherwise a stale Drive
+		// config (with a newer savedAt) is applied on the next reconnect and
+		// silently wipes local changes like a newly added podcast. First-time
+		// connect keeps its current behavior (no localSavedAt → Drive wins) so a
+		// fresh device can still restore its settings from Drive.
+		const now = new Date().toISOString();
+		if (this.hasSession) {
+			localSavedAt = now;
+			persistLocalSavedAt();
+			if (this.saveTimer) clearTimeout(this.saveTimer);
+			this.saveTimer = setTimeout(() => {
+				this.saveTimer = null;
+				void this.save();
+			}, 3000);
+		} else if (localSavedAt) {
+			// Offline/expired: record the change only if this device has synced
+			// before, so local edits still win over the stale Drive copy.
+			localSavedAt = now;
+			persistLocalSavedAt();
+		}
 	}
 
 	// ─── Error handling ────────────────────────────────────────────────────────
