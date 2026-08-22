@@ -76,4 +76,34 @@ describe('driveConfigSync must not delete podcasts added locally', () => {
 		const podcasts = await connectDriveAndApply('2024-01-02T00:00:00.000Z');
 		expect(podcasts).toHaveLength(0);
 	});
+
+	it('BUG: podcasts added under older builds are wiped when a stale Drive config is applied', async () => {
+		// Podcasts B and C were added locally in an OLDER build whose buggy
+		// scheduleSave never bumped localSavedAt when the Drive session was
+		// expired. After the update + reconnect, localSavedAt is older than the
+		// stale Drive config, so Drive wins and replaces podcasts wholesale.
+		seedLocal([
+			{ ...freshPodcast, id: 1, itunesId: 11, title: 'Pod B' },
+			{ ...freshPodcast, id: 2, itunesId: 22, title: 'Pod C' },
+		]);
+		localStorage.setItem('drive-config-local-saved-at', '2024-01-01T00:00:00.000Z'); // local OLD
+
+		// Stale Drive config: only Pod A, saved after localSavedAt.
+		const { driveConfigSync } = await import('$lib/stores/driveConfigSync.svelte');
+		driveConfigSync.accessToken = 'tok';
+		driveConfigSync.expiresAt = Date.now() + 3600_000;
+		vi.mocked((await import('$lib/drive-config')).downloadDriveConfig).mockResolvedValue({
+			version: 3, savedAt: '2024-01-02T00:00:00.000Z',
+			music: {}, podcastSettings: {},
+			podcasts: [{ ...freshPodcast, id: 1, itunesId: 10, title: 'Pod A' }],
+			lastEpisodeId: '', lastPodcastId: -1, lastPositionSec: 0,
+		} as never);
+		await driveConfigSync.downloadAndApply();
+
+		const { podcastData } = await import('$lib/stores/settings.svelte');
+		const titles = podcastData.podcasts.map((p: { title: string }) => p.title);
+		// Local Pod B and Pod C must NOT be lost by the Drive apply.
+		expect(titles).toContain('Pod B');
+		expect(titles).toContain('Pod C');
+	});
 });

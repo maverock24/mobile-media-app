@@ -29,7 +29,8 @@ and Google Drive music libraries. The live code in `src/` is authoritative.
   (`src/lib/persisted.svelte.ts`). `musicSettings`, `podcastData`, `appSettings`,
   and the others are persisted stores.
 - **Drive config sync** — the module that uploads/downloads the persisted stores
-  to Google Drive appdata and resolves conflicts (last-write-wins by timestamp).
+  to Google Drive appdata and resolves conflicts (last-write-wins by timestamp;
+  podcasts merge by identity so a locally-added podcast is never lost).
 
 ## File management (move / copy / delete)
 

@@ -28,7 +28,19 @@ import {
 	appSettings,
 	weatherSettings,
 	radioData,
+	type PersistedPodcast,
 } from '$lib/stores/settings.svelte';
+
+/** Union local + Drive podcasts by itunesId, preferring local so a podcast the
+ *  user added locally is never lost when a stale Drive config is applied.
+ *  (Remote-only entries are still brought in.) */
+function mergePodcastLists(local: PersistedPodcast[], remote: PersistedPodcast[]): PersistedPodcast[] {
+	const byId = new Map<number, PersistedPodcast>();
+	// Local first so it wins on identity conflicts.
+	for (const p of local) byId.set(p.itunesId, p);
+	for (const p of remote) if (!byId.has(p.itunesId)) byId.set(p.itunesId, p);
+	return Array.from(byId.values());
+}
 import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 import { normalizeListTileTone } from '$lib/utils/listTileTone';
 
@@ -196,7 +208,9 @@ class DriveConfigSync {
 			}
 
 			// Apply podcast data
-			if (config.podcasts        !== undefined) podcastData.podcasts       = config.podcasts;
+			// Merge podcasts so a locally-added podcast is never lost when a stale
+			// Drive config is applied (see ADR-0002 note + podcast-drive-sync tests).
+			if (config.podcasts        !== undefined) podcastData.podcasts       = mergePodcastLists(podcastData.podcasts, config.podcasts);
 			if (config.lastEpisodeId   !== undefined) podcastData.lastEpisodeId  = config.lastEpisodeId;
 			if (config.lastPodcastId   !== undefined) podcastData.lastPodcastId  = config.lastPodcastId;
 			if (config.lastPositionSec !== undefined) podcastData.lastPositionSec = config.lastPositionSec;
