@@ -665,8 +665,19 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 
 		$effect(() => {
 			const item = mediaEngine.item;
+			// A source can be audibly playing while the global `item` is null — e.g.
+			// a deck that isn't the "active" deck, or the music tab not focused.
+			// item is only maintained for the active-deck + music-tab + no-other-source
+			// state. Clearing the native foreground service whenever item is null would
+			// drop foreground protection in those states, making the process killable
+			// when the screen is locked. Only tear down (stopForeground) when NOTHING
+			// is actually playing.
+			const anyPlaying = mediaEngine.musicPlayingA || mediaEngine.musicPlayingB
+				|| mediaEngine.podcastPlaying || mediaEngine.radioPlaying || mediaEngine.mixerPlaying;
 			if (!item) {
-				void MediaControls.clear().catch(() => {});
+				if (!anyPlaying) {
+					void MediaControls.clear().catch(() => {});
+				}
 				return;
 			}
 			void MediaControls.updateNowPlaying({
