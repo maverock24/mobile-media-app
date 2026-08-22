@@ -9,6 +9,10 @@ import android.provider.DocumentsContract;
 import androidx.core.content.FileProvider;
 import androidx.documentfile.provider.DocumentFile;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -481,6 +485,110 @@ public class DirectoryReaderPlugin extends Plugin {
 			call.resolve(result);
 		} catch (Exception e) {
 			call.reject("Failed to write file: " + e.getMessage(), e);
+		}
+	}
+
+	// ── File management (move / copy / delete) — ADR-0002 ─────────────────────
+	private DocumentFile resolveDirectory(String treeUriString, String relativePath) {
+		if (treeUriString == null || treeUriString.isEmpty()) return null;
+		Uri treeUri = Uri.parse(treeUriString);
+		DocumentFile root = DocumentFile.fromTreeUri(getContext(), treeUri);
+		if (root == null || !root.exists() || !root.isDirectory()) return null;
+		if (relativePath == null || relativePath.isEmpty()) return root;
+		DocumentFile target = root;
+		for (String segment : relativePath.split("/")) {
+			if (segment == null || segment.isEmpty()) continue;
+			DocumentFile next = target.findFile(segment);
+			if (next == null || !next.isDirectory()) return null;
+			target = next;
+		}
+		return target;
+	}
+
+	private DocumentFile resolveEntry(String treeUriString, String relativePath, String name) {
+		DocumentFile dir = resolveDirectory(treeUriString, relativePath);
+		if (dir == null || name == null || name.isEmpty()) return null;
+		DocumentFile entry = dir.findFile(name);
+		return (entry != null && entry.exists()) ? entry : null;
+	}
+
+	private static boolean copyDocumentFile(DocumentFile src, DocumentFile destParent, String newName, ContentResolver cr) {
+		if (src.isDirectory()) {
+			DocumentFile destDir = destParent.createDirectory(newName);
+			if (destDir == null) return false;
+			for (DocumentFile child : src.listFiles()) {
+				String childName = child.getName();
+				if (childName == null) return false;
+				if (!copyDocumentFile(child, destDir, childName, cr)) return false;
+			}
+			return true;
+		}
+		String mime = src.getType();
+		if (mime == null || mime.isEmpty()) mime = "application/octet-stream";
+		DocumentFile destFile = destParent.createFile(mime, newName);
+		if (destFile == null) return false;
+		try (InputStream in = cr.openInputStream(src.getUri());
+			 OutputStream out = cr.openOutputStream(destFile.getUri())) {
+			if (in == null || out == null) return false;
+			byte[] buffer = new byte[64 * 1024];
+			int read;
+			while ((read = in.read(buffer)) != -1) {
+				out.write(buffer, 0, read);
+			}
+			out.flush();
+			return true;
+		} catch (IOException e) {
+			return false;
+		}
+	}
+
+	@PluginMethod
+	public void deleteEntry(PluginCall call) {
+		try {
+			DocumentFile entry = resolveEntry(
+				call.getString("treeUri"), call.getString("path", ""), call.getString("name"));
+			if (entry == null) { call.reject("File/folder not found."); return; }
+			if (!entry.delete()) { call.reject("Unable to delete."); return; }
+			call.resolve();
+		} catch (Exception e) {
+			call.reject("Failed to delete: " + e.getMessage(), e);
+		}
+	}
+
+	@PluginMethod
+	public void copyEntry(PluginCall call) {
+		try {
+			DocumentFile src = resolveEntry(
+				call.getString("srcTreeUri"), call.getString("srcPath", ""), call.getString("srcName"));
+			DocumentFile destParent = resolveDirectory(
+				call.getString("destTreeUri"), call.getString("destPath", ""));
+			if (src == null || destParent == null) { call.reject("Source or destination not found."); return; }
+			String destName = call.getString("destName", src.getName());
+			if (destName == null || destName.isEmpty()) { call.reject("destName required."); return; }
+			boolean ok = copyDocumentFile(src, destParent, destName, getContext().getContentResolver());
+			if (!ok) { call.reject("Copy failed."); return; }
+			call.resolve();
+		} catch (Exception e) {
+			call.reject("Failed to copy: " + e.getMessage(), e);
+		}
+	}
+
+	@PluginMethod
+	public void moveEntry(PluginCall call) {
+		try {
+			DocumentFile src = resolveEntry(
+				call.getString("srcTreeUri"), call.getString("srcPath", ""), call.getString("srcName"));
+			DocumentFile destParent = resolveDirectory(
+				call.getString("destTreeUri"), call.getString("destPath", ""));
+			if (src == null || destParent == null) { call.reject("Source or destination not found."); return; }
+			String destName = call.getString("destName", src.getName());
+			if (destName == null || destName.isEmpty()) { call.reject("destName required."); return; }
+			boolean ok = copyDocumentFile(src, destParent, destName, getContext().getContentResolver());
+			if (!ok) { call.reject("Move (copy) failed."); return; }
+			if (!src.delete()) { call.reject("Moved, but could not delete the source."); return; }
+			call.resolve();
+		} catch (Exception e) {
+			call.reject("Failed to move: " + e.getMessage(), e);
 		}
 	}
 
