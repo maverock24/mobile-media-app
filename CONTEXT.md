@@ -31,6 +31,18 @@ and Google Drive music libraries. The live code in `src/` is authoritative.
 - **Drive config sync** — the module that uploads/downloads the persisted stores
   to Google Drive appdata and resolves conflicts (last-write-wins by timestamp).
 
+## File management (move / copy / delete)
+
+A browse-row action strip (swipe-left reveal) provides Download, Move, Copy, and
+Delete for files and folders. Scope and semantics per ADR-0002:
+
+- **Drive** — widen auth to full `drive`; within-Drive move = parent-change API;
+  copy = files.copy; delete = move to Drive trash.
+- **native** — SAF move/copy/delete via the Android plugin; delete is permanent.
+- **web** — deferred (follow-up).
+- Cross-source (Drive ↔ local) moves are copy + delete-source.
+- Destination is chosen through a combined Drive ↔ local picker with a toggle.
+
 ## Navigation
 
 - Architecture map and conventions: `AGENTS.md`.
