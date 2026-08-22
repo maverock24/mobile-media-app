@@ -120,15 +120,8 @@
 		}
 	}
 
-	// Apply screen dim setting on mount (Android only)
-	onMount(() => {
-		if (!isNativeAndroid || appSettings.screenDimDelay <= 0) return;
-		const delayMs = appSettings.screenDimDelay * 1000;
-		ScreenDim.enable({ delayMs }).catch(() => {});
-		return () => {
-			ScreenDim.disable().catch(() => {});
-		};
-	});
+	// Screen-dim enable/disable is owned by +layout (single owner) so it survives
+	// leaving this screen. SettingsView only updates the setting here.
 	const lastRuntimeErrorReport = $derived(
 		runtimeDiagnostics.lastRuntimeError
 			? formatRuntimeErrorReport(runtimeDiagnostics.lastRuntimeError)
