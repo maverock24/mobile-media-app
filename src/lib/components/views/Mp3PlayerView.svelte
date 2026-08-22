@@ -3811,38 +3811,41 @@
 					{@const folderKey = [...browsePath, entry.name].join('/')}
 					<!-- Folder row -->
 					<div class="browse-list-row relative overflow-hidden border-b">
-						<!-- Behind-content: move / copy / delete -->
-						<div class="absolute inset-y-0 right-0 flex items-center gap-1.5">
+						<!-- Behind-content: move / copy / delete (compact icon tiles) -->
+						<div class="absolute inset-y-0 right-0 flex items-center gap-1 bg-slate-900/80">
 							<Button
-								size="sm"
-								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								variant="ghost"
+								size="icon"
+								class="shrink-0"
+								title="Move"
 								onclick={(e) => { e.stopPropagation(); folderOpNotice('Move'); }}
 							>
-								<FolderInput class="w-4 h-4" />
-								Move
+								<FolderInput class="w-5 h-5" />
 							</Button>
 							<Button
-								size="sm"
-								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								variant="ghost"
+								size="icon"
+								class="shrink-0"
+								title="Copy"
 								onclick={(e) => { e.stopPropagation(); folderOpNotice('Copy'); }}
 							>
-								<Copy class="w-4 h-4" />
-								Copy
+								<Copy class="w-5 h-5" />
 							</Button>
 							<Button
-								size="sm"
-								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								variant="ghost"
+								size="icon"
+								class="shrink-0"
+								title="Delete"
 								onclick={(e) => { e.stopPropagation(); folderOpNotice('Delete'); }}
 							>
-								<Trash2 class="w-4 h-4" />
-								Delete
+								<Trash2 class="w-5 h-5" />
 							</Button>
 						</div>
 						<!-- Front: swipeable -->
 						<div
-							use:swipeItem={{ threshold: 340 }}
+							use:swipeItem={{ threshold: 180 }}
 							data-swipe-front
-							class="list-row-surface flex items-center gap-3 px-4 py-3 transition-colors relative z-10 {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
+							class="list-row-surface bg-background flex items-center gap-3 px-4 py-3 transition-colors relative z-10 {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
 						>
 							<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
 								<Folder class="w-4.5 h-4.5 text-primary" />
@@ -3879,11 +3882,13 @@
 					<div class="browse-list-row relative overflow-hidden border-b">
 						<!-- Behind-content: upload/download (hidden during loop selection) -->
 						{#if selectedBrowseCount === 0}
-						<div class="absolute inset-y-0 right-0 flex items-center gap-1.5">
+						<div class="absolute inset-y-0 right-0 flex items-center gap-1 bg-slate-900/80">
 							{#if isFiltered}
 							<Button
-								size="sm"
-								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								variant="ghost"
+								size="icon"
+								class="shrink-0"
+								title="Go to folder"
 								onclick={(e) => {
 								e.stopPropagation();
 								const wrapper = (e.currentTarget as HTMLElement).closest('.relative.overflow-hidden');
@@ -3892,13 +3897,14 @@
 								goToFileFolder(entry.file);
 							}}
 							>
-								<Folder class="w-3 h-3" />
-								Folder
+								<Folder class="w-5 h-5" />
 							</Button>
 							{/if}
 							<Button
-								size="sm"
-								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								variant="ghost"
+								size="icon"
+								class="shrink-0"
+								title={isDrive ? 'Download' : 'Upload'}
 								onclick={(e) => {
 								e.stopPropagation();
 								// Reset the swipe position
@@ -3910,42 +3916,43 @@
 							}}
 							>
 								{#if isDrive}
-									<Download class="w-4 h-4" />
-									Download
-							{:else}
-									<Upload class="w-4 h-4" />
-									Upload
-							{/if}
+									<Download class="w-5 h-5" />
+								{:else}
+									<Upload class="w-5 h-5" />
+								{/if}
 							</Button>
 							<Button
-								size="sm"
-								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								variant="ghost"
+								size="icon"
+								class="shrink-0"
+								title="Move"
 								onclick={(e) => { e.stopPropagation(); handleMoveEntry({ name: entry.file.name, isDrive, fileId: isDrive ? ((entry.file as any).fileId ?? null) : null, source: entry.file }); }}
 							>
-								<FolderInput class="w-4 h-4" />
-								Move
+								<FolderInput class="w-5 h-5" />
 							</Button>
 							<Button
-								size="sm"
-								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								variant="ghost"
+								size="icon"
+								class="shrink-0"
+								title="Copy"
 								onclick={(e) => { e.stopPropagation(); handleCopyEntry({ name: entry.file.name, isDrive, fileId: isDrive ? ((entry.file as any).fileId ?? null) : null, source: entry.file }); }}
 							>
-								<Copy class="w-4 h-4" />
-								Copy
+								<Copy class="w-5 h-5" />
 							</Button>
 							<Button
-								size="sm"
-								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								variant="ghost"
+								size="icon"
+								class="shrink-0"
+								title="Delete"
 								onclick={(e) => { e.stopPropagation(); handleDeleteEntry({ name: entry.file.name, isDrive, fileId: isDrive ? ((entry.file as any).fileId ?? null) : null, source: entry.file }); }}
 							>
-								<Trash2 class="w-4 h-4" />
-								Delete
+								<Trash2 class="w-5 h-5" />
 							</Button>
 						</div>
 						{/if}
 						<!-- Front: existing row content (swipeable) -->
 						<div
-							use:swipeItem={{ threshold: 340 }}
+							use:swipeItem={{ threshold: 180 }}
 							data-swipe-front
 							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
 							style={isSelected ? 'background-color: hsl(190 62% 20%)' : isCurrentTrack ? 'background-color: hsl(190 58% 17%)' : ''}
