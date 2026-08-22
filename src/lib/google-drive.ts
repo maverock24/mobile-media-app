@@ -10,7 +10,9 @@ const GOOGLE_IDENTITY_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 export const GOOGLE_DRIVE_WRITE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-export const GOOGLE_DRIVE_AUTH_SCOPE = `${GOOGLE_DRIVE_SCOPE} ${GOOGLE_DRIVE_WRITE_SCOPE} ${DRIVE_APPDATA_SCOPE}`;
+/** Full Drive scope — required for move/copy/delete on any Drive file (ADR-0002). */
+export const GOOGLE_DRIVE_FULL_SCOPE = 'https://www.googleapis.com/auth/drive';
+export const GOOGLE_DRIVE_AUTH_SCOPE = `${GOOGLE_DRIVE_FULL_SCOPE} ${DRIVE_APPDATA_SCOPE}`;
 
 export interface GoogleDriveTokenResponse {
 	access_token: string;
@@ -32,6 +34,7 @@ export interface GoogleDriveFile {
 	name: string;
 	mimeType: string;
 	fileExtension?: string;
+	trashed?: boolean;
 	modifiedTime?: string;
 	size?: string;
 	webViewLink?: string;
@@ -702,4 +705,102 @@ export async function uploadGoogleDriveFile(options: {
 
 	const result = await response.json() as { id: string; name: string };
 	return result;
+}
+
+// ─── File management (move / copy / delete) — ADR-0002 ───────────────────────
+
+/** Copy a Drive file (or folder) into a destination folder. Optionally rename. */
+export async function copyGoogleDriveFile(options: {
+	accessToken: string;
+	fileId: string;
+	parentFolderId: string;
+	name?: string;
+}): Promise<GoogleDriveFile> {
+	const body: Record<string, unknown> = { parents: [options.parentFolderId] };
+	if (options.name) body.name = options.name;
+
+	const response = await fetch(
+		`https://www.googleapis.com/drive/v3/files/${options.fileId}/copy?fields=id,name,mimeType`,
+		{
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${options.accessToken}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify(body),
+		}
+	);
+
+	if (!response.ok) {
+		const message = await response.text().catch(() => '');
+		throw new Error(message || `Unable to copy Drive file (${response.status}).`);
+	}
+
+	return response.json() as Promise<GoogleDriveFile>;
+}
+
+/** Move a Drive file (or folder) by replacing its parents with the destination folder. */
+export async function moveGoogleDriveFile(options: {
+	accessToken: string;
+	fileId: string;
+	newParentFolderId: string;
+}): Promise<GoogleDriveFile> {
+	const response = await fetch(
+		`https://www.googleapis.com/drive/v3/files/${options.fileId}?fields=id,name,parents`,
+		{
+			method: 'PATCH',
+			headers: {
+				Authorization: `Bearer ${options.accessToken}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({ parents: [options.newParentFolderId] }),
+		}
+	);
+
+	if (!response.ok) {
+		const message = await response.text().catch(() => '');
+		throw new Error(message || `Unable to move Drive file (${response.status}).`);
+	}
+
+	return response.json() as Promise<GoogleDriveFile>;
+}
+
+/** Delete a Drive file (or folder) by moving it to the trash. */
+export async function trashGoogleDriveFile(options: {
+	accessToken: string;
+	fileId: string;
+}): Promise<GoogleDriveFile> {
+	const response = await fetch(
+		`https://www.googleapis.com/drive/v3/files/${options.fileId}?fields=id,name,trashed`,
+		{
+			method: 'PATCH',
+			headers: {
+				Authorization: `Bearer ${options.accessToken}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({ trashed: true }),
+		}
+	);
+
+	if (!response.ok) {
+		const message = await response.text().catch(() => '');
+		throw new Error(message || `Unable to delete Drive file (${response.status}).`);
+	}
+
+	return response.json() as Promise<GoogleDriveFile>;
+}
+
+/** Auto-rename on a name clash: 'song.mp3' + ['song.mp3'] -> 'song (1).mp3'. */
+export function uniqueFileName(desiredName: string, existingNames: string[]): string {
+	if (!existingNames.includes(desiredName)) return desiredName;
+	const dot = desiredName.lastIndexOf('.');
+	const stem = dot > 0 ? desiredName.slice(0, dot) : desiredName;
+	const ext = dot > 0 ? desiredName.slice(dot) : '';
+	let n = 1;
+	let candidate = `${stem} (${n})${ext}`;
+	while (existingNames.includes(candidate)) {
+		n += 1;
+		candidate = `${stem} (${n})${ext}`;
+	}
+	return candidate;
 }
