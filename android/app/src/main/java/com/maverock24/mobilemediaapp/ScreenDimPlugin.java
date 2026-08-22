@@ -3,6 +3,7 @@ package com.maverock24.mobilemediaapp;
 import android.graphics.Color;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -33,6 +34,7 @@ public class ScreenDimPlugin extends Plugin {
         @Override
         public boolean onTouch(View v, MotionEvent event) {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                Log.d("DEBUG-dim", "touch DOWN -> reset timer");
                 scheduleDim();
             }
             // Don't consume — let touches fall through to child views
@@ -47,6 +49,7 @@ public class ScreenDimPlugin extends Plugin {
             call.reject("delayMs must be > 0");
             return;
         }
+        Log.d("DEBUG-dim", "enable delayMs=" + delay);
         disableInternal();
         delayMs = delay;
         enabled = true;
@@ -57,6 +60,7 @@ public class ScreenDimPlugin extends Plugin {
 
     @PluginMethod
     public void disable(PluginCall call) {
+        Log.d("DEBUG-dim", "disable");
         disableInternal();
         call.resolve();
     }
@@ -135,11 +139,12 @@ public class ScreenDimPlugin extends Plugin {
         if (!enabled || delayMs <= 0) return;
         handler.removeCallbacks(dimRunnable);
         handler.postDelayed(dimRunnable, delayMs);
+        Log.d("DEBUG-dim", "scheduleDim in " + delayMs + "ms");
     }
 
     private void showOverlay() {
         if (!enabled || dimOverlay != null) return;
-        try {
+        Log.d("DEBUG-dim", "showOverlay (DIM FIRED)");        try {
             ViewGroup root = getActivity().findViewById(android.R.id.content);
             if (root == null) return;
 
@@ -185,6 +190,7 @@ public class ScreenDimPlugin extends Plugin {
 
     private void handleUserInteraction() {
         if (!enabled) return;
+        Log.d("DEBUG-dim", "user touched dim overlay -> restore + reschedule");
         // Remove the dim overlay (user touched the dim screen) and reschedule timer
         removeOverlay();
         scheduleDim();
