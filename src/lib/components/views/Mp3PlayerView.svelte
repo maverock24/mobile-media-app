@@ -73,7 +73,8 @@
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
-		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X
+		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X,
+		Copy, Trash2, FolderInput
 	} from 'lucide-svelte';
 
 	interface Track {
@@ -2795,6 +2796,17 @@
 		}
 	}
 
+	// ── File/folder management handlers (T4 UI; real logic wired in T6) ──────
+	function handleMoveEntry(name: string) {
+		addToast({ message: `Move not wired yet: ${name}`, type: 'info' });
+	}
+	function handleCopyEntry(name: string) {
+		addToast({ message: `Copy not wired yet: ${name}`, type: 'info' });
+	}
+	function handleDeleteEntry(name: string) {
+		addToast({ message: `Delete not wired yet: ${name}`, type: 'info' });
+	}
+
 	async function downloadToLocalFolder(file: StoredAudioFile) {
 		if (isTransferring) return;
 		const token = await ensureDriveAccessToken(true);
@@ -3656,31 +3668,65 @@
 					{#if entry.kind === 'folder'}
 					{@const folderKey = [...browsePath, entry.name].join('/')}
 					<!-- Folder row -->
-					<div class="browse-list-row list-row-surface flex items-center gap-3 px-4 py-3 border-b transition-colors {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}">
-						<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
-							<Folder class="w-4.5 h-4.5 text-primary" />
+					<div class="browse-list-row relative overflow-hidden border-b">
+						<!-- Behind-content: move / copy / delete -->
+						<div class="absolute inset-y-0 right-0 flex items-center gap-1.5">
+							<Button
+								size="sm"
+								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								onclick={(e) => { e.stopPropagation(); handleMoveEntry(entry.name); }}
+							>
+								<FolderInput class="w-4 h-4" />
+								Move
+							</Button>
+							<Button
+								size="sm"
+								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								onclick={(e) => { e.stopPropagation(); handleCopyEntry(entry.name); }}
+							>
+								<Copy class="w-4 h-4" />
+								Copy
+							</Button>
+							<Button
+								size="sm"
+								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								onclick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.name); }}
+							>
+								<Trash2 class="w-4 h-4" />
+								Delete
+							</Button>
 						</div>
-						<button class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}" onclick={() => navigateInto(entry.name)}>
-							<p class="font-semibold text-[0.95rem] leading-tight title-marquee"><span class="title-marquee-inner" data-text={entry.name}>{entry.name}</span></p>
-							<p class="text-xs text-muted-foreground">{entry.count > 0 ? entry.count + ' MP3 file' + (entry.count !== 1 ? 's' : '') : 'folder'}</p>
-						</button>
-						<!-- Play all in this subfolder -->
-						<button
-							class="w-11 h-11 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors disabled:opacity-40 disabled:pointer-events-none"
-							onclick={() => playFolderPath([...browsePath, entry.name])}
-							disabled={loadingFolderPath === folderKey}
-							aria-label="Play {entry.name}"
+						<!-- Front: swipeable -->
+						<div
+							use:swipeItem={{ threshold: 340 }}
+							data-swipe-front
+							class="list-row-surface flex items-center gap-3 px-4 py-3 transition-colors relative z-10 {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
 						>
-							{#if loadingFolderPath === folderKey}
-								<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-							{:else}
-								<Play class="w-5 h-5 ml-0.5" />
-							{/if}
-						</button>
-						<!-- Navigate into -->
-						<button class="text-muted-foreground shrink-0" onclick={() => navigateInto(entry.name)} aria-label="Browse {entry.name}">
-							<ChevronRight class="w-5 h-5" />
-						</button>
+							<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+								<Folder class="w-4.5 h-4.5 text-primary" />
+							</div>
+							<button class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}" onclick={() => navigateInto(entry.name)}>
+								<p class="font-semibold text-[0.95rem] leading-tight title-marquee"><span class="title-marquee-inner" data-text={entry.name}>{entry.name}</span></p>
+								<p class="text-xs text-muted-foreground">{entry.count > 0 ? entry.count + ' MP3 file' + (entry.count !== 1 ? 's' : '') : 'folder'}</p>
+							</button>
+							<!-- Play all in this subfolder -->
+							<button
+								class="w-11 h-11 rounded-full bg-primary/20 hover:bg-primary/40 flex items-center justify-center text-primary shrink-0 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+								onclick={() => playFolderPath([...browsePath, entry.name])}
+								disabled={loadingFolderPath === folderKey}
+								aria-label="Play {entry.name}"
+							>
+								{#if loadingFolderPath === folderKey}
+									<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+								{:else}
+									<Play class="w-5 h-5 ml-0.5" />
+								{/if}
+							</button>
+							<!-- Navigate into -->
+							<button class="text-muted-foreground shrink-0" onclick={() => navigateInto(entry.name)} aria-label="Browse {entry.name}">
+								<ChevronRight class="w-5 h-5" />
+							</button>
+						</div>
 					</div>
 					{:else}
 					<!-- File row — swipe left for upload/download -->
@@ -3729,11 +3775,35 @@
 									Upload
 							{/if}
 							</Button>
+							<Button
+								size="sm"
+								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								onclick={(e) => { e.stopPropagation(); handleMoveEntry(entry.file.name); }}
+							>
+								<FolderInput class="w-4 h-4" />
+								Move
+							</Button>
+							<Button
+								size="sm"
+								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								onclick={(e) => { e.stopPropagation(); handleCopyEntry(entry.file.name); }}
+							>
+								<Copy class="w-4 h-4" />
+								Copy
+							</Button>
+							<Button
+								size="sm"
+								class="h-8 px-2 text-[11px] font-semibold gap-0.5 shrink-0"
+								onclick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.file.name); }}
+							>
+								<Trash2 class="w-4 h-4" />
+								Delete
+							</Button>
 						</div>
 						{/if}
 						<!-- Front: existing row content (swipeable) -->
 						<div
-							use:swipeItem={{ threshold: 160 }}
+							use:swipeItem={{ threshold: 340 }}
 							data-swipe-front
 							class="list-row-surface flex items-center gap-2 px-4 py-2 transition-colors relative z-10 bg-background {isSelected ? 'ring-1 ring-inset ring-primary/35' : isCurrentTrack ? 'ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}"
 							style={isSelected ? 'background-color: hsl(190 62% 20%)' : isCurrentTrack ? 'background-color: hsl(190 58% 17%)' : ''}
