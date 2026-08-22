@@ -97,10 +97,19 @@ export function swipeItem(node: HTMLElement, params: SwipeItemParams = {}) {
 		}, 250);
 	}
 
+	// A swipe-to-reveal row claims the horizontal gesture: stop the touch event
+	// from bubbling to an ancestor swipe gesture (e.g. the browse container's
+	// swipeBack). Otherwise swiping a row to reveal its action button ALSO fires
+	// the ancestor's back-navigation, undoing the reveal.
+	function onTouchStart(e: TouchEvent) {
+		e.stopPropagation();
+	}
+
 	node.addEventListener('pointerdown', onPointerDown);
 	node.addEventListener('pointermove', onPointerMove);
 	node.addEventListener('pointerup', onPointerUp);
 	node.addEventListener('pointercancel', onPointerUp);
+	node.addEventListener('touchstart', onTouchStart, { passive: true });
 	node.style.touchAction = 'pan-y'; // allow vertical scroll
 
 	return {
@@ -112,6 +121,7 @@ export function swipeItem(node: HTMLElement, params: SwipeItemParams = {}) {
 			node.removeEventListener('pointermove', onPointerMove);
 			node.removeEventListener('pointerup', onPointerUp);
 			node.removeEventListener('pointercancel', onPointerUp);
+			node.removeEventListener('touchstart', onTouchStart);
 		},
 	};
 }
