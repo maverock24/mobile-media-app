@@ -37,4 +37,22 @@ describe('podcastData persistence across app restart', () => {
 		// nextId persisted so a future podcast gets a fresh, non-colliding id.
 		expect(stored.nextId).toBe(1);
 	});
+
+	it('podcasts saved by a previous version survive a fresh app start (update)', async () => {
+		// Simulate localStorage as written by an OLDER build, then boot the app
+		// fresh (like an APK update): the stored podcasts must load.
+		localStorage.setItem('podcast-data', JSON.stringify({
+			podcasts: [{
+				id: 7, itunesId: 999, title: 'Old Cast', author: 'A', category: 'News',
+				artworkUrl: '', feedUrl: 'https://example.com/f.xml', subscribed: true,
+				episodes: [], episodesLoaded: false,
+			}],
+			nextId: 8, lastEpisodeId: '', lastPodcastId: -1, lastPositionSec: 0,
+		}));
+
+		const { podcastData } = await import('$lib/stores/settings.svelte');
+		expect(podcastData.podcasts).toHaveLength(1);
+		expect(podcastData.podcasts[0].title).toBe('Old Cast');
+		expect(podcastData.podcasts[0].subscribed).toBe(true);
+	});
 });
