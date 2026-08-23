@@ -169,6 +169,10 @@ class DriveConfigSync {
 			// Conflict resolution: skip apply if local data is newer
 			const driveTime  = config.savedAt ? Date.parse(config.savedAt) : 0;
 			const localTime  = localSavedAt   ? Date.parse(localSavedAt)   : 0;
+			// TEMP [DEBUG-podcast] instrumentation — remove after diagnosing.
+			console.log('[DEBUG-podcast] conflict localTime=', localTime, 'driveTime=', driveTime,
+				'localPods=', podcastData.podcasts.length, 'remotePods=', config.podcasts?.length ?? 0,
+				'decision=', localTime > driveTime ? 'push-local' : 'apply-drive');
 			if (localTime > driveTime) {
 				// Local is newer — push local state to Drive instead
 				this.status = 'idle';
@@ -210,7 +214,13 @@ class DriveConfigSync {
 			// Apply podcast data
 			// Merge podcasts so a locally-added podcast is never lost when a stale
 			// Drive config is applied (see ADR-0002 note + podcast-drive-sync tests).
-			if (config.podcasts        !== undefined) podcastData.podcasts       = mergePodcastLists(podcastData.podcasts, config.podcasts);
+			if (config.podcasts        !== undefined) {
+				const before = podcastData.podcasts.length;
+				podcastData.podcasts       = mergePodcastLists(podcastData.podcasts, config.podcasts);
+				// TEMP [DEBUG-podcast] instrumentation — remove after diagnosing.
+				console.log('[DEBUG-podcast] podcasts merged', before, '->', podcastData.podcasts.length,
+					'(replace would have been remote=', config.podcasts.length, ')');
+			}
 			if (config.lastEpisodeId   !== undefined) podcastData.lastEpisodeId  = config.lastEpisodeId;
 			if (config.lastPodcastId   !== undefined) podcastData.lastPodcastId  = config.lastPodcastId;
 			if (config.lastPositionSec !== undefined) podcastData.lastPositionSec = config.lastPositionSec;
