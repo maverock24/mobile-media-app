@@ -331,7 +331,6 @@
 		podcastSettings.playbackSpeed = 1.0;
 		podcastSettings.skipBackSeconds = 10;
 		podcastSettings.skipForwardSeconds = 30;
-		podcastSettings.autoPlayNext = true;
 		podcastSettings.trimSilence = false;
 		podcastSettings.boostVolume = false;
 		podcastSettings.defaultTab = 'subscribed';
@@ -745,7 +744,6 @@
 					<!-- Toggles -->
 					<div class="space-y-3">
 						{#each [
-							{ key: 'autoPlayNext', label: 'Auto-play next episode' },
 							{ key: 'trimSilence', label: 'Trim silence' },
 							{ key: 'boostVolume', label: 'Volume boost' },
 							{ key: 'autoMarkPlayed', label: 'Auto-mark as played' }

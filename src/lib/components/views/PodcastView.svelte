@@ -17,7 +17,6 @@
 		fetchRss, buildEpisodeId, describePodcastRequestError,
 		parseDuration, formatDate, readPodcastJson, clearRssCache,
 	} from '$lib/podcast/rss';
-	import { getNextAutoPlayEpisode } from '$lib/podcast/autoPlay';
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
@@ -298,17 +297,8 @@
 			if (currentEpisode) {
 				markEpisodeFullyPlayed(currentEpisode.podcast.id, currentEpisode.episode);
 			}
-			// Auto-play the next episode if enabled; otherwise stop and clear the
-			// now-playing item so the background-resume watchdog doesn't replay the
-			// just-ended episode in a loop.
-			if (currentEpisode) {
-				const next = getNextAutoPlayEpisode(
-					currentEpisode.podcast.episodes, currentEpisode.episode.id, podcastSettings.autoPlayNext);
-				if (next) {
-					nextEpisode();
-					return;
-				}
-			}
+			// Stop — do NOT auto-play the next episode. Clear the now-playing item
+			// so the background-resume watchdog doesn't replay the ended episode.
 			mediaEngine.item = null;
 		};
 		const onError = () => {

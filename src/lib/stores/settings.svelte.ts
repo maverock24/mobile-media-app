@@ -85,7 +85,6 @@ export const podcastSettings = persisted('podcast-settings', {
 	playbackSpeed: 1.0,
 	skipBackSeconds: 10,
 	skipForwardSeconds: 30,
-	autoPlayNext: true,
 	trimSilence: false,
 	boostVolume: false,
 	defaultTab: 'subscribed' as 'subscribed' | 'discover',
