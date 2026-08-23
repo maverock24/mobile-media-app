@@ -10,7 +10,7 @@
 	} from '$lib/stores/sleepTimer.svelte';
 	import { triggerToggleHaptic } from '$lib/native/haptics';
 	import { formatClock as formatTime } from '$lib/models/music';
-	import { Play, Pause, SkipBack, SkipForward, Moon, X, Repeat, Volume2, Gauge } from 'lucide-svelte';
+	import { Play, Pause, SkipBack, SkipForward, Moon, X, Repeat, Volume2, Gauge, MoreVertical } from 'lucide-svelte';
 
 	interface Props {
 		/** The currently selected tab. */
@@ -21,6 +21,7 @@
 		onNavigateTo?: (tab: string) => void;
 	}
 	let { activeTab, position = 'bottom', onNavigateTo }: Props = $props();
+	let showMenu = $state(false);
 	let showSleepTimerOptions = $state(false);
 	let showMusicSpeedOptions = $state(false);
 
@@ -181,14 +182,20 @@
 		void triggerToggleHaptic(true);
 	}
 
-	function toggleSleepTimerOptions() {
-		showSleepTimerOptions = !showSleepTimerOptions;
-		if (showSleepTimerOptions) showMusicSpeedOptions = false;
+	function toggleMenu() {
+		showMenu = !showMenu;
 	}
 
-	function toggleMusicSpeedOptions() {
-		showMusicSpeedOptions = !showMusicSpeedOptions;
-		if (showMusicSpeedOptions) showSleepTimerOptions = false;
+	function openSleepOptions() {
+		showMenu = false;
+		showSleepTimerOptions = true;
+		showMusicSpeedOptions = false;
+	}
+
+	function openSpeedOptions() {
+		showMenu = false;
+		showMusicSpeedOptions = true;
+		showSleepTimerOptions = false;
 	}
 
 	function applyMusicSpeed(speed: number) {
@@ -241,25 +248,14 @@
 			<div class="relative min-h-[3.5rem]">
 				<div class="absolute left-0 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
 					<button
-						class="mini-player-action mini-player-sleep mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-						onclick={toggleSleepTimerOptions}
-						aria-label="Sleep timer"
-						title={sleepTimer.isActive ? `Sleep timer ${sleepTimerLabel}` : 'Set sleep timer'}
+						class="mini-player-action mini-player-control-surface w-9 h-9 flex items-center justify-center rounded-full {showMenu ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
+						onclick={toggleMenu}
+						aria-label="More options"
+						aria-pressed={showMenu}
+						title="Sleep timer · Playback speed"
 					>
-						<Moon class="w-4 h-4 {sleepTimer.isActive ? 'text-primary' : ''}" />
+						<MoreVertical class="w-4 h-4 {sleepTimer.isActive ? 'text-primary' : ''}" />
 					</button>
-					{#if activeTab === 'music'}
-						<button
-							class="mini-player-action mini-player-control-surface h-9 min-w-[2.75rem] px-2 inline-flex items-center justify-center gap-1 rounded-full text-xs font-semibold {showMusicSpeedOptions ? 'border-primary bg-primary/18 text-primary' : 'text-muted-foreground hover:text-foreground'}"
-							onclick={toggleMusicSpeedOptions}
-							aria-label="Playback speed"
-							aria-pressed={showMusicSpeedOptions}
-							title="Playback speed · Deck A"
-						>
-							<Gauge class="w-4 h-4" />
-							{deckASpeed}×
-						</button>
-					{/if}
 				</div>
 
 				<div class="flex items-center justify-center gap-3">
@@ -332,6 +328,29 @@
 				{/if}
 			</div>
 		</div>
+
+		{#if showMenu}
+			<div class="px-3 pb-2 flex flex-wrap gap-2">
+				<button
+					class="mini-player-chip mini-player-control-surface inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
+					onclick={openSleepOptions}
+					aria-label="Sleep timer"
+				>
+					<Moon class="w-3.5 h-3.5 {sleepTimer.isActive ? 'text-primary' : ''}" />
+					Sleep timer{sleepTimer.isActive ? ` · ${sleepTimerLabel}` : ''}
+				</button>
+				{#if activeTab === 'music'}
+					<button
+						class="mini-player-chip mini-player-control-surface inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
+						onclick={openSpeedOptions}
+						aria-label="Playback speed"
+					>
+						<Gauge class="w-3.5 h-3.5" />
+						Speed · {deckASpeed}×
+					</button>
+				{/if}
+			</div>
+		{/if}
 
 		{#if sleepTimer.isActive || showSleepTimerOptions}
 			<div class="px-3 pb-2 space-y-2">
