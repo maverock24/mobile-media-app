@@ -17,6 +17,7 @@
 		fetchRss, buildEpisodeId, describePodcastRequestError,
 		parseDuration, formatDate, readPodcastJson, clearRssCache,
 	} from '$lib/podcast/rss';
+	import { runConcurrently } from '$lib/podcast/refresh';
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
@@ -618,9 +619,9 @@
 		if (toRefresh.length === 0) return;
 		isRefreshingAll = true;
 		try {
-			for (const podcast of toRefresh) {
-				await refreshPodcastSilent(podcast);
-			}
+			// Fetch feeds in parallel (bounded concurrency) — the sequential
+			// per-feed loop made refreshing N subscriptions take N× network latency.
+			await runConcurrently(toRefresh, (p) => refreshPodcastSilent(p));
 		} finally {
 			isRefreshingAll = false;
 		}
