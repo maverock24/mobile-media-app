@@ -2,9 +2,8 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
-	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
-	import { Cloud, Download, LogIn, LogOut, RefreshCw, Upload } from 'lucide-svelte';
+	import { Cloud, LogIn, LogOut, RefreshCw } from 'lucide-svelte';
 
 	onMount(() => {
 		void googleDriveSession.ensureUser();
@@ -16,16 +15,6 @@
 
 	async function handleRefreshConnection() {
 		await googleDriveSession.signIn();
-	}
-
-	async function handlePushToDrive() {
-		await driveConfigSync.connect(false);
-		await driveConfigSync.save();
-	}
-
-	async function handleFetchFromDrive() {
-		await driveConfigSync.connect(false);
-		await driveConfigSync.downloadAndApply();
 	}
 </script>
 
@@ -57,24 +46,12 @@
 			<p class="text-sm text-destructive">{googleDriveSession.error}</p>
 		{/if}
 
-		{#if driveConfigSync.errorMessage}
-			<p class="text-sm text-destructive">{driveConfigSync.errorMessage}</p>
-		{/if}
-
 		{#if !googleDriveSession.configured}
 			<p class="text-sm text-muted-foreground">Google Drive sign-in is disabled until `PUBLIC_GOOGLE_CLIENT_ID` is configured at runtime or build time.</p>
 		{/if}
 
 		<div class="flex gap-2">
 			{#if googleDriveSession.user}
-				<Button variant="outline" onclick={handlePushToDrive} class="gap-2" disabled={driveConfigSync.status === 'syncing'}>
-					<Upload class="w-4 h-4" />
-					Push to Drive
-				</Button>
-				<Button variant="outline" onclick={handleFetchFromDrive} class="gap-2" disabled={driveConfigSync.status === 'syncing'}>
-					<Download class="w-4 h-4" />
-					Fetch from Drive
-				</Button>
 				<Button variant="outline" onclick={handleRefreshConnection} class="gap-2" disabled={googleDriveSession.isAuthenticating}>
 					{#if googleDriveSession.isAuthenticating}
 						<RefreshCw class="w-4 h-4 animate-spin" />
@@ -103,13 +80,8 @@
 
 		{#if googleDriveSession.user}
 			<p class="text-xs text-muted-foreground">
-				Sync your settings (podcasts, radio favorites, weather locations, and MP3 preferences) to Google Drive.
-				Fetch restores settings only and does not download MP3 files.
+				Signed in to Google Drive for streaming your music library.
 			</p>
-		{/if}
-
-		{#if driveConfigSync.lastSyncedAt}
-			<p class="text-xs text-muted-foreground">Last Drive sync: {driveConfigSync.lastSyncedAt.toLocaleString()}</p>
 		{/if}
 	</Card>
 </div>

@@ -27,28 +27,20 @@ and Google Drive music libraries. The live code in `src/` is authoritative.
   playable URL is an adapter concern the player must not own.
 - **persisted store** — a localStorage-backed Svelte-5 rune store
   (`src/lib/persisted.svelte.ts`). `musicSettings`, `podcastData`, `appSettings`,
-  and the others are persisted stores.
-- **Drive config sync** — the module that uploads/downloads the persisted stores
-  to Google Drive appdata and resolves conflicts (last-write-wins by timestamp;
-  podcasts merge by identity so a locally-added podcast is never lost).
+  and the others are persisted stores. Podcasts/settings live only on-device
+  (the Google Drive settings/podcast sync was removed).
 
 ## File management (move / copy / delete)
 
 A browse-row action strip (swipe-left reveal) provides Download, Move, Copy, and
-Delete for files and folders. Scope and semantics per ADR-0002:
-
-- **Drive** — widen auth to full `drive`; within-Drive move = parent-change API;
-  copy = files.copy; delete = move to Drive trash.
-- **native** — SAF move/copy/delete via the Android plugin; delete is permanent.
-- **web** — deferred (follow-up).
-- Cross-source (Drive ↔ local) moves are copy + delete-source.
-- Destination is chosen through a combined Drive ↔ local picker with a toggle.
+Delete. Only native (SAF) local files support move/copy/delete; Drive files
+support download only. Local deletes are permanent; copy uses the local
+destination picker. Drive file management was removed (ADR-0002, revised).
 
 ## Navigation
 
 - Architecture map and conventions: `AGENTS.md`.
 - `src/lib/audio/` — audio modules (`equalizer.ts`, `fileResolver.ts`, planned
   `player.ts`).
-- `src/lib/stores/` — rune stores (`mediaEngine`, `settings`, `library`,
-  `driveConfigSync`, …).
+- `src/lib/stores/` — rune stores (`mediaEngine`, `settings`, `library`, …).
 - `src/lib/components/views/` — feature screens.

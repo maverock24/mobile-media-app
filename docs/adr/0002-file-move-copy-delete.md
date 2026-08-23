@@ -10,35 +10,30 @@ The MP3 browse view reveals a per-row action strip on a left swipe. Today it
 offers Download (Drive rows) or Upload (local rows). We are adding move, copy,
 and delete so users can reorganise their library.
 
-## Decision
+## Decision (revised — Drive file ops removed)
 
-- **Sources:** Google Drive and native Android local files. The web
-  (File System Access) source is deferred to a follow-up ticket.
+The per-row action strip provides Download (Drive rows) or Upload (local rows),
+plus Move, Copy, and Delete. Revision: only native (SAF) local files support
+move/copy/delete; Drive file management and the Drive scope widening were
+removed. Drive files are download-only.
+
+- **Sources:** native Android local files only for move/copy/delete. Drive is
+  download-only (its browse/download stays). The web source is deferred.
 - **Scope:** operations apply to files **and** folders.
-- **Move:** within-Drive uses the Drive API parent change (cheap). Within-local
-  uses a SAF move. Any cross-source move (Drive↔local) and every copy is
-  implemented as copy-to-destination then delete-source — there is no atomic
-  cross-volume move.
-- **Copy:** copy to a chosen destination folder. On a duplicate name, auto-rename
-  (`name (1).mp3`); never overwrite silently.
-- **Delete:** Drive deletes move the file to Drive trash. Local deletes are
-  permanent (SAF/FS Access have no trash). Both require a confirmation.
-- **Drive scope:** widen the Drive auth scope to full `drive`. This is required
-  for move/copy/delete on Drive files the app did not create (the current
-  `drive.file` scope only permits writes to app-owned files). Tradeoff: broader
-  read/write access to the user's Drive. The new scope must be added in the
-  Google Cloud OAuth consent screen and the Android OAuth bridge.
-- **UI:** the reveal widens to a horizontal strip (Download, Move, Copy, Delete,
-  + Folder when filtered). Folder rows get the same reveal; tap still navigates
-  into the folder.
-- **Destination:** one combined destination picker with a Drive ↔ local toggle,
-  reusing the existing Drive and local folder pickers under the hood.
+- **Move/Copy:** within-local, implemented via the SAF plugin (`moveEntry` /
+  `copyEntry`) — copy to a destination chosen in the local picker, then delete
+  the source for a move. No cross-source (Drive) destinations.
+- **Delete:** local deletes are permanent (SAF has no trash), with confirmation.
+- **Drive scope:** NOT widened — the auth scope stays at `drive.readonly` +
+  `drive.file` (reverted from full `drive`). No Drive API copy/move/trash.
+- **UI:** the reveal shows Download (Drive) / Upload + Move/Copy/Delete (local
+  rows only). Folder rows get the reveal; tap still navigates in.
+- **Destination:** the local (SAF) destination picker only; the Drive ↔ local
+  toggle was removed.
 
 ## Consequences
 
-- New Drive API functions (copy, move/update-parents, delete/trash) in
-  `google-drive.ts`.
 - New native SAF methods for move/copy/delete in the Android plugin.
-- A combined destination-picker UI and a widened browse-row action strip.
-- The widened Drive scope is a privacy-relevant change and must be reflected in
-  the Google Cloud consent configuration.
+- A local destination picker and a widened browse-row action strip.
+- The Google Drive settings/podcast config sync (`driveConfigSync`) and its
+  modules were removed; podcasts/settings persist only on-device.

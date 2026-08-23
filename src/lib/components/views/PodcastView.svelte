@@ -10,7 +10,6 @@
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import { appSettings, podcastSettings, podcastData } from '$lib/stores/settings.svelte';
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
-	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	import { formatDuration } from '$lib/models/music';
@@ -360,14 +359,6 @@
 	// ── Sync playback speed ──────────────────────────────────────
 	$effect(() => { if (audioEl) audioEl.playbackRate = podcastSettings.playbackSpeed; });
 
-	// ── Auto-save podcast data to Drive when subscriptions/progress change ──
-	$effect(() => {
-		void podcastData.podcasts;
-		void podcastData.lastEpisodeId;
-		void podcastData.lastPositionSec;
-		driveConfigSync.scheduleSave();
-	});
-
 	// Pull-to-refresh + swipe-back are wired via use:pullToRefresh /
 	// use:swipeBack actions on the scroll containers in the template below.
 	const PULL_THRESHOLD = 64;
@@ -642,7 +633,6 @@
 			}
 		} finally {
 			isRefreshingAll = false;
-			driveConfigSync.scheduleSave();
 		}
 	}
 

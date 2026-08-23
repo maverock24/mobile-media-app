@@ -53,15 +53,10 @@
 		getGoogleDriveClientId,
 		isGoogleDriveConfigured,
 		listGoogleDriveFolders,
-		listGoogleDriveMp3Files,
 		streamGoogleDriveMp3Files,
 		requestGoogleDriveAccessToken,
 		revokeGoogleDriveAccess,
 		uploadGoogleDriveFile,
-		copyGoogleDriveFile,
-		moveGoogleDriveFile,
-		trashGoogleDriveFile,
-		uniqueFileName,
 		type GoogleDriveFile,
 		type GoogleDriveFolder,
 		type GoogleDriveUser
@@ -69,7 +64,6 @@
 	import { formatGoogleDriveAuthError } from '$lib/google-drive-auth-error';
 	import { appSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
-	import { driveConfigSync } from '$lib/stores/driveConfigSync.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
@@ -304,8 +298,6 @@
 		source: StoredAudioFile | null; // set for file ops
 	};
 	let pendingFileOp = $state<PendingFileOp | null>(null);
-	/** Which destination side the destination picker is on. */
-	let destinationSource = $state<'drive' | 'local'>('drive');
 	let isFileOpRunning = $state(false);
 	let transferPhase = $state<'downloading' | 'saving'>('downloading');
 	const transferProgressPct = $derived(
@@ -804,7 +796,6 @@
 		void musicSettings.deckBSpeed;
 		void musicSettings.equalizerPreset;
 		void musicSettings.sortOrder;
-		driveConfigSync.scheduleSave();
 	});
 
 	// ── Sync EQ gains ──
@@ -1509,16 +1500,6 @@
 					// Folder selection should still work even if the user profile request fails.
 				});
 
-			// Connect config sync (appdata scope) silently, then download + apply saved settings.
-			// This happens in the background — we don't block the folder picker on it,
-			// and we never start a second interactive auth flow from this button press.
-			void (async () => {
-				const connected = await driveConfigSync.connect(false);
-				if (connected) {
-					await driveConfigSync.downloadAndApply();
-				}
-			})();
-
 			// Show folder picker before loading files
 			folderPickerToken = token;
 			folderPickerStack = [];
@@ -1858,7 +1839,6 @@
 		driveUser = null;
 		driveError = '';
 		driveSearch = '';
-		driveConfigSync.disconnect();
 
 		if (musicSettings.librarySource === 'drive') {
 			allFiles = [];
@@ -2791,12 +2771,6 @@
 
 	async function selectDriveFolderAndUpload(folder: GoogleDriveFolder) {
 		if (isTransferring || isFileOpRunning) return;
-		// A pending move/copy uses the Drive folder as its destination.
-		if (pendingFileOp) {
-			showDriveFolderPicker = false;
-			await runPendingFileOp({ folderId: folder.id, folderName: folder.name });
-			return;
-		}
 		if (!transferFile) return;
 		const token = await ensureDriveAccessToken(true);
 		if (!token) {
@@ -2833,20 +2807,7 @@
 
 	function openDestinationForOp(op: 'move' | 'copy', target: OpTarget) {
 		pendingFileOp = { op, name: target.name, isDrive: target.isDrive, fileId: target.fileId, source: target.source };
-		// Destination side starts on the source's other side; user can toggle.
-		destinationSource = target.isDrive ? 'local' : 'drive';
-		if (destinationSource === 'drive') {
-			void openDriveDestinationPicker();
-		} else {
-			void openLocalDestinationPicker();
-		}
-	}
-
-	async function openDriveDestinationPicker() {
-		const token = await ensureDriveAccessToken(true);
-		if (!token) { addToast({ message: 'Connect to Google Drive first.', type: 'warning' }); return; }
-		showDriveFolderPicker = true;
-		await loadDriveFolderPicker('root');
+		void openLocalDestinationPicker();
 	}
 
 	async function openLocalDestinationPicker() {
@@ -2865,14 +2826,14 @@
 	function confirmAndDelete(target: OpTarget) {
 		pendingFileOp = { op: 'delete', name: target.name, isDrive: target.isDrive, fileId: target.fileId, source: target.source };
 		addToast({
-			message: `Delete ${target.name}?${target.isDrive ? ' (moves to Drive trash)' : ' (permanent)'}`,
+			message: `Delete ${target.name}?`,
 			type: 'warning',
 			autoDismissMs: 0,
 			action: { label: 'Delete', handler: () => { void runPendingFileOp(null); } },
 		});
 	}
 
-	async function runPendingFileOp(destination: { folderId?: string; folderName?: string; localPath?: string } | null) {
+	async function runPendingFileOp(destination: { localPath?: string } | null) {
 		const op = pendingFileOp;
 		if (!op || isFileOpRunning) return;
 		isFileOpRunning = true;
@@ -2893,48 +2854,20 @@
 	}
 
 	async function deleteFileOp(op: PendingFileOp) {
-		if (op.isDrive) {
-			if (!op.fileId) throw new Error('no id');
-			const token = await ensureDriveAccessToken(true);
-			if (!token) throw new Error('no token');
-			await trashGoogleDriveFile({ accessToken: token, fileId: op.fileId });
-			addToast({ message: `Deleted "${op.name}".`, type: 'info' });
-		} else {
-			if (!nativeTreeUri) throw new Error('no tree');
-			await DirectoryReader.deleteEntry({ treeUri: nativeTreeUri, path: '', name: op.name });
-			addToast({ message: `Deleted "${op.name}".`, type: 'info' });
-		}
+		if (!nativeTreeUri) throw new Error('no tree');
+		await DirectoryReader.deleteEntry({ treeUri: nativeTreeUri, path: '', name: op.name });
+		addToast({ message: `Deleted "${op.name}".`, type: 'info' });
 	}
 
-	async function moveOrCopyFileOp(op: PendingFileOp, destination: { folderId?: string; folderName?: string; localPath?: string }) {
-		if (op.isDrive && destination.folderId) {
-			const token = await ensureDriveAccessToken(true);
-			if (!token) throw new Error('no token');
-			if (op.op === 'copy') {
-				// Auto-rename on clash using the destination folder's existing names.
-				const existing = await listGoogleDriveMp3Files(token, { folderId: destination.folderId });
-				const destName = uniqueFileName(op.name, existing.map((f) => f.name));
-				await copyGoogleDriveFile({ accessToken: token, fileId: op.fileId!, parentFolderId: destination.folderId, name: destName });
-				addToast({ message: `Copied "${op.name}" to Drive.`, type: 'info' });
-			} else {
-				await moveGoogleDriveFile({ accessToken: token, fileId: op.fileId!, newParentFolderId: destination.folderId });
-				addToast({ message: `Moved "${op.name}".`, type: 'info' });
-			}
-			return;
+	async function moveOrCopyFileOp(op: PendingFileOp, destination: { localPath?: string }) {
+		if (!nativeTreeUri) throw new Error('no tree');
+		const destPath = destination.localPath ?? '';
+		if (op.op === 'copy') {
+			await DirectoryReader.copyEntry({ srcTreeUri: nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: nativeTreeUri, destPath, destName: op.name });
+		} else {
+			await DirectoryReader.moveEntry({ srcTreeUri: nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: nativeTreeUri, destPath, destName: op.name });
 		}
-		if (!op.isDrive && destination.localPath !== undefined) {
-			if (!nativeTreeUri) throw new Error('no tree');
-			const destPath = destination.localPath ?? '';
-			if (op.op === 'copy') {
-				await DirectoryReader.copyEntry({ srcTreeUri: nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: nativeTreeUri, destPath, destName: op.name });
-			} else {
-				await DirectoryReader.moveEntry({ srcTreeUri: nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: nativeTreeUri, destPath, destName: op.name });
-			}
-			addToast({ message: `${op.op === 'copy' ? 'Copied' : 'Moved'} "${op.name}".`, type: 'info' });
-			return;
-		}
-		// Cross-source and folder ops are follow-up tickets (T5-followups).
-		addToast({ message: 'Cross-source move/copy is not wired yet.', type: 'warning' });
+		addToast({ message: `${op.op === 'copy' ? 'Copied' : 'Moved'} "${op.name}".`, type: 'info' });
 	}
 
 	function handleMoveEntry(target: OpTarget) { openDestinationForOp('move', target); }
@@ -3921,6 +3854,7 @@
 									<Upload class="w-5 h-5" />
 								{/if}
 							</Button>
+							{#if !isDrive}
 							<Button
 								variant="ghost"
 								size="icon"
@@ -3948,6 +3882,7 @@
 							>
 								<Trash2 class="w-5 h-5" />
 							</Button>
+							{/if}
 						</div>
 						{/if}
 						<!-- Front: existing row content (swipeable) -->
@@ -4169,13 +4104,6 @@
 			{pendingFileOp ? 'Move here' : 'Save here'}
 		</Button>
 	</div>
-	<!-- Drive <-> Local destination toggle -->
-	{#if pendingFileOp}
-	<div class="flex gap-1 px-3 py-2 border-b shrink-0">
-		<button class="flex-1 py-1.5 rounded-lg text-sm font-medium {destinationSource === 'drive' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground'}" onclick={() => { destinationSource = 'drive'; showLocalFolderPicker = false; void openDriveDestinationPicker(); }}>Google Drive</button>
-		<button class="flex-1 py-1.5 rounded-lg text-sm font-medium {destinationSource === 'local' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground'}" onclick={() => { destinationSource = 'local'; }}>Local</button>
-	</div>
-	{/if}
 	<!-- Breadcrumb -->
 	{#if localPickerPath.length > 0}
 	<div class="flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b shrink-0 flex-wrap">
@@ -4215,17 +4143,10 @@
 			<ChevronLeft class="w-6 h-6" />
 		</Button>
 		<div class="flex-1 min-w-0">
-			<p class="text-sm font-semibold">{pendingFileOp ? (pendingFileOp.op === 'move' ? 'Move to Google Drive' : 'Copy to Google Drive') : 'Upload to Google Drive'}</p>
-			<p class="text-xs text-muted-foreground">{pendingFileOp?.name ?? transferFile?.name ?? ''}</p>
+			<p class="text-sm font-semibold">Upload to Google Drive</p>
+			<p class="text-xs text-muted-foreground">{transferFile?.name ?? ''}</p>
 		</div>
 	</div>
-	<!-- Drive <-> Local destination toggle -->
-	{#if pendingFileOp}
-	<div class="flex gap-1 px-3 py-2 border-b shrink-0">
-		<button class="flex-1 py-1.5 rounded-lg text-sm font-medium {destinationSource === 'drive' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground'}" onclick={() => { destinationSource = 'drive'; }}>Google Drive</button>
-		<button class="flex-1 py-1.5 rounded-lg text-sm font-medium {destinationSource === 'local' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground'}" onclick={() => { destinationSource = 'local'; showDriveFolderPicker = false; void openLocalDestinationPicker(); }}>Local</button>
-	</div>
-	{/if}
 	<!-- Breadcrumb -->
 	{#if drivePickerPath.length > 0}
 	<div class="flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b shrink-0 flex-wrap">
