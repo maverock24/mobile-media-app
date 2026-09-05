@@ -1350,6 +1350,11 @@
 		try {
 			const token = await ensureDriveAccessToken(false);
 			if (!token) {
+				// Native auth was attempted while the WebView was backgrounded; if its
+				// result never came back, don't leave the Connect control wedged in a
+				// spinner — reset so the user can simply tap Connect again.
+				isDriveAuthenticating = false;
+				isDriveLoading = false;
 				return false;
 			}
 
@@ -1444,6 +1449,11 @@
 			return driveAccessToken;
 		} catch (error) {
 			driveError = formatDriveAuthError(error);
+			// Surface the real failure in every view (the browse header has no error
+			// slot), so a failed Google sign-in is never a silent "nothing happened".
+			if (interactive) {
+				addToast({ message: driveError, type: 'error' });
+			}
 			return null;
 		}
 	}
@@ -1505,7 +1515,16 @@
 			folderPickerStack = [];
 			isDriveLoading = false;
 			isDriveAuthenticating = false;
-			await openFolderPicker();
+
+			// Reuse the saved/default Drive folder when one exists — don't re-ask
+			// which folder to load. Only the very first connection (no folder chosen
+			// yet) opens the picker; "change folder" lives in Settings.
+			if (musicSettings.driveFolderId || musicSettings.driveFolderName) {
+				clearPendingDriveFolderPickerIntent();
+				await confirmDriveFolderSelection(musicSettings.driveFolderId || undefined, musicSettings.driveFolderName || undefined);
+			} else {
+				await openFolderPicker();
+			}
 		} catch (error) {
 			driveError = formatDriveAuthError(error);
 		} finally {
@@ -1815,6 +1834,122 @@
 		if (!token) { await loadDriveLibrary(true); return; }
 		folderPickerToken = token;
 		await openFolderPicker();
+	}
+
+	// Drive source: load the last-chosen Drive folder (driveFolderId/Name) when one
+	// is saved; otherwise (first ever connect, or nothing chosen yet) sign in and
+	// open the folder picker. "Change folder" now lives in Settings.
+	async function openDriveSourceButton() {
+		if (!googleDriveConfigured) return;
+
+		// Not signed in this session yet → full connect flow (may show native consent).
+		if (!driveUser) {
+			await loadDriveLibrary(true);
+			return;
+		}
+
+		const token = await ensureDriveAccessToken(false);
+		if (!token) {
+			// Silent refresh failed (expired/revoked) → run the interactive connect flow.
+			await loadDriveLibrary(true);
+			return;
+		}
+
+		driveAccessToken = token;
+		driveError = '';
+
+		if (musicSettings.driveFolderId || musicSettings.driveFolderName) {
+			// Reuse the saved/default Drive folder without re-asking which folder.
+			folderPickerToken = token;
+			await confirmDriveFolderSelection(musicSettings.driveFolderId || undefined, musicSettings.driveFolderName || undefined);
+		} else {
+			// No folder chosen yet — ask once.
+			folderPickerToken = token;
+			folderPickerStack = [];
+			folderPickerFolders = [];
+			folderPickerError = '';
+			showFolderPicker = true;
+			await loadFolderPickerLevel();
+		}
+	}
+
+	// Local source: restore the last local folder when one is available, otherwise
+	// ask the user to pick a folder. "Change folder" now lives in Settings.
+	async function openLocalSourceButton() {
+		const restorable = rootDirHandle !== null || pendingHandle !== null
+			|| Boolean(musicSettings.nativeTreeUri) || Boolean(musicSettings.lastFolderName);
+		if (restorable && await restoreLocalLibrary()) {
+			return;
+		}
+		await openFolder();
+	}
+
+	async function restoreLocalLibrary(): Promise<boolean> {
+		const folderName = musicSettings.lastFolderName;
+		if (!musicSettings.nativeTreeUri && !folderName && !rootDirHandle && !pendingHandle) {
+			return false;
+		}
+
+		try {
+			// Android (SAF): the tree permission is remembered, so a re-pick is unnecessary.
+			if (isNativeApp && musicSettings.nativeTreeUri) {
+				nativeTreeUri = musicSettings.nativeTreeUri;
+				rootDirHandle = null;
+				pendingHandle = null;
+				allFiles = [];
+				browsePath = [];
+				activateDeviceLibrary(folderName || 'Library');
+				showQueue = true;
+				browseVersion++;
+				const cachedLibrary = await loadDeviceCachedLibrary(musicSettings.nativeTreeUri, folderName || 'Library');
+				if (cachedLibrary && cachedLibrary.files.length > 0) {
+					allFiles = restoreStoredFilesFromCache(cachedLibrary);
+					hydrateTracksFromLibrary(allFiles);
+					browseVersion++;
+				} else {
+					startLibraryScan(folderName || 'Library', { resetExistingFiles: true });
+				}
+				return true;
+			}
+
+			// Desktop/web: restore from a persisted directory handle + cache.
+			if (rootDirHandle) {
+				allFiles = [];
+				browsePath = [];
+				activateDeviceLibrary(rootDirHandle.name);
+				showQueue = true;
+				browseVersion++;
+				return true;
+			}
+			const [handle, cachedLibrary] = await Promise.all([
+				loadHandleFromIDB(),
+				loadDeviceCachedLibrary(null, musicSettings.lastFolderName),
+			]);
+			if (handle) {
+				const perm = await (handle as unknown as { queryPermission(o: object): Promise<string> }).queryPermission({ mode: 'read' });
+				if (perm === 'granted') {
+					rootDirHandle = handle;
+					nativeTreeUri = null;
+					allFiles = [];
+					browsePath = [];
+					activateDeviceLibrary(handle.name);
+					showQueue = true;
+					browseVersion++;
+					return true;
+				}
+			}
+			if (cachedLibrary && cachedLibrary.files.length > 0) {
+				allFiles = restoreStoredFilesFromCache(cachedLibrary);
+				activateDeviceLibrary(cachedLibrary.folderName);
+				hydrateTracksFromLibrary(allFiles);
+				showQueue = true;
+				browseVersion++;
+				return true;
+			}
+		} catch {
+			// Fall through — the caller will show the plain folder chooser.
+		}
+		return false;
 	}
 
 	async function signOutGoogleDrive() {
@@ -3315,6 +3450,11 @@
 				return;
 			}
 
+			// The WebView is foreground again after a native Google consent screen.
+			// Clear transient busy flags up front so a lost native call can never leave
+			// the Connect button disabled and "do nothing" on the next tap.
+			isDriveAuthenticating = false;
+			isDriveLoading = false;
 			void restorePendingDriveFolderPickerIfNeeded();
 		};
 
@@ -3586,10 +3726,10 @@
 				>
 					<Star class="w-5 h-5" fill={showFavoriteTracks ? 'currentColor' : 'none'} />
 				</Button>
-				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openFolder} aria-label="Open local folder" title="Open local folder">
+				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openLocalSourceButton} aria-label="Local folder" title="Local folder">
 					<FolderOpen class="w-5 h-5" />
 				</Button>
-				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={driveUser ? changeDriveFolder : connectGoogleDrive} disabled={isDriveAuthenticating} aria-label={driveUser ? 'Change Drive folder' : 'Connect Google Drive'} title={driveUser ? 'Change Google Drive folder' : 'Connect Google Drive'}>
+				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openDriveSourceButton} disabled={isDriveAuthenticating} aria-label="Google Drive" title="Google Drive">
 					{#if isDriveAuthenticating}
 						<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
 					{:else}

@@ -2,7 +2,10 @@
 	import { env } from '$env/dynamic/public';
 	import { Capacitor, CapacitorHttp } from '@capacitor/core';
 	import { Filesystem, Directory } from '@capacitor/filesystem';
+	import { FilePicker } from '@capawesome/capacitor-file-picker';
 	import { DirectoryReader } from '$lib/native/directory-reader';
+	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
+	import { listGoogleDriveFolders, type GoogleDriveFolder } from '$lib/google-drive';
 	import { ScreenDim } from '$lib/native/screen-dim';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
@@ -25,6 +28,10 @@
 		Music2,
 		Mic2,
 		Cloud,
+		Folder,
+		FolderOpen,
+		X,
+		ChevronLeft,
 		CarFront,
 		Moon,
 		Palette,
@@ -109,6 +116,99 @@
 			: 'Off'
 	);
 	const isNativeAndroid = Capacitor.isNativePlatform();
+
+	// ── Default library folders ──────────────────────────────────────
+	// "Change folder" for the music sources lives here (Settings), so the MP3
+	// view's source buttons just restore the saved folder.
+	const defaultDriveFolderLabel = $derived(
+		musicSettings.driveFolderName || (musicSettings.driveFolderId ? 'Selected Drive folder' : 'All files')
+	);
+	const defaultLocalFolderLabel = $derived(
+		musicSettings.nativeTreeUri || musicSettings.lastFolderName ? (musicSettings.lastFolderName || 'A local folder') : 'None set'
+	);
+
+	// Local folder picker (native SAF).
+	let isPickingLocalFolder = $state(false);
+	async function changeLocalDefaultFolder() {
+		if (!Capacitor.isPluginAvailable('FilePicker')) {
+			addToast({ message: 'Local folder picking is only available in the Android app.', type: 'warning' });
+			return;
+		}
+		isPickingLocalFolder = true;
+		try {
+			const result = await FilePicker.pickDirectory();
+			const directory = await DirectoryReader.listEntries({ treeUri: result.path });
+			await DirectoryReader.rememberTreeUri({ treeUri: result.path });
+			musicSettings.nativeTreeUri = result.path;
+			musicSettings.lastFolderName = directory.folderName;
+			addToast({ message: `Local folder set to “${directory.folderName}”.`, type: 'info' });
+		} catch (error) {
+			if (!(error instanceof Error && /cancel/i.test(error.message))) {
+				addToast({ message: 'Unable to open that folder.', type: 'error' });
+			}
+		} finally {
+			isPickingLocalFolder = false;
+		}
+	}
+	function clearLocalDefaultFolder() {
+		musicSettings.nativeTreeUri = '';
+		musicSettings.lastFolderName = '';
+		addToast({ message: 'Local folder cleared — you will be asked to pick one.', type: 'info' });
+	}
+
+	// Drive default folder picker (embedded browse).
+	let driveDefaultPickerOpen = $state(false);
+	let driveDefaultFolders = $state<GoogleDriveFolder[]>([]);
+	let driveDefaultPath = $state<{ id: string; name: string }[]>([]);
+	let driveDefaultLoading = $state(false);
+	let driveDefaultError = $state('');
+	async function openDriveDefaultPicker() {
+		driveDefaultPath = [];
+		driveDefaultFolders = [];
+		driveDefaultError = '';
+		if (!googleDriveSession.hasValidToken()) {
+			const ok = await googleDriveSession.signIn();
+			if (!ok) {
+				driveDefaultError = googleDriveSession.error || 'Google sign-in was not completed.';
+				driveDefaultPickerOpen = true;
+				return;
+			}
+		}
+		driveDefaultPickerOpen = true;
+		await loadDriveDefaultLevel();
+	}
+	async function loadDriveDefaultLevel() {
+		driveDefaultLoading = true;
+		driveDefaultError = '';
+		try {
+			const token = await googleDriveSession.ensureAccessToken(false);
+			if (!token) {
+				driveDefaultError = 'Sign in to Google Drive first.';
+				return;
+			}
+			const parentId = driveDefaultPath.at(-1)?.id;
+			driveDefaultFolders = await listGoogleDriveFolders(token, parentId);
+		} catch (error) {
+			driveDefaultError = error instanceof Error ? error.message : 'Unable to load Drive folders.';
+			driveDefaultFolders = [];
+		} finally {
+			driveDefaultLoading = false;
+		}
+	}
+	function navigateDriveDefaultInto(folder: GoogleDriveFolder) {
+		driveDefaultPath = [...driveDefaultPath, { id: folder.id, name: folder.name }];
+		void loadDriveDefaultLevel();
+	}
+	function navigateDriveDefaultBack() {
+		driveDefaultPath = driveDefaultPath.slice(0, -1);
+		void loadDriveDefaultLevel();
+	}
+	function setDriveDefaultFolder(folder?: GoogleDriveFolder) {
+		musicSettings.driveFolderId = folder?.id ?? '';
+		musicSettings.driveFolderName = folder?.name ?? '';
+		driveDefaultPickerOpen = false;
+		addToast({ message: folder ? `Drive folder set to “${folder.name}”.` : 'Using all of Google Drive.', type: 'info' });
+	}
 
 	function applyScreenDimDelay(delaySec: number) {
 		appSettings.screenDimDelay = delaySec;
@@ -669,6 +769,78 @@
 						</button>
 						<p class="text-xs text-muted-foreground">Refresh the saved music index after adding or removing files from a folder.</p>
 					</div>
+
+					<!-- Default library folders ("change folder" lives here; the MP3 view's
+					     source buttons restore these instead of re-prompting) -->
+					<div class="space-y-3 border-t pt-4">
+						<div>
+							<p class="text-sm font-medium">Default Folders</p>
+							<p class="text-xs text-muted-foreground mt-0.5">The Local and Cloud buttons in the MP3 view open these folders directly. Change them here.</p>
+						</div>
+
+						<div class="rounded-xl border p-3 space-y-2">
+							<div class="flex items-center justify-between gap-2">
+								<span class="flex items-center gap-2 text-sm font-medium"><FolderOpen class="w-4 h-4 text-primary" /> Local device folder</span>
+							</div>
+							<p class="text-xs text-muted-foreground break-words">{defaultLocalFolderLabel}</p>
+							<div class="flex gap-2">
+								<button
+									class="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border border-border transition-colors hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+									onclick={() => void changeLocalDefaultFolder()}
+									disabled={isPickingLocalFolder}
+								>
+									{#if isPickingLocalFolder}
+										<RefreshCw class="w-4 h-4 animate-spin" />
+										Picking…
+									{:else}
+										<FolderOpen class="w-4 h-4" />
+										Change…
+									{/if}
+								</button>
+								{#if musicSettings.nativeTreeUri || musicSettings.lastFolderName}
+									<button
+										class="px-3 py-2 rounded-lg text-sm border border-border transition-colors hover:bg-accent disabled:opacity-50"
+										onclick={clearLocalDefaultFolder}
+										disabled={isPickingLocalFolder}
+										aria-label="Clear local folder"
+									>
+										<X class="w-4 h-4" />
+									</button>
+								{/if}
+							</div>
+							{#if !Capacitor.isPluginAvailable('FilePicker')}
+								<p class="text-xs text-muted-foreground">Folder picking is only available in the Android app.</p>
+							{/if}
+						</div>
+
+						<div class="rounded-xl border p-3 space-y-2">
+							<span class="flex items-center gap-2 text-sm font-medium"><Cloud class="w-4 h-4 text-primary" /> Google Drive folder</span>
+							<p class="text-xs text-muted-foreground break-words">{defaultDriveFolderLabel}</p>
+							<div class="flex gap-2">
+								<button
+									class="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border border-border transition-colors hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+									onclick={() => void openDriveDefaultPicker()}
+									disabled={!googleDriveSession.configured}
+								>
+									<Cloud class="w-4 h-4" />
+									Change…
+								</button>
+								{#if musicSettings.driveFolderId || musicSettings.driveFolderName}
+									<button
+										class="px-3 py-2 rounded-lg text-sm border border-border transition-colors hover:bg-accent"
+										onclick={() => setDriveDefaultFolder(undefined)}
+										aria-label="Use all of Google Drive"
+										title="Use all of Google Drive"
+									>
+										<Globe class="w-4 h-4" />
+									</button>
+								{/if}
+							</div>
+							{#if !googleDriveSession.configured}
+								<p class="text-xs text-muted-foreground">Google Drive is not configured (PUBLIC_GOOGLE_CLIENT_ID).</p>
+							{/if}
+						</div>
+					</div>
 				</div>
 			{/if}
 		</div>
@@ -1059,3 +1231,61 @@
 	</div>
 
 </div>
+
+{#if driveDefaultPickerOpen}
+<div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+	<button class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick={() => (driveDefaultPickerOpen = false)} aria-label="Close"></button>
+	<div class="relative z-10 w-full max-w-md bg-card rounded-t-2xl sm:rounded-2xl shadow-2xl border border-border flex flex-col max-h-[80dvh]">
+		<div class="px-4 pt-4 pb-3 border-b shrink-0 flex items-center gap-2">
+			{#if driveDefaultPath.length > 0}
+				<button class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground" onclick={navigateDriveDefaultBack} aria-label="Back">
+					<ChevronLeft class="w-4 h-4" />
+				</button>
+			{/if}
+			<div class="flex-1 min-w-0">
+				<h2 class="text-base font-semibold leading-tight">Google Drive folder</h2>
+				<p class="text-xs text-muted-foreground truncate">{driveDefaultPath.length ? driveDefaultPath.map((f) => f.name).join(' › ') : 'Pick the default folder for the Cloud source'}</p>
+			</div>
+			<button class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent text-muted-foreground" onclick={() => (driveDefaultPickerOpen = false)} aria-label="Close">
+				<X class="w-4 h-4" />
+			</button>
+		</div>
+		<div class="flex-1 overflow-y-auto min-h-0">
+			{#if driveDefaultLoading}
+				<div class="flex items-center justify-center py-12"><div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div></div>
+			{:else if driveDefaultError}
+				<div class="px-4 py-8 text-center space-y-3">
+					<p class="text-sm text-destructive">{driveDefaultError}</p>
+					<button class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm border border-border hover:bg-accent" onclick={() => void loadDriveDefaultLevel()}>Retry</button>
+				</div>
+			{:else}
+				{#if driveDefaultPath.length === 0}
+					<button class="w-full flex items-center gap-3 px-4 py-3 border-b text-left hover:bg-accent" onclick={() => setDriveDefaultFolder(undefined)}>
+						<div class="w-9 h-9 rounded-lg bg-muted/50 flex items-center justify-center"><Cloud class="w-4 h-4 text-muted-foreground" /></div>
+						<div class="flex-1 min-w-0"><p class="text-sm font-medium">All files</p><p class="text-xs text-muted-foreground">Search entire Google Drive</p></div>
+						{#if !musicSettings.driveFolderId}<span class="w-4 h-4 rounded-full border-2 border-primary bg-primary"></span>{/if}
+					</button>
+				{/if}
+				{#if driveDefaultFolders.length === 0}
+					<p class="text-center text-muted-foreground text-sm py-8 px-4">No sub-folders here</p>
+				{:else}
+					{#each driveDefaultFolders as folder}
+						<button class="w-full flex items-center gap-3 px-4 py-3 border-b text-left hover:bg-accent" onclick={() => navigateDriveDefaultInto(folder)}>
+							<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center"><Folder class="w-4 h-4 text-primary" /></div>
+							<div class="flex-1 min-w-0"><p class="text-sm font-medium truncate">{folder.name}</p></div>
+							{#if musicSettings.driveFolderId === folder.id}<span class="w-4 h-4 rounded-full border-2 border-primary bg-primary"></span>{/if}
+						</button>
+					{/each}
+				{/if}
+				<div class="px-4 py-3 border-t shrink-0 flex gap-2">
+					<button class="flex-1 py-2 rounded-lg text-sm border border-border hover:bg-accent" onclick={() => (driveDefaultPickerOpen = false)}>Cancel</button>
+					<button class="flex-1 py-2 rounded-lg text-sm bg-primary text-primary-foreground hover:bg-primary/90" onclick={() => setDriveDefaultFolder(driveDefaultPath.at(-1) ? { id: driveDefaultPath.at(-1)!.id, name: driveDefaultPath.at(-1)!.name, mimeType: 'application/vnd.google-apps.folder' } : undefined)}>
+						Select{driveDefaultPath.length ? ` “${driveDefaultPath.at(-1)!.name}”` : ' all'}
+					</button>
+				</div>
+			{/if}
+		</div>
+	</div>
+</div>
+{/if}
+
