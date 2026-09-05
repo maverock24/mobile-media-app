@@ -125,6 +125,28 @@ export const podcastData = persisted('podcast-data', {
 	lastEpisodeId:      '' as string,   // id of last-played episode
 	lastPodcastId:      -1 as number,   // id of that episode's podcast
 	lastPositionSec:    0 as number,    // playback position in seconds
+}, {
+	// Persist a size-bounded snapshot: episode bodies are the bulk of this blob
+	// (every subscription's full episode list, re-fetched into memory), and if it
+	// ever exceeds the WebView localStorage quota the write throws — which used to
+	// permanently kill this store's persistence effect, silently losing ALL
+	// subscriptions on the next restart. Keep the payload small enough to always
+	// fit: retain the full subscription manifest (tiny) but only a bounded window
+	// of episodes per podcast, preferring ones the user has progress on, then the
+	// newest. The full episode list stays in memory and is re-merged on refresh.
+	trim: (state) => {
+		const MAX_EPISODES_PER_PODCAST = 120;
+		const podcasts = state.podcasts.map((p) => {
+			const eps = p.episodes ?? [];
+			if (eps.length <= MAX_EPISODES_PER_PODCAST) return p;
+			const kept = eps.filter((e) => e.played || (e.progress ?? 0) > 0 || (e.positionSec ?? 0) > 0);
+			const wanted = MAX_EPISODES_PER_PODCAST - kept.length;
+			// eps is newest-first (older pages are appended), so take the newest.
+			const newest = wanted > 0 ? eps.slice(0, wanted) : [];
+			return { ...p, episodes: [...newest, ...kept] };
+		});
+		return { ...state, podcasts };
+	},
 });
 
 // ─────────────────────────────────────────────────────────────

@@ -236,6 +236,7 @@
 		if (!audioEl) return;
 		// Throttle timeupdate to ~4Hz — smooth for seek bar, 15× less CPU than 60fps
 		let _lastTimeUpdate = 0;
+		let _lastProgressPersist = 0; // last time we flushed progress to the persisted store
 		const onTimeUpdate = () => {
 			const now = Date.now();
 			if (now - _lastTimeUpdate < 250) return;
@@ -255,7 +256,17 @@
 					positionSec: audioEl.currentTime,
 					duration: playbackDuration,
 				};
-				syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode);
+				// Keep the in-memory position current for the UI every tick, but only
+				// commit to the persisted store on a coarse cadence. Persisting on
+				// every 250ms tick re-serialises the WHOLE podcast-data blob (all
+				// subscriptions' episodes) 4x/second — that main-thread + storage churn
+				// is a major source of jank and of localStorage quota pressure on
+				// Android, and a single over-quota write permanently kills that store.
+				currentEpisode = { ...currentEpisode, episode: updatedEpisode };
+				if (now - _lastProgressPersist >= PROGRESS_PERSIST_MS) {
+					_lastProgressPersist = now;
+					syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode);
+				}
 			}
 		};
 		const onLoadedMetadata = () => {
@@ -276,6 +287,13 @@
 			_userPaused = false;
 			isPlaying = false;
 			mediaEngine.podcastPlaying = false;
+			// Pause is a natural checkpoint — flush the current position to the
+			// persisted store so a kill/background right after pausing still has an
+			// exact resume point (timeupdate persistence is throttled to ~5s).
+			if (currentEpisode) {
+				_lastProgressPersist = Date.now();
+				syncPersistedEpisodeState(currentEpisode.podcast.id, currentEpisode.episode);
+			}
 			// System paused us (Android Doze, audio-focus churn) — try to resume.
 			// Retry up to 3 times with backoff, same pattern as MP3 safePlay.
 			// Do NOT resume when the audio reached its natural end (ended fires
@@ -353,6 +371,11 @@
 	// Pull-to-refresh + swipe-back are wired via use:pullToRefresh /
 	// use:swipeBack actions on the scroll containers in the template below.
 	const PULL_THRESHOLD = 64;
+
+	// How often (ms) playback progress is flushed to the persisted store during
+	// playback. Coarse on purpose — see the timeupdate handler. A final flush is
+	// forced on pause / end / background so resume position is still exact.
+	const PROGRESS_PERSIST_MS = 5000;
 
 
 	// ── Lazy loading: IntersectionObserver on sentinel element ──

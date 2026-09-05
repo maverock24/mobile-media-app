@@ -11,7 +11,17 @@ import { untrack } from 'svelte';
 export function persisted<T extends object>(key: string, defaults: T, _opts?: {
 	/** @deprecated Kept for API compatibility — writes are now synchronous. */
 	debounceMs?: number;
+	/**
+	 * Optional transform applied to `state` before it is serialised to
+	 * localStorage. Lets a store persist a size-bounded snapshot (e.g. dropping
+	 * heavy episode bodies) while keeping the full value in memory, so the stored
+	 * blob always fits comfortably under the WebView localStorage quota. If a
+	 * write ever overflows quota the store's persistence effect dies (see below),
+	 * so keeping the payload small is a correctness requirement for big stores.
+	 */
+	trim?: (state: T) => T;
 }): T {
+	const trim = _opts?.trim;
 	let stored: T = defaults;
 	if (typeof localStorage !== 'undefined') {
 		try {
@@ -25,9 +35,26 @@ export function persisted<T extends object>(key: string, defaults: T, _opts?: {
 	// Deep-copy so we don't mutate the defaults object
 	const state = $state<T>(structuredClone(stored));
 
+	let _writeErrorLogged = false;
 	function flushToLocalStorage() {
 		if (typeof localStorage === 'undefined') return;
-		localStorage.setItem(key, JSON.stringify(state));
+		// A failed write (e.g. QuotaExceededError once the store grows past the
+		// WebView localStorage ceiling) must NEVER propagate out of the $effect.
+		// If it throws here, Svelte tears this effect down permanently and the
+		// store silently stops persisting forever — every subscription/setting
+		// added afterwards is lost on restart, while other (smaller) stores keep
+		// working. Swallow + log so the effect survives and later, smaller writes
+		// still land. (see podcast-data data-loss on Android)
+		try {
+			const serialized = trim ? JSON.stringify(trim(state)) : JSON.stringify(state);
+			localStorage.setItem(key, serialized);
+			_writeErrorLogged = false;
+		} catch (error) {
+			if (!_writeErrorLogged) {
+				_writeErrorLogged = true;
+				console.error(`[persisted] failed to write "${key}" to localStorage; changes may be lost until storage frees up`, error);
+			}
+		}
 	}
 
 	// Write synchronously on every change. A debounce (previously 2.5s) caused
