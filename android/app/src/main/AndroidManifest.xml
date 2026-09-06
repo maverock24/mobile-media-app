@@ -66,6 +66,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Required by MediaPlaybackService.holdWakeLock(): a PARTIAL_WAKE_LOCK
+         keeps the CPU awake in screen-off Doze so the JS background-resume
+         watchdog (mediaEngine.svelte.ts) can actually fire and recover an
+         OS-initiated pause. Without this permission acquire() throws
+         SecurityException and the wakelock is never held -- the whole
+         screen-lock keep-alive design silently no-ops. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
