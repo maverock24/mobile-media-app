@@ -902,6 +902,15 @@
 		musicSettings.eqBands = next;
 		musicSettings.equalizerPreset = 'custom';
 	}
+	/** Apply a band change live while dragging, without touching the persisted
+	 *  musicSettings store (which would JSON.stringify the whole blob on every
+	 *  tick and re-run the EQ reactivity effect per input). The single commit
+	 *  lands via setEqBand on drag release. */
+	function setEqBandLive(index: number, value: number) {
+		if (filters.length === 0) return;
+		const next = [...musicSettings.eqBands]; next[index] = value;
+		applyEqGains(filters, next);
+	}
 
 	// ─────────────────────────────────────────────────────────────
 	// General helpers
@@ -4192,6 +4201,7 @@
 			equalizerPreset={musicSettings.equalizerPreset}
 			eqAvailable={eqAvailable}
 			onApplyPreset={applyEqPreset}
+				onLiveBand={setEqBandLive}
 			onSetBand={setEqBand}
 		/>
 	{/if}

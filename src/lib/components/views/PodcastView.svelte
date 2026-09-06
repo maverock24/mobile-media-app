@@ -375,7 +375,13 @@
 	// How often (ms) playback progress is flushed to the persisted store during
 	// playback. Coarse on purpose — see the timeupdate handler. A final flush is
 	// forced on pause / end / background so resume position is still exact.
-	const PROGRESS_PERSIST_MS = 5000;
+	//
+	// Each flush persists by replacing podcastData.podcasts, which serialises the
+	// ENTIRE trimmed podcast-data blob (all subscriptions' kept episodes) and
+	// re-runs the subscribedPodcasts sort derived. 20s balances crash/background
+	// resume granularity (~last 20s) against that full-blob main-thread cost on
+	// Android. Pause/end/background still flush exactly.
+	const PROGRESS_PERSIST_MS = 20000;
 
 
 	// ── Lazy loading: IntersectionObserver on sentinel element ──
