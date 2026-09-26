@@ -292,7 +292,22 @@
 			// exact resume point (timeupdate persistence is throttled to ~5s).
 			if (currentEpisode) {
 				_lastProgressPersist = Date.now();
-				syncPersistedEpisodeState(currentEpisode.podcast.id, currentEpisode.episode);
+				const positionSec = audioEl?.currentTime ?? currentEpisode.episode.positionSec ?? 0;
+				const playbackDuration =
+					(isFinite(audioEl?.duration ?? 0) && (audioEl?.duration ?? 0) > 0)
+						? (audioEl?.duration ?? 0)
+						: (currentEpisode.episode.duration ?? duration ?? 0);
+				const progress = playbackDuration > 0
+					? Math.min(100, Number(((positionSec / playbackDuration) * 100).toFixed(1)))
+					: currentEpisode.episode.progress ?? 0;
+				const updatedEpisode = {
+					...currentEpisode.episode,
+					positionSec,
+					progress,
+					duration: playbackDuration || currentEpisode.episode.duration,
+				};
+				syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode);
+				podcastData.lastPositionSec = positionSec;
 			}
 			// System paused us (Android Doze, audio-focus churn) — try to resume.
 			// Retry up to 3 times with backoff, same pattern as MP3 safePlay.
@@ -841,17 +856,34 @@
 		podcastSettings.playbackSpeed = 1.0; // reset speed for each new episode so the 1.5x button is off by default
 		void triggerPlaybackHaptic(true);
 
+		// If another episode is currently playing, pause it explicitly before
+		// claiming audio. This makes the audio element's 'pause' event fire while
+		// currentEpisode still points to the OLD episode, so its position is saved
+		// correctly and the auto-resume logic is skipped. Without this,
+		// claimAudio() fires the stop callback after currentEpisode has already
+		// been swapped, causing stale position data to be written to the new
+		// episode and triggering a spurious auto-resume.
+		if (audioEl && isPlaying && currentEpisode && currentEpisode.episode.id !== episode.id) {
+			_userPaused = true;
+			audioEl.pause();
+		}
+
 		// Set playing flag BEFORE claimAudio so isPlaying never transiently
 		// drops to false — prevents rapid focus abandon→request on Android.
 		mediaEngine.podcastPlaying = true;
-
 		claimAudio('podcast');
+
 		currentEpisode = { podcast, episode };
-		// Record this as the last-played episode immediately so a close-while-
-		// playing restores the correct episode (previously only updated on pause).
+		// Calculate resume position BEFORE updating lastEpisodeId, otherwise
+		// getEpisodeResumePosition() thinks the new episode is the last-played
+		// one and applies lastPositionSec from the previous episode.
+		const resumeAt = getEpisodeResumePosition(episode);
+		// Record this as the last-played episode and seed lastPositionSec with
+		// the resume point so a pause/background later saves to the right episode.
 		podcastData.lastEpisodeId = episode.id;
 		podcastData.lastPodcastId = podcast.id;
-		const resumeAt = getEpisodeResumePosition(episode);
+		podcastData.lastPositionSec = resumeAt;
+
 		duration = episode.duration;
 		currentTime = resumeAt > 10 ? resumeAt : 0;
 		syncEpisodeAudioSource(podcast, episode, resumeAt);
