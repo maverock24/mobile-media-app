@@ -85,6 +85,8 @@ export const mediaEngine = $state<NowPlayingState & {
 	deckBCurrentTime: number;
 	deckADuration:    number;
 	deckBDuration:    number;
+	deckABuffering:   boolean;
+	deckBBuffering:   boolean;
 
 	// --- Transport fallbacks ---
 	// Views register handlers via setPlaybackHandlers()/setSkipHandlers() so the
@@ -141,6 +143,8 @@ export const mediaEngine = $state<NowPlayingState & {
 	deckBCurrentTime: 0,
 	deckADuration:    0,
 	deckBDuration:    0,
+	deckABuffering:   false,
+	deckBBuffering:   false,
 	get isPlaying(): boolean {
 		return this.musicPlayingA || this.musicPlayingB || this.podcastPlaying || this.radioPlaying || this.mixerPlaying;
 	},
@@ -248,6 +252,8 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.deckBCurrentTime = 0;
 		this.deckADuration = 0;
 		this.deckBDuration = 0;
+		this.deckABuffering = false;
+		this.deckBBuffering = false;
 	},
 
 	// ─── Live stream playback (radio) ──────────────────────────────────

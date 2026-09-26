@@ -289,6 +289,9 @@
 	let isTransferring = $state(false);
 	let transferProgress = $state<{ loaded: number; total: number } | null>(null);
 
+	// ── Track materialization progress (Drive downloads, large native files) ──
+	let trackLoadProgress = $state<{ loaded: number; total: number } | null>(null);
+
 	// ── File management ops (move / copy / delete) — ADR-0002 ──
 	type PendingFileOp = {
 		op: 'move' | 'copy' | 'delete';
@@ -578,6 +581,7 @@
 			} : null;
 			mediaEngine.deckACurrentTime = audioEl?.currentTime ?? 0;
 			mediaEngine.deckADuration = isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack?.duration ?? 0);
+			mediaEngine.deckABuffering = isBuffering;
 		} else {
 			mediaEngine.deckBItem = currentTrack ? {
 				id:         String(currentTrack.id),
@@ -590,6 +594,7 @@
 			} : null;
 			mediaEngine.deckBCurrentTime = audioEl?.currentTime ?? 0;
 			mediaEngine.deckBDuration = isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack?.duration ?? 0);
+			mediaEngine.deckBBuffering = isBuffering;
 		}
 
 		// When this deck is active + music tab + music owns the display,
@@ -1994,7 +1999,11 @@
 		}
 	}
 
-	async function materializeStoredFile(entry: StoredAudioFile, interactiveAuth = false): Promise<File> {
+	async function materializeStoredFile(
+		entry: StoredAudioFile,
+		interactiveAuth = false,
+		onProgress?: (loaded: number, total: number) => void
+	): Promise<File> {
 		if (entry.source === 'web') {
 			return entry.file;
 		}
@@ -2011,6 +2020,7 @@
 				fileName: entry.name,
 				mimeType: entry.mimeType,
 				modifiedAt: entry.modifiedAt,
+				onProgress,
 			});
 		}
 
@@ -2190,7 +2200,7 @@
 		return [];
 	}
 
-	async function ensureTrackUrl(index: number, interactiveAuth = false): Promise<string | null> {
+	async function ensureTrackUrl(index: number, interactiveAuth = false, reportProgress = true): Promise<string | null> {
 		const track = tracks[index];
 		if (!track) {
 			return null;
@@ -2217,7 +2227,13 @@
 		}
 
 		try {
-			const file = await materializeStoredFile(track.source, interactiveAuth);
+			const file = await materializeStoredFile(
+				track.source,
+				interactiveAuth,
+				reportProgress
+					? (loaded, total) => { trackLoadProgress = { loaded, total }; }
+					: undefined
+			);
 			const url = URL.createObjectURL(file);
 			tracks = tracks.map((current, currentIndex) => {
 				return currentIndex === index ? { ...current, url, cleanup: undefined } : current;
@@ -2228,6 +2244,8 @@
 			const msg = error instanceof Error ? error.message : 'Failed to load track.';
 			addToast({ message: msg, type: 'error' });
 			return null;
+		} finally {
+			if (reportProgress) trackLoadProgress = null;
 		}
 	}
 
@@ -2261,7 +2279,7 @@
 			return;
 		}
 
-		const url = await ensureTrackUrl(nextIndex, false);
+		const url = await ensureTrackUrl(nextIndex, false, false);
 		if (requestId !== preloadRequestId) {
 			if (url && nextIndex !== musicSettings.lastTrackIndex && preloadedTrackIndex !== nextIndex) {
 				releaseTrackUrl(nextIndex);
@@ -4144,6 +4162,20 @@
 				<div class="absolute inset-0 bg-white/5 animate-pulse rounded-2xl"></div>
 			{/if}
 			<Music2 class="w-20 h-20 text-white/80" />
+
+			{#if trackLoadProgress || isBuffering}
+				<div class="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 text-white">
+					<div class="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+					{#if trackLoadProgress && trackLoadProgress.total > 0}
+						<p class="text-xs font-medium">Loading track… {Math.min(100, Math.round((trackLoadProgress.loaded / trackLoadProgress.total) * 100))}%</p>
+						<div class="w-32 h-1.5 bg-white/25 rounded-full overflow-hidden">
+							<div class="h-full bg-white rounded-full transition-all" style="width: {Math.min(100, (trackLoadProgress.loaded / trackLoadProgress.total) * 100)}%"></div>
+						</div>
+					{:else}
+						<p class="text-xs font-medium">{trackLoadProgress ? 'Loading track…' : 'Buffering…'}</p>
+					{/if}
+				</div>
+			{/if}
 		</div>
 
 		<!-- Track Info -->

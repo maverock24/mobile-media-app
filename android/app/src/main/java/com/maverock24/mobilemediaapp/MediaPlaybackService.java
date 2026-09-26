@@ -33,10 +33,12 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 	private static final int NOTIFICATION_ID = 4242;
 	private static final String WAKELOCK_TAG = "mediaHub:audioPlayback";
 	// How long to keep the CPU wakelock after playback pauses before releasing it.
-	// Gives the JS background watchdog time to auto-resume an OS-initiated pause
-	// (screen lock / Doze / bedtime mode) while still avoiding indefinite battery
-	// drain when the user deliberately pauses.
-	private static final long WAKELOCK_RELEASE_GRACE_MS = 90_000L;
+	// Chromium throttles/suspends JS timers when the screen is locked, so the JS
+	// background watchdog (mediaEngine.svelte.ts) needs a long grace window to fire
+	// and recover an OS-initiated pause from Doze / bedtime mode / OEM battery
+	// saving. 10 minutes covers throttled timers while still releasing eventually
+	// when the user deliberately pauses and walks away.
+	private static final long WAKELOCK_RELEASE_GRACE_MS = 600_000L;
 
 	private MediaSessionCompat mediaSession;
 	private AudioManager audioManager;
@@ -258,7 +260,12 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 			.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 			.setOnlyAlertOnce(true)
 			.setShowWhen(false)
-			.setOngoing(isPlaying)
+			// Keep the notification ongoing as long as a track is loaded, not only while
+			// it is actively playing. A mediaPlayback foreground service whose notification
+			// is dismissible looks like a paused/stopped service to Android and OEM battery
+			// savers, making the process killable when the screen locks before the JS
+			// watchdog can recover.
+			.setOngoing(true)
 			.setStyle(new MediaStyle()
 				.setMediaSession(mediaSession.getSessionToken())
 				.setShowActionsInCompactView(0, 1, 2));

@@ -74,6 +74,12 @@
 			: mediaEngine.isPlaying
 	);
 
+	const isBuffering = $derived(
+		showDeckB ? mediaEngine.deckBBuffering
+			: isMusicTab ? mediaEngine.deckABuffering
+			: false
+	);
+
 	const displayTitle = $derived(
 		deckItem?.title ??
 		(isMusicTab ? `Deck ${mediaEngine.activeMusicDeck}` : undefined)
@@ -282,9 +288,11 @@
 					<button
 						class="mini-player-action mini-player-primary mini-player-control-surface mini-player-control-primary w-14 h-14 flex items-center justify-center rounded-full text-primary"
 						onclick={togglePlayback}
-						aria-label={isPlaying ? 'Pause' : 'Play'}
+						aria-label={isBuffering ? 'Loading' : isPlaying ? 'Pause' : 'Play'}
 					>
-						{#if isPlaying}
+						{#if isBuffering}
+							<div class="w-7 h-7 border-2 border-current border-t-transparent rounded-full animate-spin" aria-hidden="true"></div>
+						{:else if isPlaying}
 							<Pause class="w-7 h-7" />
 						{:else}
 							<Play class="w-7 h-7 ml-1" />
