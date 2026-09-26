@@ -35,6 +35,12 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action defaults to `tools platform-tools`, but the `tools`
+          # package was removed from the Android SDK repository — sdkmanager
+          # exits 1 with "Failed to find package 'tools'". Only install
+          # platform-tools; Gradle auto-installs platforms/build-tools.
+          packages: 'platform-tools'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
