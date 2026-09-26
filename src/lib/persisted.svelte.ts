@@ -6,8 +6,6 @@
  *   const prefs = persisted('my-key', { volume: 80, theme: 'dark' });
  *   prefs.volume = 60;  // automatically saved
  */
-import { untrack } from 'svelte';
-
 export function persisted<T extends object>(key: string, defaults: T, _opts?: {
 	/** @deprecated Kept for API compatibility — writes are now synchronous. */
 	debounceMs?: number;
@@ -57,17 +55,25 @@ export function persisted<T extends object>(key: string, defaults: T, _opts?: {
 		}
 	}
 
-	// Write synchronously on every change. A debounce (previously 2.5s) caused
-	// data loss on Android when the app was backgrounded/killed before the timer
-	// fired — e.g. a newly subscribed podcast reverting on reopen. All persisted
-	// stores change at discrete, low-frequency events (subscribe, pause, settings
-	// toggle, …), so a synchronous write is cheap and guarantees persistence.
+	// Flush at the end of the current microtask instead of synchronously inside
+	// the $effect. Serialising a large store (e.g. podcast-data with many
+	// subscriptions) blocks the main thread; doing it during a button tap or
+	// while scrolling makes the UI feel sluggish. Coalescing multiple mutations
+	// that happen in one event loop into a single write also reduces overhead.
 	//
-	// untrack() is critical: JSON.stringify(state) reads every nested field, and
-	// doing that inside the tracking $effect would create reactive dependencies on
-	// all of them (e.g. favoriteTracks[42].title). We only want top-level keys.
+	// Safety: the lifecycle listeners below (pagehide / beforeunload /
+	// visibilitychange / pause) flush synchronously when the app backgrounds or
+	// closes, so the tiny delay introduced here does not carry the same data-loss
+	// risk as the old timed debounce.
+	let _flushPending = false;
 	function scheduleFlush() {
-		untrack(() => flushToLocalStorage());
+		if (_flushPending) return;
+		_flushPending = true;
+		queueMicrotask(() => {
+			if (!_flushPending) return;
+			_flushPending = false;
+			flushToLocalStorage();
+		});
 	}
 
 	$effect.root(() => {
@@ -83,7 +89,10 @@ export function persisted<T extends object>(key: string, defaults: T, _opts?: {
 
 		if (typeof window === 'undefined') return;
 
-		const flushNow = () => flushToLocalStorage();
+		const flushNow = () => {
+			_flushPending = false;
+			flushToLocalStorage();
+		};
 		const flushWhenHidden = () => {
 			if (document.visibilityState === 'hidden') flushNow();
 		};
