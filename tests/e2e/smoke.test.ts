@@ -11,17 +11,23 @@ import { goToTab, expectActiveTab, waitForHydration } from './helpers';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { fileURLToPath } from 'url';
 
+/** This file is ESM, so there is no __dirname. */
+const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+
+/**
+ * Copy a playable MP3 into `dir`.
+ *
+ * The previous fixture was 18 hand-written bytes, which is far short of a single
+ * MPEG-1 Layer III frame (417 bytes at 128 kbps / 44.1 kHz), so the browser
+ * could never decode it and playback never started. `fixtures/silence.mp3` is a
+ * real 1 s silent LAME encode.
+ */
 function createMinimalMp3(name: string, dir: string): string {
-	const buf = Buffer.from([
-		0x49, 0x44, 0x33, 0x03, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-		0xFF, 0xFB, 0x90, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-	]);
-	const p = path.join(dir, name);
-	fs.writeFileSync(p, buf);
-	return p;
+	const dest = path.join(dir, name);
+	fs.copyFileSync(path.join(FIXTURES_DIR, 'silence.mp3'), dest);
+	return dest;
 }
 
 async function loadMp3Folder(page: import('@playwright/test').Page, dir: string) {
@@ -68,7 +74,7 @@ test.describe('Smoke', () => {
 		await expectActiveTab(page, 'Music');
 	});
 
-	test('MP3 library loads and a track opens the player', async ({ page }) => {
+	test('MP3 library loads and a track plays', async ({ page }) => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-smoke-'));
 		createMinimalMp3('Track One.mp3', dir);
 		createMinimalMp3('Track Two.mp3', dir);
@@ -81,9 +87,21 @@ test.describe('Smoke', () => {
 		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 5000 });
 		await expect(page.getByText('Track Two').first()).toBeVisible();
 
-		// Clicking a track opens the player and surfaces the MiniPlayer seek bar
-		await page.getByText('Track One').first().click();
-		await expect(page.locator('input[aria-label="Seek"]')).toBeVisible({ timeout: 5000 });
+		// Tapping a track starts playback but deliberately keeps the browser open so
+		// the listener can keep browsing. It is the MiniPlayer, not the full player
+		// view, that surfaces the transport controls.
+		await page.getByRole('button', { name: /Play Track One/ }).click();
+
+		const mini = page.locator('[aria-label^="Mini player"]');
+		await expect(mini).toBeVisible({ timeout: 10_000 });
+		await expect(mini).toContainText('Track One');
+
+		// Playback reaching the engine is what makes the source seekable, which is
+		// what renders the seek control. The MiniPlayer's control is a role=slider
+		// div — `input[aria-label="Seek"]` only exists in PlayerControls, which is
+		// part of the full player view.
+		await expect(mini.getByRole('slider', { name: 'Seek' })).toBeVisible({ timeout: 10_000 });
+		await expect(mini.getByRole('button', { name: 'Pause' })).toBeVisible();
 
 		fs.rmSync(dir, { recursive: true, force: true });
 	});
