@@ -92,6 +92,8 @@
 		isPlaying = false;
 		isBuffering = false;
 		mediaEngine.youtubePlaying = false;
+		clearLoadWatchdog();
+		_watchdogStage = 'idle';
 		if (!audioEl) return;
 		audioEl.pause();
 		// Release the audio channel — pause() alone can leave decoder state that
@@ -139,6 +141,70 @@
 	}
 
 	// ── Playback ─────────────────────────────────────────────────
+	/**
+	 * Watchdog for a source that never loads.
+	 *
+	 * A googlevideo URL can be perfectly valid (verified: `206 audio/mp4` for an
+	 * unbounded range probe) and still fail to load in the media element — the
+	 * host is unreachable, or the request is dropped. No `error` event fires, so
+	 * without this the track sits at 0:00 forever with no message and no way out.
+	 *
+	 * One re-resolve (which usually lands on a different googlevideo host), then
+	 * an actionable message. Bounded so it cannot loop.
+	 */
+	const LOAD_WATCHDOG_MS = 15_000;
+	let _watchdogTimer: number | null = null;
+	let _watchdogStage: 'idle' | 'armed' | 'retried' = 'idle';
+
+	function clearLoadWatchdog() {
+		if (_watchdogTimer !== null) {
+			clearTimeout(_watchdogTimer);
+			_watchdogTimer = null;
+		}
+	}
+
+	async function recoverStalledLoad(videoId: string) {
+		try {
+			const source = await resolveYoutubeAudio(videoId);
+			// The listener may have moved on while this was in flight.
+			if (!audioEl || currentItem?.videoId !== videoId) return;
+			current = source;
+			if (source.durationSeconds > 0) duration = source.durationSeconds;
+			audioEl.src = source.audioUrl;
+			audioEl.load();
+			safePlay();
+		} catch {
+			clearLoadWatchdog();
+			_watchdogStage = 'idle';
+			stopQueue();
+			error = 'This track would not load. Tap it again to retry.';
+		}
+	}
+
+	/** (Re)start the load watchdog for a freshly set source. */
+	function armLoadWatchdog(videoId: string) {
+		clearLoadWatchdog();
+		_watchdogStage = 'armed';
+		_watchdogTimer = window.setTimeout(() => {
+			_watchdogTimer = null;
+			// readyState >= 1 means metadata arrived; the source is loading fine,
+			// even if it is still buffering.
+			if (!audioEl || audioEl.readyState >= 1) {
+				_watchdogStage = 'idle';
+				return;
+			}
+			if (_watchdogStage === 'retried') {
+				_watchdogStage = 'idle';
+				stopQueue();
+				error = 'This track would not load. Tap it again to retry.';
+				return;
+			}
+			_watchdogStage = 'retried';
+			armLoadWatchdog(videoId);
+			void recoverStalledLoad(videoId);
+		}, LOAD_WATCHDOG_MS);
+	}
+
 	/** Start audio for an already-resolved source and make it the queue position. */
 	function startPlayback(source: YoutubeAudioSource, item: YoutubeQueueItem, index: number) {
 		current = source;
@@ -158,6 +224,7 @@
 		if (audioEl) {
 			audioEl.src = source.audioUrl;
 			audioEl.load();
+			armLoadWatchdog(item.videoId);
 			safePlay(() => addToast({ message: 'Could not start playback.', type: 'error' }));
 		}
 	}
@@ -227,6 +294,8 @@
 		isPlaying = false;
 		isBuffering = false;
 		mediaEngine.youtubePlaying = false;
+		clearLoadWatchdog();
+		_watchdogStage = 'idle';
 		// Pause the element too, so engine state and reality agree. Auto-advance
 		// reaches here with the track already ended, but a manual skip that
 		// exhausts every attempt leaves the previous track still playing.
@@ -419,6 +488,7 @@
 	bind:this={audioEl}
 	preload="none"
 	onplay={() => { isPlaying = true; isBuffering = false; mediaEngine.youtubePlaying = true; }}
+	onloadedmetadata={() => { clearLoadWatchdog(); _watchdogStage = 'idle'; }}
 	onpause={() => { isPlaying = false; mediaEngine.youtubePlaying = false; }}
 	onwaiting={() => { isBuffering = true; }}
 	onplaying={() => { isBuffering = false; isPlaying = true; mediaEngine.youtubePlaying = true; }}

@@ -70,6 +70,7 @@
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
+	import { registerMusicPlayerView } from '$lib/stores/musicView.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
@@ -523,6 +524,15 @@
 			// causes brief overlap when a new source starts immediately.
 			audioEl.removeAttribute('src');
 			audioEl.load();
+		});
+	});
+
+	$effect(() => {
+		// Lets the MiniPlayer (which lives at the shell level) pull the music view
+		// back out of the file browser. Switching tabs is a no-op when the Music
+		// tab is already active, so "Return to music player" needs this.
+		return registerMusicPlayerView(() => {
+			showQueue = false;
 		});
 	});
 
@@ -3765,6 +3775,16 @@
 
 			<!-- Favorites toggle + Change folder -->
 			<div class="flex items-center gap-1 shrink-0">
+				<Button
+					variant="ghost"
+					size="icon"
+					class="h-10 w-10"
+					onclick={() => openYoutubePanel()}
+					aria-label="YouTube"
+					title="Search YouTube"
+				>
+					<Youtube class="w-5 h-5 text-red-500" />
+				</Button>
 				<Button
 					variant="ghost"
 					size="icon"

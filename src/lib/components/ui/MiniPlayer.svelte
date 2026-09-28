@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { openYoutubePanel } from '$lib/stores/youtubePanel.svelte';
+	import { requestMusicPlayerView } from '$lib/stores/musicView.svelte';
 	import { podcastSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import {
 		sleepTimer,
@@ -259,6 +260,10 @@
 					// Returning to YouTube playback should land on the panel, not just
 					// the tab it happens to live on.
 					if (isYoutubeSource) openYoutubePanel();
+					// Switching tabs alone did nothing while the Music tab was already
+					// active, which made this button dead exactly when it was needed:
+					// the file browser has no other way back to the now-playing screen.
+					requestMusicPlayerView();
 					onNavigateTo?.(ownerTab);
 				}}
 				aria-label="Return to {ownerTab} player"
