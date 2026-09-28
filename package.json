@@ -20,11 +20,13 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "vitest run",
 		"test:e2e": "playwright test",
+		"test:e2e:live": "YOUTUBE_E2E=1 playwright test tests/e2e/youtube.test.ts",
 		"test:ui": "playwright test --ui",
 		"test:headed": "playwright test --headed",
 		"test:report": "playwright show-report",
 		"validate": "pnpm check && pnpm test && pnpm test:e2e",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"test:live": "YOUTUBE_LIVE=1 vitest run tests/unit/youtube/live.test.ts"
 	},
 	"devDependencies": {
 		"@capacitor/cli": "^8.2.0",
@@ -57,7 +59,8 @@
 		"clsx": "^2.1.1",
 		"fast-xml-parser": "^5.9.3",
 		"lucide-svelte": "^0.577.0",
-		"tailwind-merge": "^3.5.0"
+		"tailwind-merge": "^3.5.0",
+		"youtubei.js": "^18.1.0"
 	},
 	"pnpm": {
 		"onlyBuiltDependencies": [

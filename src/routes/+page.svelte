@@ -6,6 +6,7 @@
 	import WeatherView from '$lib/components/views/WeatherView.svelte';
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
 	import MiniPlayer from '$lib/components/ui/MiniPlayer.svelte';
+	import YoutubePanel from '$lib/components/ui/YoutubePanel.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
 	import { initSleepTimer } from '$lib/stores/sleepTimer.svelte';
 	import { appSettings } from '$lib/stores/settings.svelte';
@@ -182,6 +183,16 @@
 				<SettingsView />
 			</div>
 		{/if}
+
+		<!--
+			Rendered once, at the shell level, rather than inside Mp3PlayerView.
+			Mp3PlayerView exists twice (one instance per music deck) and keeps its
+			<audio> element alive while hidden, so mounting the panel there would
+			create two YouTube audio elements. It self-gates on youtubePanel.open,
+			and its own audio element stays mounted while closed so playback
+			continues and the MiniPlayer can drive it.
+		-->
+		<YoutubePanel />
 	</main>
 
 	<!-- Mini-player: shown whenever music, podcast, or radio playback is active -->

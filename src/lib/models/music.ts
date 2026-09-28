@@ -37,7 +37,23 @@ export interface Track {
 export type FavoriteTrack =
 	| { key: string; name: string; title: string; artist: string; relativePath: string; source: 'web' }
 	| { key: string; name: string; title: string; artist: string; relativePath: string; source: 'native'; path: string; mimeType?: string; modifiedAt?: number }
-	| { key: string; name: string; title: string; artist: string; relativePath: string; source: 'drive'; fileId: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number; webViewLink?: string };
+	| { key: string; name: string; title: string; artist: string; relativePath: string; source: 'drive'; fileId: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number; webViewLink?: string }
+	/** A YouTube track. Carries no `relativePath` — there is no file to resolve.
+	 *  The audio URL is re-resolved through InnerTube on every play, because the
+	 *  googlevideo link is short-lived and bound to the requesting IP. */
+	| { key: string; name: string; title: string; artist: string; source: 'youtube'; videoId: string; durationSeconds?: number; thumbnailUrl?: string };
+
+export type YoutubeFavoriteTrack = Extract<FavoriteTrack, { source: 'youtube' }>;
+
+/** Favorite key for a YouTube video. Shares the `youtube:` prefix used for
+ *  MediaItem ids, so a favorited track and its now-playing item agree. */
+export function getYoutubeFavoriteKey(videoId: string): string {
+	return `youtube:${videoId}`;
+}
+
+export function isYoutubeFavorite(favorite: FavoriteTrack): favorite is YoutubeFavoriteTrack {
+	return favorite.source === 'youtube';
+}
 
 export type CachedWebLibraryFile = { source: 'web'; name: string; relativePath: string; file: File };
 export type CachedNativeLibraryFile = {

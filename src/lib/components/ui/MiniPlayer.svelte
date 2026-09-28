@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	import { openYoutubePanel } from '$lib/stores/youtubePanel.svelte';
 	import { podcastSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import {
 		sleepTimer,
@@ -30,6 +31,8 @@
 			case 'music':   return 'music';
 			case 'podcast': return 'podcasts';
 			case 'radio':   return 'radio';
+			// YouTube lives on the music tab, where its panel is opened from.
+			case 'youtube': return 'music';
 			default: {
 				// source may be null when item was cleared but a deck is still
 				// playing — determine owner from the active playing flags.
@@ -41,15 +44,20 @@
 		}
 	});
 
-	// On the music tab, always use the active deck's per-deck state — even
-	// when podcast/radio is playing simultaneously (Deck B background music).
-	// On other tabs, follow the global source (podcast/radio/other).
-	const isMusicTab = $derived(activeTab === 'music');
-
-	// When Deck B is the active deck, always show its per-deck state —
-	// even when browsing podcasts, radio, or settings. Otherwise Deck B's
-	// playback is invisible outside the music tab.
-	const showDeckB = $derived(mediaEngine.activeMusicDeck === 'B');
+	// On the music tab, always use the active deck's per-deck state — even when
+	// podcast/radio is playing simultaneously (Deck B background music). On other
+	// tabs, follow the global source.
+	//
+	// When Deck B is the active deck, show its state everywhere so its playback
+	// is not invisible outside the music tab.
+	//
+	// YouTube is the exception to both: it is foreground playback and owns the
+	// engine's global now-playing state, so it overrides the deck views. Without
+	// that the MiniPlayer would keep showing the deck YouTube just stopped,
+	// because deck metadata is deliberately retained across source switches.
+	const isYoutubeSource = $derived(mediaEngine.source === 'youtube');
+	const isMusicTab = $derived(activeTab === 'music' && !isYoutubeSource);
+	const showDeckB = $derived(!isYoutubeSource && mediaEngine.activeMusicDeck === 'B');
 	const deckItem = $derived(
 		showDeckB ? (mediaEngine.deckBItem ?? mediaEngine.item)
 			: isMusicTab ? mediaEngine.deckAItem
@@ -146,7 +154,9 @@
 		seekTo(deckDuration > 0 ? (nextProgress / 100) * deckDuration : 0);
 	}
 
-	const canSeek = $derived(mediaEngine.source === 'music' || mediaEngine.source === 'podcast');
+	const canSeek = $derived(
+		mediaEngine.source === 'music' || mediaEngine.source === 'podcast' || mediaEngine.source === 'youtube'
+	);
 	const canSkipPrevious = $derived(mediaEngine._onPrev !== null);
 	const canSkipNext = $derived(mediaEngine._onNext !== null);
 	const showPodcastSpeedPreset = $derived(mediaEngine.source === 'podcast');
@@ -244,7 +254,13 @@
 			<!-- Track info — tapping navigates back to the player -->
 			<button
 				class="w-full min-w-0 text-left"
-				onclick={() => ownerTab && onNavigateTo?.(ownerTab)}
+				onclick={() => {
+					if (!ownerTab) return;
+					// Returning to YouTube playback should land on the panel, not just
+					// the tab it happens to live on.
+					if (isYoutubeSource) openYoutubePanel();
+					onNavigateTo?.(ownerTab);
+				}}
 				aria-label="Return to {ownerTab} player"
 			>
 				<p class="mini-player-info-title text-sm font-semibold leading-tight truncate">{displayTitle}</p>

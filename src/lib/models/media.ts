@@ -1,7 +1,7 @@
 // Shared normalized media item — used by the media engine to represent a
 // playable track from any source (music or podcast episode).
 
-export type MediaSource = 'music' | 'podcast' | 'radio';
+export type MediaSource = 'music' | 'podcast' | 'radio' | 'youtube';
 
 export interface MediaItem {
 	/** Globally unique identifier across all sources. */

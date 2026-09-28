@@ -2,7 +2,7 @@
 
 /**
  * Global media engine — shared now-playing state hub across Music, Podcast,
- * Radio, and the Mixer.
+ * Radio, YouTube, and the Mixer.
  *
  * The engine does NOT own any <audio> element. Each view drives its own audio
  * element and reports state here via setNowPlaying()/updateTime() and the
@@ -23,11 +23,14 @@ import { MediaControls } from '$lib/native/media-controls';
 import { addToast } from './toastStore.svelte';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Audio exclusivity — only one source (music / podcast / radio / mixer) plays
-// at a time. Views register a stop-callback; calling claimAudio pauses the
-// others. Radio is special-cased: its stream lives in _streamAudio (below),
-// which claimAudio tears down directly for non-radio claims.
+// Audio exclusivity — only one source (music / podcast / radio / youtube /
+// mixer) plays at a time. Views register a stop-callback; calling claimAudio
+// pauses the others. Radio is special-cased: its stream lives in _streamAudio
+// (below), which claimAudio tears down directly for non-radio claims. YouTube
+// is NOT engine-owned — YoutubePanel drives its own <audio> element and reports
+// state here, exactly like PodcastView does.
 // ─────────────────────────────────────────────────────────────────────────────
+
 type AudioSourceId = MediaSource | 'essay' | 'mixer' | 'musicA' | 'musicB';
 const _stopFns: Partial<Record<AudioSourceId, () => void>> = {};
 
@@ -71,6 +74,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	musicPlayingB:  boolean;
 	podcastPlaying: boolean;
 	radioPlaying:   boolean;
+	youtubePlaying: boolean;
 	mixerPlaying:   boolean;
 	musicSelectionLoopActive: boolean;
 	musicHasSelectedTracks: boolean;
@@ -133,6 +137,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	musicPlayingB:  false,
 	podcastPlaying: false,
 	radioPlaying:   false,
+	youtubePlaying: false,
 	mixerPlaying:   false,
 	musicSelectionLoopActive: false,
 	musicHasSelectedTracks: false,
@@ -146,7 +151,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	deckABuffering:   false,
 	deckBBuffering:   false,
 	get isPlaying(): boolean {
-		return this.musicPlayingA || this.musicPlayingB || this.podcastPlaying || this.radioPlaying || this.mixerPlaying;
+		return this.musicPlayingA || this.musicPlayingB || this.podcastPlaying || this.radioPlaying || this.youtubePlaying || this.mixerPlaying;
 	},
 	currentTime: 0,
 	duration:    0,
@@ -242,6 +247,7 @@ export const mediaEngine = $state<NowPlayingState & {
 		this.musicPlayingB = false;
 		this.podcastPlaying = false;
 		this.radioPlaying = false;
+		this.youtubePlaying = false;
 		this.mixerPlaying = false;
 		this.currentTime = 0;
 		this.duration = 0;
@@ -433,6 +439,12 @@ function resumeStreamAudio(engine: typeof mediaEngine) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Browser Media Session Integration
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Now-playing "album" label per source, surfaced in the lock-screen/notification UI. */
+const ALBUM_BY_SOURCE: Partial<Record<MediaSource, string>> = {
+	podcast: 'Podcasts',
+	youtube: 'YouTube',
+};
 if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 	$effect.root(() => {
 		$effect(() => {
@@ -444,7 +456,7 @@ if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
 			navigator.mediaSession.metadata = new MediaMetadata({
 				title:  item.title,
 				artist: item.subtitle,
-				album:  item.source === 'podcast' ? 'Podcasts' : 'Music',
+				album:  ALBUM_BY_SOURCE[item.source] ?? 'Music',
 				artwork: item.artworkUrl
 					? [{ src: item.artworkUrl, sizes: '512x512', type: 'image/jpeg' }]
 					: []

@@ -28,6 +28,7 @@
 		fmtGain,
 		getNextTrackIndex as getNextTrackIndexPure,
 		isSupportedAudioFile,
+		isYoutubeFavorite,
 		parseFilename,
 		sortFiles as sortStoredFiles,
 		createStoredAudioFile,
@@ -68,12 +69,13 @@
 	
 	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
+	import { openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
 		ChevronLeft, ChevronRight, Folder, Gauge, SlidersHorizontal,
 		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X,
-		Copy, Trash2, FolderInput
+		Copy, Trash2, FolderInput, Youtube
 	} from 'lucide-svelte';
 
 	interface Track {
@@ -959,18 +961,21 @@
 	}
 	function createFavoriteTrack(file: StoredAudioFile): FavoriteTrack {
 		const parsed = parseFilename(file.name);
+		// `source` is added per branch so TS keeps the discriminant narrow —
+		// spreading file.source here would widen it to the whole union and no
+		// longer match any FavoriteTrack member.
 		const baseFavorite = {
 			key: getStoredFileKey(file),
 			name: file.name,
 			title: parsed.title,
 			artist: parsed.artist,
 			relativePath: getRelativePath(file),
-			source: file.source,
 		};
 
 		if (file.source === 'native') {
 			return {
 				...baseFavorite,
+				source: 'native',
 				path: file.path,
 				mimeType: file.mimeType,
 				modifiedAt: file.modifiedAt,
@@ -980,6 +985,7 @@
 		if (file.source === 'drive') {
 			return {
 				...baseFavorite,
+				source: 'drive',
 				fileId: file.fileId,
 				mimeType: file.mimeType,
 				modifiedAt: file.modifiedAt,
@@ -988,7 +994,7 @@
 			};
 		}
 
-		return baseFavorite;
+		return { ...baseFavorite, source: 'web' };
 	}
 
 	function resolveFavoriteTrackFile(favorite: FavoriteTrack): StoredAudioFile | null {
@@ -1119,6 +1125,15 @@
 
 	async function playFavoriteTrack(favorite: FavoriteTrack) {
 		if (isChangingTrack) return;
+
+		// A YouTube favorite has no file to resolve, and its stream URL is
+		// short-lived and IP-bound, so it can never join the music deck queue.
+		// Hand off to the YouTube panel, which re-resolves and owns that audio.
+		if (isYoutubeFavorite(favorite)) {
+			openYoutubePanel(favorite.videoId);
+			return;
+		}
+
 		const resolvedTrack = resolveFavoriteTrackFile(favorite);
 		if (!resolvedTrack) {
 			addToast({ message: 'This favorite track is not available in the current library.', type: 'warning' });
@@ -3661,6 +3676,16 @@
 					<Cloud class="w-5 h-5" /> Connect Google Drive
 				{/if}
 			</Button>
+			<!-- Reachable without a library on purpose: YouTube audio does not need
+			     any local MP3s, and the panel itself explains that playback is
+			     Android-only when it runs in a browser. -->
+			<Button
+				variant="outline"
+				onclick={() => openYoutubePanel()}
+				class="gap-2 px-6 h-12 text-base w-full"
+			>
+				<Youtube class="w-5 h-5 text-red-500" /> Play from YouTube
+			</Button>
 		</div>
 		{#if !googleDriveConfigured}
 			<p class="text-xs text-muted-foreground max-w-xs">
@@ -3853,20 +3878,30 @@
 					</div>
 				{:else}
 					{#each filteredFavoriteTracks as entry}
-						{@const isCurrentTrack = mediaEngine.source === 'music' && currentMusicTrackKey === entry.favorite.key}
+						{@const isYoutubeEntry = entry.favorite.source === 'youtube'}
+						<!-- A YouTube favorite carries the same key as its MediaItem id
+						     (`youtube:<videoId>`), so identity is a direct comparison. -->
+						{@const isCurrentTrack = isYoutubeEntry
+							? mediaEngine.source === 'youtube' && mediaEngine.item?.id === entry.favorite.key
+							: mediaEngine.source === 'music' && currentMusicTrackKey === entry.favorite.key}
+						<!-- YouTube entries have no file: they are playable through the
+						     YouTube panel, not the music deck. -->
+						{@const playable = isYoutubeEntry || Boolean(entry.file)}
 						<div class="browse-list-row list-row-surface flex items-center gap-2 px-4 py-2 border-b transition-colors {isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}">
 							<button
-								class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {entry.file ? (isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/30 active:bg-primary/15' : listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80') : 'opacity-60'}"
+								class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {playable ? (isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/30 active:bg-primary/15' : listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80') : 'opacity-60'}"
 								onclick={() => playFavoriteTrack(entry.favorite)}
-								disabled={!entry.file}
-								aria-label={entry.file ? `Play ${entry.favorite.title}` : `${entry.favorite.title} is unavailable`}
+								disabled={!playable}
+								aria-label={playable ? `Play ${entry.favorite.title}` : `${entry.favorite.title} is unavailable`}
 								aria-current={isCurrentTrack ? 'true' : undefined}
 							>
 								<div class="flex-1 min-w-0">
 									<p class="font-semibold text-[0.95rem] leading-tight title-marquee"><span class="title-marquee-inner" data-text={entry.favorite.title}>{entry.favorite.title}</span></p>
 									<p class="text-xs text-muted-foreground truncate">
 										{entry.favorite.artist}
-										{#if !entry.file}
+										{#if isYoutubeEntry}
+											· YouTube
+										{:else if !entry.file}
 											· unavailable in current library
 										{/if}
 									</p>
@@ -4267,6 +4302,15 @@
 			<SlidersHorizontal class="w-7 h-7" />
 			<span class="text-[11px] font-semibold tracking-wide">EQ</span>
 		</button>
+		<button
+			class="flex-1 flex flex-col items-center justify-center gap-1.5 rounded-2xl py-3 transition-all active:scale-95
+				{youtubePanel.open
+					? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30'
+					: 'bg-secondary/60 text-muted-foreground hover:bg-secondary'}"
+			onclick={() => { openYoutubePanel(); showPanel = 'none'; }}>
+			<Youtube class="w-7 h-7" />
+			<span class="text-[11px] font-semibold tracking-wide">YouTube</span>
+		</button>
 	</div>
 
 	{/if}
@@ -4484,6 +4528,10 @@
 	</div>
 </div>
 {/if}
+
+<!-- The YouTube panel is rendered once in +page.svelte. Mp3PlayerView is
+     mounted once per music deck, so mounting the panel here would create two
+     YouTube audio elements. The toolbar button above only requests it opens. -->
 
 <style>
 	/* ── Virtualized list rows — content-visibility: auto tells the browser to skip
