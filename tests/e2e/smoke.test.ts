@@ -74,6 +74,34 @@ test.describe('Smoke', () => {
 		await expectActiveTab(page, 'Music');
 	});
 
+	test('YouTube is reachable from the file browser, and Return reaches the player', async ({ page }) => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-nav-'));
+		createMinimalMp3('Track One.mp3', dir);
+
+		await page.goto('/');
+		await waitForHydration(page);
+		await loadMp3Folder(page, dir);
+		await expect(page.getByText('Track One').first()).toBeVisible({ timeout: 5000 });
+		await page.getByRole('button', { name: /Play Track One/ }).click();
+		await expect(page.getByRole('button', { name: /Return to music player/ })).toBeVisible({ timeout: 10_000 });
+
+		// Loading a folder leaves you in the file browser, which renders no player
+		// toolbar at all. YouTube has to be reachable from here.
+		await expect(page.getByRole('button', { name: 'YouTube', exact: true })).toBeVisible();
+		await page.getByRole('button', { name: 'YouTube', exact: true }).click();
+		await expect(page.getByRole('button', { name: 'Close YouTube' })).toBeVisible();
+		await page.getByRole('button', { name: 'Close YouTube' }).click();
+		await expect(page.getByRole('button', { name: 'Close YouTube' })).toHaveCount(0);
+
+		// "Return to music player" previously only switched tabs, which is a no-op
+		// while the Music tab is already active — leaving the file browser with no
+		// way back to the now-playing screen. The player toolbar is the proof.
+		await page.getByRole('button', { name: /Return to music player/ }).click();
+		await expect(page.getByRole('button', { name: 'Browse' })).toBeVisible();
+
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+
 	test('MP3 library loads and a track plays', async ({ page }) => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-smoke-'));
 		createMinimalMp3('Track One.mp3', dir);

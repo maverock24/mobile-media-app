@@ -32,13 +32,26 @@ Tail the log while you test, in a second terminal:
 adb logcat -v time | grep -Ei "capacitor|youtube|chromium|media"
 ```
 
-## 1 — The panel is reachable with no music library
+## 1 — The panel is reachable from every screen
 
-Open the app without loading any folder. **Play from YouTube** should be on the
-empty state next to Open Folder / Connect Google Drive.
+YouTube used to be reachable from two places only, and a user with a loaded
+library who was looking at their file list had neither — the player toolbar does
+not render in the file browser. There are now three ways in:
 
-Tap it. You should get a full-height panel: back arrow, "Audio only", Search and
-Favorites tabs, and a search field.
+1. **Welcome screen** (no folder loaded): **Play from YouTube**, under Connect
+   Google Drive.
+2. **File browser**: the red **YouTube** icon in the header, beside the star and
+   the local/Drive folder buttons.
+3. **Now-playing screen**: the **YouTube** button in the bottom toolbar
+   (Browse / speed / EQ / YouTube).
+
+Tap any of them. You should get a full-height panel: back arrow, "Audio only",
+Search and Favorites tabs, and a search field.
+
+While you are in the file browser, also confirm the way back: tapping the track
+strip in the MiniPlayer (**Return to music player**) must open the now-playing
+screen. It previously only switched tabs, which is a no-op when the Music tab is
+already active, so it did nothing exactly when it was needed.
 
 > Deliberate: YouTube audio needs no local MP3s, so the panel must not be gated
 > behind loading a library.

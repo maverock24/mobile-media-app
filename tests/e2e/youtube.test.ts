@@ -266,6 +266,46 @@ test.describe('YouTube panel', () => {
 			.not.toBe(secondSrc);
 	});
 
+	test('recovers from a source that never loads', async ({ page }) => {
+		await openPanel(page);
+		await search(page, 'lofi hip hop');
+
+		const audio = youtubeAudio(page);
+		await page.locator('button[aria-label^="Play "]').first().click();
+		await expect(audio).toHaveAttribute('src', /googlevideo\.com/, { timeout: 45_000 });
+		await expect
+			.poll(async () => audio.evaluate((el: HTMLAudioElement) => el.paused), { timeout: 30_000 })
+			.toBe(false);
+
+		// Force the exact failure seen intermittently in practice: a source that
+		// never reaches HAVE_METADATA and fires no error event. The watchdog must
+		// re-resolve (usually landing on a different googlevideo host) and resume.
+		const goodSrc = await audio.evaluate((el: HTMLAudioElement) => el.src);
+		await audio.evaluate((el: HTMLAudioElement) => {
+			el.src = 'https://r1---sn-bogus-invalid.googlevideo.com/videoplayback?id=dead';
+			el.load();
+		});
+		await expect
+			.poll(async () => audio.evaluate((el: HTMLAudioElement) => el.readyState >= 1 || el.src === ''), { timeout: 10_000 })
+			.toBe(false);
+
+		// Within the watchdog window the src must change to a newly resolved URL
+		// and playback must resume on its own.
+		await expect
+			.poll(async () => audio.evaluate((el: HTMLAudioElement) => el.src), {
+				timeout: 40_000,
+				message: 'watchdog never re-resolved the stalled source',
+			})
+			.not.toContain('bogus-invalid');
+		await expect
+			.poll(async () => audio.evaluate((el: HTMLAudioElement) => el.paused), {
+				timeout: 30_000,
+				message: 'playback did not resume after recovery',
+			})
+			.toBe(false);
+		expect(await audio.evaluate((el: HTMLAudioElement) => el.src)).not.toBe(goodSrc);
+	});
+
 	test('favourites persist across closing the panel and a full reload', async ({ page }) => {
 		await openPanel(page);
 		await search(page, 'top hits 2024');
