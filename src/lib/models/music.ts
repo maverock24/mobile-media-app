@@ -257,12 +257,15 @@ export function getNextTrackIndex(
 		if (preloadedIndex != null && preloadedIndex !== currentIndex && preloadedIndex < trackCount) {
 			return preloadedIndex;
 		}
+		// Pick from the reduced range 0..trackCount-2 and step past the current
+		// index, instead of retrying until rand() differs. A supplied rand
+		// (tests, seeded PRNG) can legitimately return the same value every
+		// call, and the retry form then spins forever — that unbounded loop
+		// hung the entire unit-test run. This form is O(1) and always returns
+		// an index different from currentIndex.
 		const rand = opts.rand ?? Math.random;
-		let nextIndex = currentIndex;
-		while (nextIndex === currentIndex) {
-			nextIndex = Math.floor(rand() * trackCount);
-		}
-		return nextIndex;
+		const reduced = Math.min(Math.max(Math.floor(rand() * (trackCount - 1)), 0), trackCount - 2);
+		return reduced >= currentIndex ? reduced + 1 : reduced;
 	}
 
 	// Only selectionLoop wraps the list. `isRepeat` is repeat-one (the track
