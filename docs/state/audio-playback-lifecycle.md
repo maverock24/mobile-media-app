@@ -1,8 +1,8 @@
 # Audio Playback Lifecycle — State Spec v1
-> **Source:** `src/lib/stores/mediaEngine.svelte.ts` (680L)
+> **Source:** `src/lib/stores/mediaEngine.svelte.ts` (777L)
 > **Authority:** code — the engine is a $state object; views drive their own `<audio>` elements.
 > **Initial:** `IDLE`
-> **Last reconciled:** 2026-07-18
+> **Last reconciled:** 2026-09-28
 
 ## States (5)
 
@@ -44,7 +44,8 @@
 - `LOADED` MUST have handlers registered before `PLAY` (T3). Violation = dev-mode console warning, audio may not respond to MiniPlayer/MediaSession.
 - Dual music decks (`musicPlayingA` + `musicPlayingB`) may both be true simultaneously — `claimAudio` skips sibling decks.
 - Deck B may mix with podcast/radio (`musicPlayingB` + `podcastPlaying`/`radioPlaying`) — `claimAudio` skips those.
-- All other flag combinations are exclusive: at most one of {podcastPlaying, radioPlaying, mixerPlaying} may be true.
+- All other flag combinations are exclusive: at most one of {podcastPlaying, radioPlaying, youtubePlaying, mixerPlaying} may be true. YouTube gains nothing from simultaneous playback, so it behaves like podcast here — unlike the radio stream, `claimAudio('youtube')` tears `_streamAudio` down.
+- Per-source flags that follow the view-owned `<audio>` pattern: music, podcast, **youtube**. Only radio is engine-owned (`_streamAudio`, hence `STREAM_RECONNECTING`).
 - `STREAM_RECONNECTING` only valid when `source=='radio'`.
 - `BG_RECOVERY` only valid on Android (`Capacitor.platform=='android'`). On web it is unreachable.
 - `clear()` is always valid from any state (universal reset). Also resets per-deck state (deckAItem/deckBItem → null, per-deck time/duration → 0).
