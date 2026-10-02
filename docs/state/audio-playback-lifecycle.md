@@ -1,8 +1,8 @@
 # Audio Playback Lifecycle — State Spec v1
-> **Source:** `src/lib/stores/mediaEngine.svelte.ts` (777L)
+> **Source:** `src/lib/stores/mediaEngine.svelte.ts` (832L)
 > **Authority:** code — the engine is a $state object; views drive their own `<audio>` elements.
 > **Initial:** `IDLE`
-> **Last reconciled:** 2026-09-28
+> **Last reconciled:** 2026-10-02
 
 ## States (5)
 
@@ -12,7 +12,7 @@
 | 2 | `LOADED` | `item!=null && source!=null && isPlaying==false` | Content ready. Handlers registered via `setPlaybackHandlers`/`setSkipHandlers`. Audio element exists but is paused/stopped. |
 | 3 | `PLAYING` | `item!=null && source!=null && isPlaying==true` | Audio active. Exactly one per-source flag is true — or two for dual-deck mixing (musicA+musicB) / B-radio mix. WakeLock held (web). |
 | 4 | `STREAM_RECONNECTING` | `source=='radio' && _streamShouldPlay==true && reconnect timer active` | Radio stream dropped unexpectedly. Exponential backoff reconnect in progress (1s→2s→4s→8s→16s, max 5 attempts). Transient — always resolves to PLAYING or LOADED. |
-| 5 | `BG_RECOVERY` | `backgroundResumeArmed==true` (Android only) | App backgrounded on Android while audio was playing. Retry loop: 180ms initial + 250ms×3 retries, then 5s watchdog. Transient — resolves on document 'resume' or recovery. |
+| 5 | `BG_RECOVERY` | `backgroundResumeArmed==true` (Android only) | App backgrounded on Android while the user wanted playback. Armed from the `document` 'pause' event on `item!=null && (isPlaying \|\| userWantsPlayback)` — see `_userWantsPlayback`. Retry loop: 180ms initial + 250ms×3 retries, then 5s watchdog. Disarmed only by an explicit user pause or `clear()`. Transient — resolves on document 'resume' or recovery. |
 
 **Closed world:** any condition not matching the above 5 states is invalid. `item!=null` without `source!=null` is invalid. `isPlaying==true` without `item!=null` is invalid.
 
@@ -29,7 +29,7 @@
 | T7 | `PLAYING` | audio error event | — | `LOADED` | Per-source flag=false. `isPlaying→false`. Item/source preserved. Toast notification via `addToast()`. |
 | T8 | `PLAYING` | `clear()` | — | `IDLE` | Same effects as T4 (including per-deck state reset). |
 | T9 | `PLAYING` | radio stream 'ended' + `_streamShouldPlay==true` | source=='radio' | `STREAM_RECONNECTING` | radioPlaying=false. `reconnectStream(url,item)` called with exponential backoff (`min(1000×2^(n-1), 16000)`ms). Max 5 attempts. |
-| T10 | `PLAYING` | Android `document 'pause'` | `Capacitor.platform=='android' && isPlaying && item!=null` | `BG_RECOVERY` | `backgroundResumeArmed=true`. 180ms then 250ms×3 retry loop calling `_onPlay()`. 5s watchdog interval starts. |
+| T10 | `PLAYING` | Android `document 'pause'` | `Capacitor.platform=='android' && item!=null && (isPlaying \|\| userWantsPlayback)` | `BG_RECOVERY` | `backgroundResumeArmed=true`. 180ms then 250ms×3 retry loop calling `_onPlay()`. 5s watchdog interval starts. Every retry bails out (and disarms) when `userWantsPlayback==false` — a deliberate pause is never undone. |
 | T11 | `STREAM_RECONNECTING` | reconnect succeeds (`playStream` re-invoked) | `_streamShouldPlay==true` | `PLAYING` | New `_streamAudio` created, radioPlaying=true. Timer cleared. |
 | T12 | `STREAM_RECONNECTING` | 5 reconnect attempts exhausted | — | `LOADED` | Timer cleared. Item/source='radio' preserved. isPlaying=false. |
 | T13 | `STREAM_RECONNECTING` | user `pauseStream()` sets `_streamShouldPlay=false` | — | `LOADED` | Reconnect cancelled. Stream audio stopped. radioPlaying=false. |
@@ -48,6 +48,8 @@
 - Per-source flags that follow the view-owned `<audio>` pattern: music, podcast, **youtube**. Only radio is engine-owned (`_streamAudio`, hence `STREAM_RECONNECTING`).
 - `STREAM_RECONNECTING` only valid when `source=='radio'`.
 - `BG_RECOVERY` only valid on Android (`Capacitor.platform=='android'`). On web it is unreachable.
+- **Intent, not state:** the lock/screen-off transition delivers both the WebView's element pause and the `document` 'pause' event, and the element pause can land first. Arming on `isPlaying` alone therefore saw "not playing", disarmed the recovery, and playback stayed dead — locking the phone from the foreground stopped audio for good while backgrounding first (`onPause` fires a full activity animation before the WebView is hidden) kept playing. `userWantsPlayback` is latched when any source plays and cleared only by `markUserPaused()`: in-app pause buttons (`pausePlayback`), `mediaEngine.pause()`, `pauseStream()`, `clear()`, the lock-screen/notification 'pause' action, and the sleep timer (which reaches the same `_onPause` handlers).
+- Known hole: `item==null` still disarms the recovery, so a deck playing while `item` is unset (deck B with the music tab unfocused) has no background recovery.
 - `clear()` is always valid from any state (universal reset). Also resets per-deck state (deckAItem/deckBItem → null, per-deck time/duration → 0).
 - `setNowPlaying` from any state overwrites item/source/currentTime/duration — no guard or precondition.
 

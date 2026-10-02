@@ -24,7 +24,7 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import Input from '$lib/components/ui/Input.svelte';
 	import { formatClock, getYoutubeFavoriteKey, isYoutubeFavorite } from '$lib/models/music';
-	import { claimAudio, mediaEngine, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
+	import { claimAudio, mediaEngine, markUserPaused, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { closeYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
@@ -132,7 +132,14 @@
 	function claimEngineControls() {
 		mediaEngine.setPlaybackHandlers(
 			() => { startOrResumePlayback(); },
-			() => { isPlaying = false; mediaEngine.youtubePlaying = false; audioEl?.pause(); },
+			() => {
+				// Deliberate pause (MiniPlayer / lock screen / sleep timer): tell the
+				// engine, so the Android background recovery does not restart playback.
+				markUserPaused();
+				isPlaying = false;
+				mediaEngine.youtubePlaying = false;
+				audioEl?.pause();
+			},
 			(time) => { if (audioEl) audioEl.currentTime = time; }
 		);
 		// Next/prev drive the queue, so the MiniPlayer, MediaSession and the
@@ -416,6 +423,7 @@
 	function togglePlay() {
 		if (!audioEl || !current) return;
 		if (isPlaying) {
+			markUserPaused();
 			audioEl.pause();
 			return;
 		}

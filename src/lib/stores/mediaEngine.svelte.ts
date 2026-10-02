@@ -52,6 +52,31 @@ export function claimAudio(id: AudioSourceId): void {
 	if (id !== 'radio' && id !== 'musicB') stopStreamAudio();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Android background-recovery intent
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * True while the user wants playback and has not deliberately paused it.
+ *
+ * The Android background recovery is gated on this instead of the instantaneous
+ * `isPlaying`, because the WebView pauses the <audio> element as part of the very
+ * same lock/screen-off transition that delivers the `document` 'pause' event, and
+ * that element pause can reach JS *before* the event does. Reading `isPlaying` at
+ * event time then reports "not playing", the retry loop and the 5s watchdog get
+ * torn down, and playback never comes back: locking the phone while the app is in
+ * the foreground stops audio for good, while backgrounding the app first (where the
+ * document event arrives before the WebView is hidden) keeps playing.
+ *
+ * Set when playback starts, cleared only by a deliberate pause: the in-app pause
+ * buttons, the lock-screen/notification action, the sleep timer, or clear().
+ */
+let _userWantsPlayback = false;
+
+/** Record a deliberate pause so the background recovery never restarts playback. */
+export function markUserPaused(): void {
+	_userWantsPlayback = false;
+}
+
 export interface NowPlayingState {
 	item:        MediaItem | null;
 	/** Derived: true when ANY source is actively playing. Read-only — each source
@@ -168,6 +193,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	 *  In dev, a missing handler for a non-radio source logs a warning so stale
 	 *  transport wiring surfaces immediately instead of silently no-op'ing. */
 	pause() {
+		markUserPaused();
 		if (this.source === 'radio' && _streamAudio) {
 			_streamAudio.pause();
 			this.radioPlaying = false;
@@ -240,6 +266,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	},
 
 	clear() {
+		markUserPaused();
 		cancelStreamReconnect();
 		stopStreamAudio();
 		this.item = null;
@@ -323,6 +350,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	/** Pause the live stream without tearing down the audio element. */
 	pauseStream() {
 		// User intent = paused: cancel any pending reconnect so the stream stays stopped.
+		markUserPaused();
 		_streamShouldPlay = false;
 		cancelStreamReconnect();
 		if (_streamAudio) {
@@ -582,7 +610,7 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		const tryResumeAfterBackgroundPause = () => {
 			backgroundResumeTimer = null;
 			if (!backgroundResumeArmed || mediaEngine.item == null) return;
-			if (backgroundUserPaused) {
+			if (backgroundUserPaused || !_userWantsPlayback) {
 				clearBackgroundResume();
 				return;
 			}
@@ -594,6 +622,11 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 				return;
 			}
 
+			console.log(
+				'[mediaEngine] background resume attempt',
+				backgroundResumeAttempts + 1,
+				'(isPlaying=false, userWantsPlayback=true)'
+			);
 			mediaEngine._onPlay?.() ?? mediaEngine.resume();
 			backgroundResumeAttempts += 1;
 			if (backgroundResumeAttempts < 4) {
@@ -619,23 +652,44 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 						clearBackgroundResume();
 						return;
 					}
-					if (backgroundUserPaused) {
+					if (backgroundUserPaused || !_userWantsPlayback) {
 						clearBackgroundResume();
 						return;
 					}
 					if (mediaEngine.item != null && !mediaEngine.isPlaying) {
+						console.log('[mediaEngine] background watchdog: resuming playback');
 						mediaEngine._onPlay?.() ?? mediaEngine.resume();
 					}
 				}, 5000);
 			}
 		};
 
+		// Latch "the user wants playback" whenever anything is playing. Cleared only
+		// by markUserPaused() (deliberate pause) — never by an OS-initiated element
+		// pause, which is what the recovery below has to undo. See _userWantsPlayback.
+		$effect(() => {
+			if (mediaEngine.isPlaying) _userWantsPlayback = true;
+		});
+
 		const handleDocumentPause = () => {
 			if (Capacitor.getPlatform() !== 'android') return;
-			if (!mediaEngine.isPlaying || mediaEngine.item == null) {
+			// Arm on intent, not on the instantaneous isPlaying: the WebView pauses the
+			// <audio> element as part of this same lock/screen-off transition and that
+			// pause can reach JS before this event does. Gating on isPlaying then saw
+			// "not playing" here, cleared the recovery, and playback stayed dead.
+			if (mediaEngine.item == null || (!mediaEngine.isPlaying && !_userWantsPlayback)) {
+				console.log(
+					'[mediaEngine] document pause: not arming background resume',
+					'(item:', mediaEngine.item != null, 'isPlaying:', mediaEngine.isPlaying,
+					'userWantsPlayback:', _userWantsPlayback, ')'
+				);
 				clearBackgroundResume();
 				return;
 			}
+			console.log(
+				'[mediaEngine] document pause: arming background resume',
+				'(isPlaying:', mediaEngine.isPlaying, 'userWantsPlayback:', _userWantsPlayback, ')'
+			);
 			armBackgroundResume();
 		};
 
@@ -663,6 +717,7 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 						break;
 					case 'pause':
 						backgroundUserPaused = true;
+						markUserPaused();
 						untrack(() => mediaEngine._onPause)?.() ?? mediaEngine.pause();
 						break;
 					case 'nexttrack':     untrack(() => mediaEngine._onNext)?.() ?? mediaEngine.next();    break;

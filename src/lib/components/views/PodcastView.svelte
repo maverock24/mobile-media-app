@@ -9,7 +9,7 @@
 	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import { appSettings, podcastSettings, podcastData } from '$lib/stores/settings.svelte';
-	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
+	import { mediaEngine, claimAudio, registerAudioSource, markUserPaused } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	import { formatDuration } from '$lib/models/music';
@@ -916,6 +916,9 @@
 	function pausePlayback() {
 		if (!audioEl || !currentEpisode || !isPlaying) return;
 		_userPaused = true;
+		// Deliberate pause: tell the engine too, so the Android background recovery
+		// does not restart the episode when the phone is later locked.
+		markUserPaused();
 		void triggerPlaybackHaptic(false);
 		cancelNetworkRetry();
 		audioEl.pause();

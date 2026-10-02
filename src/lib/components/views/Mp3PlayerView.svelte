@@ -67,7 +67,7 @@
 	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	
-	import { mediaEngine, claimAudio, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
+	import { mediaEngine, claimAudio, registerAudioSource, markUserPaused } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
 	import { registerMusicPlayerView } from '$lib/stores/musicView.svelte';
@@ -3127,7 +3127,12 @@
 	// ─────────────────────────────────────────────────────────────
 	async function togglePlay() {
 		try {
-			if (isPlaying) { audioEl?.pause(); }
+			if (isPlaying) {
+				// Deliberate pause: tell the engine, so the Android background recovery
+				// does not restart this track when the phone is later locked.
+				markUserPaused();
+				audioEl?.pause();
+			}
 			else void resumePlayback();
 		} catch { /* bridge failure — best-effort */ }
 	}
@@ -3136,6 +3141,9 @@
 		try {
 			if (!audioEl || !currentTrack || !isPlaying) return;
 			void triggerPlaybackHaptic(false);
+			// Deliberate pause: tell the engine, so the Android background recovery
+			// does not restart this track when the phone is later locked.
+			markUserPaused();
 			audioEl.pause();
 		} catch { /* haptics or audio element failure */ }
 	}
