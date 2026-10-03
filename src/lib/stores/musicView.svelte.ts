@@ -25,3 +25,13 @@ export function registerMusicPlayerView(handler: () => void): () => void {
 export function requestMusicPlayerView(): void {
 	for (const handler of _showPlayerHandlers) handler();
 }
+
+/**
+ * Whether the music view is in favorites mode. Shared across decks A/B and
+ * the YouTube panel: the star toggle in the browse header keeps its state
+ * when switching between the A / B / YouTube sub-tabs, and the YouTube panel
+ * reads it to show its favorites instead of search results.
+ */
+export const musicFavorites = $state({
+	shown: false,
+});

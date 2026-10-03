@@ -53,8 +53,6 @@ export const musicSettings = persisted('music-settings', {
 	showAlbumArt: true,
 	autoPlay: false,
 	rewindOnPrev: true,    // restart track if >3s in, on prev press
-	/** YouTube queue: wrap to the first result after the last one ends. */
-	youtubeQueueLoop: true,
 	sortOrder: 'filename' as 'filename' | 'title' | 'artist',
 	favoriteFolders: [] as Array<{ id: string; name: string; source: 'device' | 'drive'; treeUri?: string }>,
 	favoriteTracks: [] as FavoriteTrack[],

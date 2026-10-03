@@ -19,7 +19,8 @@
 		recordWindowErrorEvent,
 	} from '$lib/stores/runtimeDiagnostics.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
-	import { Music, Mic2, Radio, Cloud, Settings2 } from 'lucide-svelte';
+	import { closeYoutubePanel, openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
+	import { Music, Mic2, Radio, Cloud, Settings2, Youtube } from 'lucide-svelte';
 	import { checkForAndroidUpdate } from '$lib/utils/androidUpdate';
 
 	type Tab = 'music' | 'podcasts' | 'radio' | 'weather' | 'settings';
@@ -39,6 +40,28 @@
 	function navigateToTab(tab: string) {
 		if (!isTab(tab)) return;
 		setActiveTab(tab);
+	}
+
+	// ── Music view sub-tabs (A / B / YouTube) ───────────────────
+	// The music view owns three tabs: Deck A, Deck B and the YouTube panel.
+	// Deck A is the default selection. The selection is *derived* from the
+	// engine's active deck and the YouTube panel's open state, so the
+	// MiniPlayer deck toggle and external YouTube requests (favorites,
+	// now-playing taps) stay reflected here without a second source of truth.
+	type MusicSubTab = 'A' | 'B' | 'youtube';
+	const musicSubTab = $derived<MusicSubTab>(
+		youtubePanel.open ? 'youtube' : mediaEngine.activeMusicDeck
+	);
+
+	function selectMusicSubTab(tab: MusicSubTab) {
+		if (musicSubTab === tab) return;
+		if (tab === 'youtube') {
+			openYoutubePanel();
+		} else {
+			mediaEngine.activeMusicDeck = tab;
+			closeYoutubePanel();
+		}
+		void triggerTabHaptic();
 	}
 
 	function isTab(value: unknown): value is Tab {
@@ -157,15 +180,54 @@
 			simultaneously (Deck B can mix with podcast/radio, both
 			decks can play at the same time). class:hidden (display:none)
 			does NOT pause audio — the <audio> elements keep playing.
-			Only one deck's UI is visible at a time, controlled by
-			mediaEngine.activeMusicDeck.
+			Which deck's UI is visible is controlled by the A / B / YouTube
+			sub-tabs (musicSubTab), which follows mediaEngine.activeMusicDeck
+			and youtubePanel.open so the MiniPlayer deck toggle and external
+			YouTube requests stay in sync.
 		-->
-		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'music'}>
-			<div class="absolute inset-0" class:hidden={mediaEngine.activeMusicDeck !== 'A'}>
-				<Mp3PlayerView deck="A" {activeTab} />
+		<div class="absolute inset-0 overflow-hidden flex flex-col" class:hidden={activeTab !== 'music'}>
+			<!-- A / B / YouTube sub-tabs — Deck A is the default selection -->
+			<div class="flex shrink-0 border-b bg-background/95 backdrop-blur-sm" role="tablist" aria-label="Music player">
+				<button
+					role="tab"
+					aria-selected={musicSubTab === 'A'}
+					class="flex-1 py-2.5 text-xs font-semibold tracking-wide transition-colors {musicSubTab === 'A' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => selectMusicSubTab('A')}
+				>A</button>
+				<button
+					role="tab"
+					aria-selected={musicSubTab === 'B'}
+					class="flex-1 py-2.5 text-xs font-semibold tracking-wide transition-colors {musicSubTab === 'B' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => selectMusicSubTab('B')}
+				>B</button>
+				<button
+					role="tab"
+					aria-selected={musicSubTab === 'youtube'}
+					class="flex-1 py-2.5 text-xs font-semibold tracking-wide transition-colors {musicSubTab === 'youtube' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => selectMusicSubTab('youtube')}
+				>
+					<Youtube class="w-4 h-4 text-red-500 inline-block" /> YouTube
+				</button>
 			</div>
-			<div class="absolute inset-0" class:hidden={mediaEngine.activeMusicDeck !== 'B'}>
-				<Mp3PlayerView deck="B" {activeTab} />
+			<div class="relative flex-1 min-h-0">
+				<div class="absolute inset-0" class:hidden={musicSubTab !== 'A'}>
+					<Mp3PlayerView deck="A" {activeTab} />
+				</div>
+				<div class="absolute inset-0" class:hidden={musicSubTab !== 'B'}>
+					<Mp3PlayerView deck="B" {activeTab} />
+				</div>
+
+				<!--
+					Rendered once, at the shell level, rather than inside Mp3PlayerView.
+					Mp3PlayerView exists twice (one instance per music deck) and keeps its
+					<audio> element alive while hidden, so mounting the panel there would
+					create two YouTube audio elements. It self-gates on youtubePanel.open,
+					and its own audio element stays mounted while closed so playback
+					continues and the MiniPlayer can drive it. It lives inside the music
+					content area — below the sub-tab bar — so the A / B / YouTube tabs
+					remain visible and clickable while the panel is open.
+				-->
+				<YoutubePanel />
 			</div>
 		</div>
 		<div class="absolute inset-0 overflow-hidden" class:hidden={activeTab !== 'podcasts'}>
@@ -184,15 +246,6 @@
 			</div>
 		{/if}
 
-		<!--
-			Rendered once, at the shell level, rather than inside Mp3PlayerView.
-			Mp3PlayerView exists twice (one instance per music deck) and keeps its
-			<audio> element alive while hidden, so mounting the panel there would
-			create two YouTube audio elements. It self-gates on youtubePanel.open,
-			and its own audio element stays mounted while closed so playback
-			continues and the MiniPlayer can drive it.
-		-->
-		<YoutubePanel />
 	</main>
 
 	<!-- Mini-player: shown whenever music, podcast, or radio playback is active -->

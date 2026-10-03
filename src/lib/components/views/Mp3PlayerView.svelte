@@ -70,7 +70,7 @@
 	import { mediaEngine, claimAudio, registerAudioSource, markUserPaused } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
-	import { registerMusicPlayerView } from '$lib/stores/musicView.svelte';
+	import { musicFavorites, registerMusicPlayerView } from '$lib/stores/musicView.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
@@ -245,7 +245,6 @@
 	let loadingFolderPath = $state<string | null>(null); // per-folder spinner key
 	let queueSessionId = 0;
 	let showQueue   = $state(false);   // true → browse / folder view
-	let showFavoriteTracks = $state(false);
 
 	// ── Swipe left in full player → go back to browse list ───────
 	// Wired via use:swipeBack on the player container in the template below.
@@ -1698,7 +1697,7 @@
 	}
 
 	async function switchToFavorite(fav: (typeof musicSettings.favoriteFolders)[0]) {
-		showFavoriteTracks = false;
+		musicFavorites.shown = false;
 		switchingToFavId = fav.id;
 		try {
 		if (fav.source === 'drive') {
@@ -2757,7 +2756,7 @@
 	}
 
 	function navigateInto(name: string) {
-		showFavoriteTracks = false;
+		musicFavorites.shown = false;
 		browsePath = [...browsePath, name];
 	}
 
@@ -2770,19 +2769,19 @@
 		} else {
 			browsePath = segments.slice(0, -1);
 		}
-		showFavoriteTracks = false;
+		musicFavorites.shown = false;
 		fileSearchQuery = '';
 		selectedBrowseFileKeys = [];
 		mediaEngine.musicSelectionLoopActive = false;
 	}
 	function navigateToParentFolderFromSwipe() {
 		if (browsePath.length === 0) return;
-		showFavoriteTracks = false;
+		musicFavorites.shown = false;
 		browsePath = browsePath.slice(0, -1);
 	}
 	function navigateUp() {
-		if (showFavoriteTracks) {
-			showFavoriteTracks = false;
+		if (musicFavorites.shown) {
+			musicFavorites.shown = false;
 			return;
 		}
 		if (browsePath.length > 0) {
@@ -3728,41 +3727,70 @@
 	>
 
 		<!-- Header -->
-		<div class="flex items-center gap-2 px-3 py-3 border-b shrink-0">
-			{#if browsePath.length > 0 || showFavoriteTracks}
-			<Button
-				variant="ghost"
-				size="icon"
-				class="w-11 h-11 shrink-0"
-				onclick={navigateUp}
-				aria-label={showFavoriteTracks
-					? 'Back from favorite tracks'
-					: 'Back to parent folder'}
-			>
-				<ChevronLeft class="w-6 h-6" />
-			</Button>
-			{/if}
-
-			<!-- Breadcrumb (or search results label) -->
-			<div class="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
-				{#if fileSearchQuery}
-					<span class="text-sm text-muted-foreground truncate">Search results</span>
-				{:else}
-				<button class="text-sm text-muted-foreground hover:text-foreground truncate shrink-0 max-w-[90px]"
-					onclick={() => (browsePath = [])}
-				>{currentLibraryLabel}</button>
-				{#each browsePath as seg, i}
-					<ChevronRight class="w-3 h-3 text-muted-foreground shrink-0" />
-					<button
-						class="text-sm truncate max-w-[90px] {i === browsePath.length - 1 ? 'text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}"
-						onclick={() => (browsePath = browsePath.slice(0, i + 1))}
-					>{seg}</button>
-				{/each}
+		<div class="px-3 py-3 border-b shrink-0 space-y-2">
+			<div class="flex items-center gap-2">
+				{#if browsePath.length > 0 || musicFavorites.shown}
+				<Button
+					variant="ghost"
+					size="icon"
+					class="w-11 h-11 shrink-0"
+					onclick={navigateUp}
+					aria-label={musicFavorites.shown
+						? 'Back from favorite tracks'
+						: 'Back to parent folder'}
+				>
+					<ChevronLeft class="w-6 h-6" />
+				</Button>
 				{/if}
+
+				<!-- Breadcrumb (or search results label) -->
+				<div class="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
+					{#if fileSearchQuery}
+						<span class="text-sm text-muted-foreground truncate">Search results</span>
+					{:else}
+					<button class="text-sm text-muted-foreground hover:text-foreground truncate shrink-0 max-w-[90px]"
+						onclick={() => (browsePath = [])}
+					>{currentLibraryLabel}</button>
+					{#each browsePath as seg, i}
+						<ChevronRight class="w-3 h-3 text-muted-foreground shrink-0" />
+						<button
+							class="text-sm truncate max-w-[90px] {i === browsePath.length - 1 ? 'text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}"
+							onclick={() => (browsePath = browsePath.slice(0, i + 1))}
+						>{seg}</button>
+					{/each}
+					{/if}
+				</div>
+
+				<!-- Favorites toggle + Change folder -->
+				<div class="flex items-center gap-1 shrink-0">
+					<Button
+						variant="ghost"
+						size="icon"
+						class={`h-10 w-10 ${musicFavorites.shown ? 'text-yellow-400' : 'text-muted-foreground'}`}
+						onclick={() => {
+							musicFavorites.shown = !musicFavorites.shown;
+							clearBrowseSelection();
+						}}
+						aria-label={musicFavorites.shown ? 'Hide favorite tracks' : 'Show favorite tracks'}
+						title={musicFavorites.shown ? 'Hide favorite tracks' : 'Show favorite tracks'}
+					>
+						<Star class="w-5 h-5" fill={musicFavorites.shown ? 'currentColor' : 'none'} />
+					</Button>
+					<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openLocalSourceButton} aria-label="Local folder" title="Local folder">
+						<FolderOpen class="w-5 h-5" />
+					</Button>
+					<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openDriveSourceButton} disabled={isDriveAuthenticating} aria-label="Google Drive" title="Google Drive">
+						{#if isDriveAuthenticating}
+							<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+						{:else}
+							<Cloud class="w-5 h-5" />
+						{/if}
+					</Button>
+				</div>
 			</div>
 
-			<!-- Search filter -->
-			<div class="relative flex-1 min-w-0 mx-1">
+			<!-- Search filter — full-width row below the toolbar -->
+			<div class="relative w-full">
 				<Search class="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
 				<input
 					type="text"
@@ -3779,43 +3807,6 @@
 						<X class="w-3 h-3" />
 					</button>
 				{/if}
-			</div>
-
-			<!-- Favorites toggle + Change folder -->
-			<div class="flex items-center gap-1 shrink-0">
-				<Button
-					variant="ghost"
-					size="icon"
-					class="h-10 w-10"
-					onclick={() => openYoutubePanel()}
-					aria-label="YouTube"
-					title="Search YouTube"
-				>
-					<Youtube class="w-5 h-5 text-red-500" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					class={`h-10 w-10 ${showFavoriteTracks ? 'text-yellow-400' : 'text-muted-foreground'}`}
-					onclick={() => {
-						showFavoriteTracks = !showFavoriteTracks;
-						clearBrowseSelection();
-					}}
-					aria-label={showFavoriteTracks ? 'Hide favorite tracks' : 'Show favorite tracks'}
-					title={showFavoriteTracks ? 'Hide favorite tracks' : 'Show favorite tracks'}
-				>
-					<Star class="w-5 h-5" fill={showFavoriteTracks ? 'currentColor' : 'none'} />
-				</Button>
-				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openLocalSourceButton} aria-label="Local folder" title="Local folder">
-					<FolderOpen class="w-5 h-5" />
-				</Button>
-				<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openDriveSourceButton} disabled={isDriveAuthenticating} aria-label="Google Drive" title="Google Drive">
-					{#if isDriveAuthenticating}
-						<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-					{:else}
-						<Cloud class="w-5 h-5" />
-					{/if}
-				</Button>
 			</div>
 		</div>
 
@@ -3889,7 +3880,7 @@
 		<!-- Entry list -->
 		<div class="flex-1 overflow-y-auto min-h-0 browse-list-container">
 
-			{#if showFavoriteTracks}
+			{#if musicFavorites.shown}
 				{#if filteredFavoriteTracks.length === 0}
 					<div class="flex flex-col items-center justify-center h-40 gap-2 text-muted-foreground px-6 text-center">
 						<Star class="w-10 h-10 opacity-30" />

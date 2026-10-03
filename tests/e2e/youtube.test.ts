@@ -101,7 +101,7 @@ async function openPanel(page: Page) {
 
 async function search(page: Page, query: string) {
 	await page.getByPlaceholder('Search, or paste a link').fill(query);
-	await page.getByRole('button', { name: 'Search YouTube' }).click();
+	await page.getByPlaceholder('Search, or paste a link').press('Enter');
 	await expect(page.locator('button[aria-label^="Play "]').first()).toBeVisible({ timeout: 45_000 });
 }
 
@@ -140,12 +140,13 @@ test.describe('YouTube panel', () => {
 		await openPanel(page);
 
 		await expect(page.getByText('Audio only')).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Search YouTube' })).toBeVisible();
+		await expect(page.getByPlaceholder('Search, or paste a link')).toBeVisible();
 		await expect(page.getByText(/only works in the Android app build/)).toBeVisible();
 
-		// Both tabs exist; favorites starts empty.
-		await expect(page.getByRole('button', { name: /^Favorites/ })).toBeVisible();
-		await page.getByRole('button', { name: /^Favorites/ }).click();
+		// Favorites toggle works; favorites starts empty.
+		const favoritesToggle = page.getByRole('button', { name: 'Show YouTube favorites' });
+		await expect(favoritesToggle).toBeVisible();
+		await favoritesToggle.click();
 		await expect(page.getByText(/No favorite YouTube tracks yet/)).toBeVisible();
 	});
 
@@ -321,7 +322,7 @@ test.describe('YouTube panel', () => {
 		await page.getByRole('button', { name: 'Close YouTube' }).click();
 		await expect(page.getByRole('button', { name: 'Close YouTube' })).toHaveCount(0);
 		await page.getByRole('button', { name: /Play from YouTube/ }).click();
-		await page.getByRole('button', { name: /^Favorites/ }).click();
+		await page.getByRole('button', { name: 'Show YouTube favorites' }).click();
 		await expect(page.getByText(/No favorite YouTube tracks yet/)).toHaveCount(0);
 
 		expect(title.length).toBeGreaterThan(0);
@@ -331,7 +332,7 @@ test.describe('YouTube panel', () => {
 		await page.reload();
 		await waitForHydration(page);
 		await page.getByRole('button', { name: /Play from YouTube/ }).click();
-		await page.getByRole('button', { name: /^Favorites/ }).click();
+		await page.getByRole('button', { name: 'Show YouTube favorites' }).click();
 		await expect(page.getByText(title, { exact: false }).first()).toBeVisible();
 	});
 });

@@ -6,17 +6,11 @@ import { formatDuration, getNextTrackIndex, type YoutubeFavoriteTrack } from '$l
  * Kept free of Svelte and network access so the navigation rules can be unit
  * tested. The panel owns the audio element; this module only answers "which
  * index comes next".
- *
- * The queue reuses the music player's loop rules on purpose, so the shuffle and
- * repeat toggles in the music UI behave the same way here:
- *  - `isShuffle`  — global shuffle (musicSettings.isShuffle)
- *  - `isRepeat`   — repeat-one, handled by the caller restarting the track,
- *                   which is exactly how Mp3PlayerView's onEnded treats it
- *  - `queueLoop`  — the panel's own wrap toggle (musicSettings.youtubeQueueLoop),
- *                   matching the music selection-loop semantics
- */
-
-export interface YoutubeQueueItem {
+ * The queue reuses the music player's shuffle rules, and the caller handles
+ * repeat-one by restarting the track — exactly how Mp3PlayerView's onEnded
+ * treats it. Auto-advance stops at the end of the queue (queueLoop is only
+ * true for user-initiated skips), mirroring the mp3 view.
+ */export interface YoutubeQueueItem {
 	videoId: string;
 	title: string;
 	/** Channel name. Named `subtitle` to match MediaItem.subtitle. */

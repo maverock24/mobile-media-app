@@ -11,9 +11,9 @@
 	 * block — unmounting it would stop playback when the panel is closed.
 	 *
 	 * Loop behaviour reuses the music player's toggles:
-	 *  - shuffle  -> musicSettings.isShuffle
-	 *  - repeat-one -> musicSettings.isRepeat (handled in onEnded, as in Mp3PlayerView)
-	 *  - queue wrap -> musicSettings.youtubeQueueLoop
+	 *  - shuffle     -> musicSettings.isShuffle (shared with the music player)
+	 *  - repeat-one  -> musicSettings.isRepeat (handled in onEnded, as in Mp3PlayerView)
+	 * Auto-advance stops at the end of the queue, mirroring the mp3 view.
 	 *
 	 * EQ is not applied, and cannot be: Web Audio refuses to process cross-origin
 	 * media without CORS headers, and googlevideo sends none. Same reason radio
@@ -22,7 +22,6 @@
 	import { onDestroy, untrack } from 'svelte';
 	import { Capacitor } from '@capacitor/core';
 	import Button from '$lib/components/ui/Button.svelte';
-	import Input from '$lib/components/ui/Input.svelte';
 	import { formatClock, getYoutubeFavoriteKey, isYoutubeFavorite } from '$lib/models/music';
 	import { claimAudio, mediaEngine, markUserPaused, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
@@ -45,12 +44,17 @@
 		queueItemFromSearchResult,
 		type YoutubeQueueItem,
 	} from '$lib/youtube/queue';
-	import { ChevronLeft, Loader2, Pause, Play, Repeat, Search, Shuffle, Star, Youtube } from 'lucide-svelte';
+	import { musicFavorites } from '$lib/stores/musicView.svelte';
+	import { ChevronLeft, Loader2, Pause, Play, Search, Star, X, Youtube } from 'lucide-svelte';
 
 	const isNativeApp = Capacitor.isNativePlatform();
 
 	// ── Browser / list state ─────────────────────────────────────
-	let mode        = $state<'search' | 'favorites'>('search');
+	// Favorites mode is shared with the music view's star toggle
+	// (musicFavorites.shown) — the in-panel Search/Favorites tabs are gone, and
+	// the browse-header star in Mp3PlayerView decides whether this panel lists
+	// search results or favorites.
+	const mode = $derived<'search' | 'favorites'>(musicFavorites.shown ? 'favorites' : 'search');
 	let query       = $state('');
 	let searchResults = $state<YoutubeQueueItem[]>([]);
 	let isSearching = $state(false);
@@ -263,14 +267,14 @@
 	async function playRequestedVideo(videoId: string) {
 		const favoriteIndex = indexOfVideo(youtubeFavorites, videoId);
 		if (favoriteIndex >= 0) {
-			mode = 'favorites';
+			musicFavorites.shown = true;
 			playFromList(youtubeFavorites, favoriteIndex);
 			return;
 		}
 
 		const searchIndex = indexOfVideo(searchResults, videoId);
 		if (searchIndex >= 0) {
-			mode = 'search';
+			musicFavorites.shown = false;
 			playFromList(searchResults, searchIndex);
 			return;
 		}
@@ -324,7 +328,9 @@
 				currentIndex: fromIndex,
 				trackCount: queue.length,
 				isShuffle: musicSettings.isShuffle,
-				queueLoop: manual ? true : musicSettings.youtubeQueueLoop,
+				// Only user-initiated skips wrap; auto-advance stops at the end
+				// of the queue, mirroring the mp3 view.
+				queueLoop: manual,
 			});
 
 			if (next === null) {
@@ -449,9 +455,11 @@
 			return;
 		}
 
-			error = '';
+		error = '';
 		isSearching = true;
-		mode = 'search';
+		// Searching always lands in the search-results view; if favorites were
+		// showing, flip the shared star state off so results become visible.
+		musicFavorites.shown = false;
 		try {
 			// Only the search list is replaced here — the playback queue is left
 			// alone so next/prev keep working on whatever is currently playing.
@@ -529,60 +537,47 @@
 			<p class="text-xs text-muted-foreground">Audio only</p>
 		</div>
 		<button
-			class="w-10 h-10 flex items-center justify-center rounded-full transition-colors {musicSettings.isShuffle ? 'text-primary' : 'text-muted-foreground'} hover:bg-accent"
-			onclick={() => (musicSettings.isShuffle = !musicSettings.isShuffle)}
-			aria-label={musicSettings.isShuffle ? 'Disable shuffle' : 'Enable shuffle'}
-			title="Shuffle (shared with the music player)"
+			class="w-10 h-10 flex items-center justify-center rounded-full transition-colors {musicFavorites.shown ? 'text-yellow-400' : 'text-muted-foreground'} hover:bg-accent"
+			onclick={() => (musicFavorites.shown = !musicFavorites.shown)}
+			aria-label={musicFavorites.shown ? 'Show search' : 'Show YouTube favorites'}
+			title={musicFavorites.shown ? 'Show search' : 'Show YouTube favorites'}
 		>
-			<Shuffle class="w-5 h-5" />
-		</button>
-		<button
-			class="w-10 h-10 flex items-center justify-center rounded-full transition-colors {musicSettings.youtubeQueueLoop ? 'text-primary' : 'text-muted-foreground'} hover:bg-accent"
-			onclick={() => (musicSettings.youtubeQueueLoop = !musicSettings.youtubeQueueLoop)}
-			aria-label={musicSettings.youtubeQueueLoop ? 'Disable loop' : 'Enable loop'}
-			title="Loop the queue"
-		>
-			<Repeat class="w-5 h-5" />
+			<Star class="w-5 h-5" fill={musicFavorites.shown ? 'currentColor' : 'none'} />
 		</button>
 	</div>
 
-	<!-- Tabs -->
-	<div class="flex border-b shrink-0">
-		<button
-			class="flex-1 py-2.5 text-xs font-semibold transition-colors {mode === 'search' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground'}"
-			onclick={() => (mode = 'search')}
-		>Search</button>
-		<button
-			class="flex-1 py-2.5 text-xs font-semibold transition-colors {mode === 'favorites' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground'}"
-			onclick={() => (mode = 'favorites')}
-		>Favorites{youtubeFavorites.length > 0 ? ` (${youtubeFavorites.length})` : ''}</button>
-	</div>
-
-	<!-- Search input (search mode only) -->
-	{#if mode === 'search'}
-	<div class="px-3 py-3 border-b shrink-0 space-y-2">
-		<div class="flex gap-2">
-			<Input
-				bind:value={query}
+	<!-- Search / paste field — mirrors the library filter field on decks A/B
+	     (same spot directly below the header row, same full-width look), so the
+	     field users already know becomes the YouTube search field on this tab.
+	     Enter searches; a pasted link or bare ID plays directly. -->
+	<div class="px-3 py-3 border-b shrink-0">
+		<div class="relative w-full">
+			<Search class="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+			<input
+				type="text"
 				placeholder="Search, or paste a link"
-				class="h-9 flex-1"
+				bind:value={query}
 				onkeydown={onSearchKeydown}
+				class="w-full h-8 pl-7 pr-7 text-xs rounded-lg border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
 			/>
-			<Button size="icon" class="h-9 w-9 shrink-0" onclick={runSearch} disabled={isSearching} aria-label="Search YouTube">
-				{#if isSearching}
-					<Loader2 class="w-4 h-4 animate-spin" />
-				{:else}
-					<Search class="w-4 h-4" />
-				{/if}
-			</Button>
+			{#if isSearching}
+				<div class="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+			{:else if query}
+				<button
+					class="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+					onclick={() => (query = '')}
+					aria-label="Clear search"
+				>
+					<X class="w-3 h-3" />
+				</button>
+			{/if}
 		</div>
 		{#if !isNativeApp}
-			<p class="text-[11px] text-muted-foreground">
+			<p class="text-[11px] text-muted-foreground mt-1.5">
 				YouTube playback only works in the Android app build.
 			</p>
 		{/if}
 	</div>
-	{/if}
 
 	{#if error}
 		<p class="text-xs text-destructive px-3 py-2 shrink-0">{error}</p>
