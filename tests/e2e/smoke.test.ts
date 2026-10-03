@@ -45,7 +45,7 @@ test.describe('Smoke', () => {
 	test('app boots, hydrates, and defaults to the Music tab', async ({ page }) => {
 		await page.goto('/');
 		await waitForHydration(page);
-		await expect(page.getByRole('tablist')).toBeVisible();
+		await expect(page.getByRole('tablist', { name: 'Navigation' })).toBeVisible();
 		await expect(page.getByRole('tab', { name: 'Music', exact: true })).toBeVisible();
 		await expect(page.getByRole('tab', { name: 'Podcasts', exact: true })).toBeVisible();
 		await expect(page.getByRole('tab', { name: 'Weather', exact: true })).toBeVisible();
@@ -86,9 +86,10 @@ test.describe('Smoke', () => {
 		await expect(page.getByRole('button', { name: /Return to music player/ })).toBeVisible({ timeout: 10_000 });
 
 		// Loading a folder leaves you in the file browser, which renders no player
-		// toolbar at all. YouTube has to be reachable from here.
-		await expect(page.getByRole('button', { name: 'YouTube', exact: true })).toBeVisible();
-		await page.getByRole('button', { name: 'YouTube', exact: true }).click();
+		// toolbar at all. YouTube has to be reachable from here — via the
+		// A / B / YouTube sub-tabs at the top of the music view.
+		await expect(page.getByRole('tab', { name: 'YouTube', exact: true })).toBeVisible();
+		await page.getByRole('tab', { name: 'YouTube', exact: true }).click();
 		await expect(page.getByRole('button', { name: 'Close YouTube' })).toBeVisible();
 		await page.getByRole('button', { name: 'Close YouTube' }).click();
 		await expect(page.getByRole('button', { name: 'Close YouTube' })).toHaveCount(0);

@@ -257,7 +257,7 @@
 	<ToastContainer />
 
 	<!-- Bottom Tab Bar -->
-	<div class="border-t bg-background/95 backdrop-blur-sm safe-area-inset-bottom" role="tablist">
+	<div class="border-t bg-background/95 backdrop-blur-sm safe-area-inset-bottom" role="tablist" aria-label="Navigation">
 		<div class="flex">
 			{#each tabs as tab}
 				{@const Icon = tab.icon}
