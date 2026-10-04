@@ -88,12 +88,6 @@
 		return cloud.maxAlpha * Math.max(0, Math.min(1, t));
 	}
 
-	// Moon fades out every ~180 seconds and reappears after a longer dark gap
-	function getMoonAlpha(tSec: number): number {
-		const s = Math.sin(tSec / 180 * Math.PI * 2 + 0.8);
-		const t = (s + 0.3) / 1.3; // threshold at -0.3 → dark gap at bottom of cycle
-		return Math.max(0, Math.min(1, t));
-	}
 
 	function drawMoon(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, alpha = 1, haloAlpha = 1) {
 		if (alpha <= 0.005) return;
