@@ -48,3 +48,9 @@ static/releases/android/latest.json
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Codebase analyzer output (regenerable; findings are recorded in
+# docs/refactoring-plan.md instead)
+codedeck.html
+codedeck.json
+codedeck-analysis.json
