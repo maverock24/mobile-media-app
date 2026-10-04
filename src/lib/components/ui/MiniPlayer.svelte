@@ -150,10 +150,6 @@
 		dragProgress = x * 100;
 	}
 
-	function handleSeekInput(event: Event) {
-		const nextProgress = Number((event.target as HTMLInputElement).value);
-		seekTo(deckDuration > 0 ? (nextProgress / 100) * deckDuration : 0);
-	}
 
 	const canSeek = $derived(
 		mediaEngine.source === 'music' || mediaEngine.source === 'podcast' || mediaEngine.source === 'youtube'

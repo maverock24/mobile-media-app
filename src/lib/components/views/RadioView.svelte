@@ -90,13 +90,6 @@
 		currentStation = null;
 	}
 
-	function togglePlay() {
-		if (mediaEngine.isPlaying) {
-			pausePlayback();
-		} else {
-			resumePlayback();
-		}
-	}
 
 	function pausePlayback() {
 		if (!currentStation || !mediaEngine.isPlaying) return;

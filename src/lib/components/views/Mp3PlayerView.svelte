@@ -1661,22 +1661,7 @@
 		return null;
 	}
 
-	function isCurrentFolderFavorited(): boolean {
-		const entry = currentFolderAsFavorite();
-		if (!entry) return false;
-		return musicSettings.favoriteFolders.some(f => f.id === entry.id && f.source === entry.source);
-	}
 
-	function toggleCurrentFolderFavorite() {
-		const entry = currentFolderAsFavorite();
-		if (!entry) return;
-		const idx = musicSettings.favoriteFolders.findIndex(f => f.id === entry.id && f.source === entry.source);
-		if (idx >= 0) {
-			musicSettings.favoriteFolders = musicSettings.favoriteFolders.filter((_, i) => i !== idx);
-		} else {
-			musicSettings.favoriteFolders = [...musicSettings.favoriteFolders, entry];
-		}
-	}
 
 	function removeFavoriteFolder(id: string, source: string) {
 		musicSettings.favoriteFolders = musicSettings.favoriteFolders.filter(f => !(f.id === id && f.source === source));
@@ -1848,11 +1833,6 @@
 		}
 	}
 
-	function cancelDriveLoad() {
-		driveLoadAbort?.abort();
-		driveLoadAbort = null;
-		isDriveLoading = false;
-	}
 
 	async function connectGoogleDrive() {
 		await loadDriveLibrary(true);
@@ -1990,38 +1970,6 @@
 		return false;
 	}
 
-	async function signOutGoogleDrive() {
-		try {
-			await revokeGoogleDriveAccess(driveAccessToken);
-		} catch {
-			// Ignore revoke failures and clear local session state regardless.
-		}
-
-		clearPendingDriveFolderPickerIntent();
-		if (tracks.some((track) => track.source.source === 'drive')) {
-			audioEl?.pause();
-			revokeAll();
-			tracks = [];
-			currentTime = 0;
-			duration = 0;
-			isPlaying = false;
-		}
-
-		driveAccessToken = '';
-		driveTokenExpiresAt = 0;
-		driveUser = null;
-		driveError = '';
-		driveSearch = '';
-
-		if (musicSettings.librarySource === 'drive') {
-			allFiles = [];
-			browseEntries = [];
-			browsePath = [];
-			showQueue = false;
-			musicSettings.librarySource = 'device';
-			musicSettings.lastFolderName = '';
-		}
-	}
 
 	async function materializeStoredFile(
 		entry: StoredAudioFile,
@@ -2844,10 +2792,6 @@
 		void loadLocalFolderPicker(localPickerPath.join('/'));
 	}
 
-	function navigateLocalPickerUp() {
-		localPickerPath = localPickerPath.slice(0, -1);
-		void loadLocalFolderPicker(localPickerPath.join('/'));
-	}
 
 	async function selectLocalFolderAndDownload() {
 		if (!nativeTreeUri || isTransferring || isFileOpRunning) return;
@@ -2944,16 +2888,7 @@
 		}
 	}
 
-	function navigateDrivePickerInto(folder: GoogleDriveFolder) {
-		drivePickerPath = [...drivePickerPath, folder];
-		void loadDriveFolderPicker(folder.id);
-	}
 
-	function navigateDrivePickerUp() {
-		drivePickerPath = drivePickerPath.slice(0, -1);
-		const parent = drivePickerPath.length > 0 ? drivePickerPath[drivePickerPath.length - 1].id : 'root';
-		void loadDriveFolderPicker(parent);
-	}
 
 	async function selectDriveFolderAndUpload(folder: GoogleDriveFolder) {
 		if (isTransferring || isFileOpRunning) return;
@@ -3124,17 +3059,6 @@
 	// ─────────────────────────────────────────────────────────────
 	// Playback controls
 	// ─────────────────────────────────────────────────────────────
-	async function togglePlay() {
-		try {
-			if (isPlaying) {
-				// Deliberate pause: tell the engine, so the Android background recovery
-				// does not restart this track when the phone is later locked.
-				markUserPaused();
-				audioEl?.pause();
-			}
-			else void resumePlayback();
-		} catch { /* bridge failure — best-effort */ }
-	}
 
 	function pausePlayback() {
 		try {
@@ -3222,22 +3146,6 @@
 			const flag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
 			mediaEngine[flag] = false;
 			if (audioEl) { audioEl.src = ''; audioEl.load(); }
-		}
-	}
-
-	async function selectTrack(index: number) {
-		if (isChangingTrack) return;
-		isChangingTrack = true;
-		const oldIndex = musicSettings.lastTrackIndex;
-		try {
-			setCurrentTrack(index);
-			musicSettings.lastTrackTimestamp = 0;
-			currentTime = 0; duration = 0;
-			await startAudioAt(index);
-			// Release old URL only after new src is loaded to avoid streaming error
-			if (oldIndex !== index) releaseTrackUrl(oldIndex);
-		} finally {
-			isChangingTrack = false;
 		}
 	}
 
@@ -3429,18 +3337,6 @@
 		}
 	}
 
-	function handleSeekInput(e: Event) {
-		// Track drag position visually without touching audio (prevents timeupdate reset)
-		seekingValue = parseFloat((e.target as HTMLInputElement).value);
-	}
-	function handleSeekCommit(e: Event) {
-		// User released – now actually seek the audio
-		const pct = parseFloat((e.target as HTMLInputElement).value);
-		const newTime = (pct / 100) * duration;
-		seekingValue = null;
-		currentTime = newTime;
-		if (audioEl) audioEl.currentTime = newTime;
-	}
 	function handleSeekSeconds(seconds: number) {
 		seekingValue = null;
 		currentTime = seconds;

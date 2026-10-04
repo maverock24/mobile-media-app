@@ -964,14 +964,6 @@
 		if (audioEl) audioEl.currentTime = seconds;
 	}
 
-	function handleSeek(e: Event) {
-		const input = e.target as HTMLInputElement;
-		const newTime = (parseFloat(input.value) / 100) * duration;
-		currentTime = newTime;
-		if (audioEl) audioEl.currentTime = newTime;
-	}
-
-
 	// ── Persist position on pause / end; sync episode progress into the store ──
 	$effect(() => {
 		if (!audioEl) return;
