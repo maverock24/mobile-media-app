@@ -31,6 +31,12 @@ This file captures the repo's current implementation boundaries. If it ever disa
 
 ### Playback
 - `src/lib/stores/mediaEngine.svelte.ts` is the shared playback coordination layer.
+- ADR-0001 requires the music playback core to move into
+  `src/lib/audio/player.svelte.ts` (`createPlayer`, per deck). The module and its
+  unit tests landed in `af3f6e5` but no view calls it yet, so the bullets below
+  still describe the live code. PR 2 of `docs/refactoring-plan.md` wires it up;
+  after that the module owns the `<audio>` element for the music decks and this
+  section moves with it.
 - View components currently own their own `<audio>` elements.
 - Cross-source exclusivity currently depends on `claimAudio()` and `registerAudioSource()`.
 - Do not assume a shared `audioService` exists. Introducing one is an architectural refactor, not a routine maintenance change.
@@ -43,7 +49,7 @@ This file captures the repo's current implementation boundaries. If it ever disa
 ## Forbidden Patterns
 
 ### Audio Management
-- Do not add a second global playback abstraction beside `mediaEngine` unless the task explicitly requires a redesign.
+- Do not add a second global playback abstraction beside `mediaEngine` unless the task explicitly requires a redesign. ADR-0001 is such a redesign for the music decks, and `createPlayer` is per-deck rather than global, so it does not count as one. Nothing else may be added beside `mediaEngine`.
 - Do not introduce unmanaged `URL.createObjectURL()` usage; every object URL must have a cleanup path.
 - Do not swallow user-facing playback failures; surface them through `addToast()` when appropriate.
 

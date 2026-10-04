@@ -10,10 +10,12 @@ and Google Drive music libraries. The live code in `src/` is authoritative.
   speed; they share the global `mediaEngine` for MediaSession, the MiniPlayer,
   and audio exclusivity (`claimAudio`).
 - **player** — the playback core behind a deck: the queue, the audio element,
-  and the advance/preload/retry/loop behaviour. Planned as a deep module
-  (`src/lib/audio/player.svelte.ts`) with a small interface; today it is buried inside
-  `Mp3PlayerView.svelte`. A deck is a player instance + the view chrome that
-  binds to it.
+  and the advance/preload/retry/loop behaviour. The deep module decided in
+  ADR-0001 landed as `src/lib/audio/player.svelte.ts` (`createPlayer`, tested in
+  `tests/unit/models/player.test.ts`), but no view calls it yet, so the playback
+  core is still buried inside `Mp3PlayerView.svelte`. A deck is a player
+  instance + the view chrome that binds to it. `docs/refactoring-plan.md` tracks
+  the migration.
 - **mediaEngine** — the shared playback-core store: MediaSession glue, radio
   stream audio, per-deck state, audio exclusivity, wakelock, background resume.
 - **track / episode** — a playable item in a music queue (track) or a podcast
@@ -40,7 +42,7 @@ destination picker. Drive file management was removed (ADR-0002, revised).
 ## Navigation
 
 - Architecture map and conventions: `AGENTS.md`.
-- `src/lib/audio/` — audio modules (`equalizer.ts`, `fileResolver.ts`, planned
-  `player.ts`).
+- `src/lib/audio/` — audio modules (`equalizer.ts`, `fileResolver.ts`,
+  `player.svelte.ts`).
 - `src/lib/stores/` — rune stores (`mediaEngine`, `settings`, `library`, …).
 - `src/lib/components/views/` — feature screens.
