@@ -138,12 +138,13 @@ not lost; none of them blocks this PR.
 - The deck element is now a detached `new Audio()` with `preload = 'none'`
   instead of an in-DOM `<audio>`. Its behaviour on Android and iOS WebViews is
   unverified without a device, like the rest of the native path.
-- `next()` from a loaded, paused deck starts playback and resolves `true`, where
-  the audit expected `false`. `advanceTrack` has no `wasPlaying` guard, unlike
-  the `loadAndPlayAt` path `prev()` uses, so the audit's premise that a paused
-  skip never claims holds for `prev()` only. Either add the guard, so a paused
-  skip just loads the src, or correct the documented behaviour. The behaviour
-  today is pinned by a test in `tests/unit/models/player.test.ts`.
+- Fixed: `next()` from a loaded, paused deck started playback and resolved
+  `true`, where the audit expected `false`. `advanceTrack`'s main branch now
+  carries the same `wasPlaying` guard as its same-track branch and as the
+  `loadAndPlayAt` path `prev()` uses, so a paused skip changes track and loads
+  the src without starting playback, resolves `false`, and does not claim the
+  channel. Pinned by "next from a loaded, paused deck changes track without
+  beginning playback" in `tests/unit/models/player.test.ts`.
 
 ## Out of scope
 

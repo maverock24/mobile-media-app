@@ -431,6 +431,10 @@ export function createPlayer(opts: PlayerOptions): Player {
 				opts.applyEqualizer?.(el());
 				el().src = foundUrl;
 				preloadNextTrack(attemptIndex);
+				// A paused deck only loads the src, like the same-track branch above and
+				// the pre-migration view: no play() means no playback start, so this
+				// resolves false and the view does not claim the audio channel.
+				if (!wasPlaying) return false;
 				state.isBuffering = true;
 				safePlay(() => { state.isBuffering = false; state.isPlaying = false; });
 				return true;
@@ -609,7 +613,9 @@ export function createPlayer(opts: PlayerOptions): Player {
 			});
 		},
 		// Advance: resolves true only when it moved to a different track and began
-		// playback, so the view claims the channel on exactly that path.
+		// playback, so the view claims the channel on exactly that path. A paused
+		// deck changes track and loads the src without starting playback, so it
+		// resolves false too.
 		next() { return advanceTrack(state.isPlaying || state.isBuffering); },
 		// Step back: resolves false when it only rewound the current track in place
 		// (nothing to claim) or found nothing playable, true when it changed track
