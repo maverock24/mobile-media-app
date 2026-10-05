@@ -5,7 +5,6 @@
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
 	import Input from '$lib/components/ui/Input.svelte';
-	import { DirectoryReader } from '$lib/native/directory-reader';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
 	import { createPlayer, type PlayerTrack } from '$lib/audio/player.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
@@ -62,6 +61,11 @@
 		type BrowseNavigation,
 		type BrowseNavigationView
 	} from '$lib/browse/browseNavigation.svelte';
+	import {
+		createFileOps,
+		type FileOps,
+		type PendingFileOp
+	} from '$lib/files/fileOps';
 	import {
 		saveCachedLibrary,
 		loadDeviceCachedLibrary,
@@ -188,13 +192,9 @@
 	let trackLoadProgress = $state<{ loaded: number; total: number } | null>(null);
 
 	// ── File management ops (move / copy / delete) — ADR-0002 ──
-	type PendingFileOp = {
-		op: 'move' | 'copy' | 'delete';
-		name: string;
-		isDrive: boolean;
-		fileId: string | null;
-		source: StoredAudioFile | null; // set for file ops
-	};
+	// The ops live in the per-deck `createFileOps` factory (PR 3.8). The reactive
+	// op state stays here because the local-picker markup reads it; the module
+	// receives it through the injected `view` accessor below.
 	let pendingFileOp = $state<PendingFileOp | null>(null);
 	let isFileOpRunning = $state(false);
 	let transferPhase = $state<'downloading' | 'saving'>('downloading');
@@ -440,7 +440,7 @@
 		getNativeFileInputEl: () => nativeFileInputEl,
 		bumpBrowseVersion: () => { browseVersion += 1; },
 		hydrateTracksFromLibrary,
-		runPendingFileOp: (destination) => runPendingFileOp(destination),
+		runPendingFileOp: (destination) => fileOps.runPendingFileOp(destination),
 		refreshDriveLibrary: () => driveLibrary.refreshGoogleDrive(),
 	});
 
@@ -511,6 +511,28 @@
 			set fileSearchQuery(v) { fileSearchQuery = v; },
 			get selectedBrowseFileKeys() { return selectedBrowseFileKeys; },
 			set selectedBrowseFileKeys(v) { selectedBrowseFileKeys = v; },
+		},
+	});
+
+	// ── File ops: the logic lives in the per-deck `createFileOps` factory (PR
+	//    3.8). It is a rune-free `.ts`, so the deck keeps `pendingFileOp`,
+	//    `isFileOpRunning` and `showLocalFolderPicker` reactive and passes an
+	//    accessor; the module reads the device library's SAF tree URI and picks
+	//    the browse navigation's reload. `deviceLibrary` above closes over this
+	//    instance for its `runPendingFileOp` callback, which is only invoked at
+	//    runtime. ──
+	const fileOps: FileOps = createFileOps({
+		deviceLibrary,
+		browseNavigation,
+		isNativeApp,
+		view: {
+			get pendingFileOp() { return pendingFileOp; },
+			set pendingFileOp(v) { pendingFileOp = v; },
+			get isFileOpRunning() { return isFileOpRunning; },
+			set isFileOpRunning(v) { isFileOpRunning = v; },
+			get showLocalFolderPicker() { return showLocalFolderPicker; },
+			set showLocalFolderPicker(v) { showLocalFolderPicker = v; },
+			get browsePath() { return browsePath; },
 		},
 	});
 
@@ -1399,86 +1421,6 @@
 		}
 	}
 
-	// ── File management handlers (T6) — ADR-0002 ─────────────────────────────
-	type OpTarget = { name: string; isDrive: boolean; fileId: string | null; source: StoredAudioFile | null };
-
-	function openDestinationForOp(op: 'move' | 'copy', target: OpTarget) {
-		pendingFileOp = { op, name: target.name, isDrive: target.isDrive, fileId: target.fileId, source: target.source };
-		void openLocalDestinationPicker();
-	}
-
-	async function openLocalDestinationPicker() {
-		if (!isNativeApp) {
-			addToast({ message: 'Local destination requires the Android app.', type: 'warning' });
-			return;
-		}
-		if (!deviceLibrary.nativeTreeUri) {
-			await deviceLibrary.openFolder();
-		}
-		if (!deviceLibrary.nativeTreeUri) { addToast({ message: 'No local folder selected.', type: 'warning' }); return; }
-		showLocalFolderPicker = true;
-		await deviceLibrary.loadLocalFolderPicker('');
-	}
-
-	function confirmAndDelete(target: OpTarget) {
-		pendingFileOp = { op: 'delete', name: target.name, isDrive: target.isDrive, fileId: target.fileId, source: target.source };
-		addToast({
-			message: `Delete ${target.name}?`,
-			type: 'warning',
-			autoDismissMs: 0,
-			action: { label: 'Delete', handler: () => { void runPendingFileOp(null); } },
-		});
-	}
-
-	async function runPendingFileOp(destination: { localPath?: string } | null) {
-		const op = pendingFileOp;
-		if (!op || isFileOpRunning) return;
-		isFileOpRunning = true;
-		try {
-			if (op.op === 'delete') {
-				await deleteFileOp(op);
-			} else if (destination) {
-				await moveOrCopyFileOp(op, destination);
-			}
-			// Refresh the current folder so the list reflects the change.
-			await reloadCurrentBrowse();
-		} catch (e) {
-			addToast({ message: `${op.op === 'delete' ? 'Delete' : op.op === 'move' ? 'Move' : 'Copy'} failed.`, type: 'error' });
-		} finally {
-			isFileOpRunning = false;
-			pendingFileOp = null;
-		}
-	}
-
-	async function deleteFileOp(op: PendingFileOp) {
-		if (!deviceLibrary.nativeTreeUri) throw new Error('no tree');
-		await DirectoryReader.deleteEntry({ treeUri: deviceLibrary.nativeTreeUri, path: '', name: op.name });
-		addToast({ message: `Deleted "${op.name}".`, type: 'info' });
-	}
-
-	async function moveOrCopyFileOp(op: PendingFileOp, destination: { localPath?: string }) {
-		if (!deviceLibrary.nativeTreeUri) throw new Error('no tree');
-		const destPath = destination.localPath ?? '';
-		if (op.op === 'copy') {
-			await DirectoryReader.copyEntry({ srcTreeUri: deviceLibrary.nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: deviceLibrary.nativeTreeUri, destPath, destName: op.name });
-		} else {
-			await DirectoryReader.moveEntry({ srcTreeUri: deviceLibrary.nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: deviceLibrary.nativeTreeUri, destPath, destName: op.name });
-		}
-		addToast({ message: `${op.op === 'copy' ? 'Copied' : 'Moved'} "${op.name}".`, type: 'info' });
-	}
-
-	function handleMoveEntry(target: OpTarget) { openDestinationForOp('move', target); }
-	function handleCopyEntry(target: OpTarget) { openDestinationForOp('copy', target); }
-	function handleDeleteEntry(target: OpTarget) { confirmAndDelete(target); }
-	/** Folder ops operate on virtual path-derived folders — follow-up ticket. */
-	function folderOpNotice(op: string) {
-		addToast({ message: `${op} on folders is not wired yet.`, type: 'info' });
-	}
-
-	async function reloadCurrentBrowse() {
-		void browseNavigation.loadBrowseEntries(browsePath, musicSettings.librarySource === 'drive' ? 'drive' : undefined);
-	}
-
 	// ─────────────────────────────────────────────────────────────
 	// Playback controls
 	// ─────────────────────────────────────────────────────────────
@@ -2117,7 +2059,7 @@
 								size="icon"
 								class="shrink-0"
 								title="Move"
-								onclick={(e) => { e.stopPropagation(); folderOpNotice('Move'); }}
+								onclick={(e) => { e.stopPropagation(); fileOps.folderOpNotice('Move'); }}
 							>
 								<FolderInput class="w-5 h-5" />
 							</Button>
@@ -2126,7 +2068,7 @@
 								size="icon"
 								class="shrink-0"
 								title="Copy"
-								onclick={(e) => { e.stopPropagation(); folderOpNotice('Copy'); }}
+								onclick={(e) => { e.stopPropagation(); fileOps.folderOpNotice('Copy'); }}
 							>
 								<Copy class="w-5 h-5" />
 							</Button>
@@ -2135,7 +2077,7 @@
 								size="icon"
 								class="shrink-0"
 								title="Delete"
-								onclick={(e) => { e.stopPropagation(); folderOpNotice('Delete'); }}
+								onclick={(e) => { e.stopPropagation(); fileOps.folderOpNotice('Delete'); }}
 							>
 								<Trash2 class="w-5 h-5" />
 							</Button>
@@ -2226,7 +2168,7 @@
 								size="icon"
 								class="shrink-0"
 								title="Move"
-								onclick={(e) => { e.stopPropagation(); handleMoveEntry({ name: entry.file.name, isDrive, fileId: isDrive ? ((entry.file as any).fileId ?? null) : null, source: entry.file }); }}
+								onclick={(e) => { e.stopPropagation(); fileOps.handleMoveEntry({ name: entry.file.name, isDrive, fileId: isDrive ? ((entry.file as any).fileId ?? null) : null, source: entry.file }); }}
 							>
 								<FolderInput class="w-5 h-5" />
 							</Button>
@@ -2235,7 +2177,7 @@
 								size="icon"
 								class="shrink-0"
 								title="Copy"
-								onclick={(e) => { e.stopPropagation(); handleCopyEntry({ name: entry.file.name, isDrive, fileId: isDrive ? ((entry.file as any).fileId ?? null) : null, source: entry.file }); }}
+								onclick={(e) => { e.stopPropagation(); fileOps.handleCopyEntry({ name: entry.file.name, isDrive, fileId: isDrive ? ((entry.file as any).fileId ?? null) : null, source: entry.file }); }}
 							>
 								<Copy class="w-5 h-5" />
 							</Button>
@@ -2244,7 +2186,7 @@
 								size="icon"
 								class="shrink-0"
 								title="Delete"
-								onclick={(e) => { e.stopPropagation(); handleDeleteEntry({ name: entry.file.name, isDrive, fileId: isDrive ? ((entry.file as any).fileId ?? null) : null, source: entry.file }); }}
+								onclick={(e) => { e.stopPropagation(); fileOps.handleDeleteEntry({ name: entry.file.name, isDrive, fileId: isDrive ? ((entry.file as any).fileId ?? null) : null, source: entry.file }); }}
 							>
 								<Trash2 class="w-5 h-5" />
 							</Button>
