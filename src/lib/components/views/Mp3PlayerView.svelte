@@ -9,7 +9,7 @@
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
 	import { createPlayer, type PlayerTrack } from '$lib/audio/player.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
-	import { bytesFromBase64, arrayBufferFromBytes, blobFromNativePath } from '$lib/audio/fileResolver';
+	import { bytesFromBase64, arrayBufferFromBytes } from '$lib/audio/fileResolver';
 	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
 	import type { MediaItem } from '$lib/models/media';
 	import {
@@ -30,37 +30,32 @@
 		sortFiles as sortStoredFiles,
 		createStoredAudioFile,
 		createStoredNativeAudioFile,
-		createStoredDriveAudioFile,
 	} from '$lib/models/music';
 	import {
 		idbGet, idbDelete,
 		saveHandleToIDB, loadHandleFromIDB,
 		deleteCachedLibrary,
-		saveDriveCache, loadDriveCache, bustDriveCache,
 	} from '$lib/utils/idb';
 	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
 	import { marqueeTitle } from '$lib/actions/marqueeTitle';
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
 		downloadGoogleDriveFile,
-		fetchGoogleDriveUser,
 		getGoogleDriveClientId,
 		isGoogleDriveConfigured,
-		listGoogleDriveFolders,
-		streamGoogleDriveMp3Files,
-		revokeGoogleDriveAccess,
-		uploadGoogleDriveFile,
-		type GoogleDriveFile,
 		type GoogleDriveFolder
 	} from '$lib/google-drive';
-	import { formatGoogleDriveAuthError } from '$lib/google-drive-auth-error';
 	import { createDriveSession } from '$lib/drive/driveSession.svelte';
 	import {
 		createFolderPicker,
 		hasPendingDriveFolderPickerIntent,
-		markDriveFolderPickerPending,
 		clearPendingDriveFolderPickerIntent
 	} from '$lib/drive/folderPicker.svelte';
+	import {
+		createDriveLibrary,
+		type DriveLibraryBusy,
+		type DriveLibraryView
+	} from '$lib/drive/driveLibrary';
 	import {
 		LAST_LIBRARY_CACHE_KEY,
 		getDeviceLibraryCacheKey,
@@ -185,8 +180,10 @@
 	// created here so two mounted decks never share a token.
 	const driveSession = createDriveSession({ addToast, clientId: googleDriveClientId });
 	let driveSearch      = $state('');
-	let isDriveAuthenticating = $state(false);
-	let isDriveLoading   = $state(false);
+	// Per-deck Drive busy flags and abort controller. `driveLibrary.ts` is a
+	// rune-free module, so the deck allocates the reactive bag and the module owns
+	// every transition.
+	const driveBusy = $state<DriveLibraryBusy>({ isLoading: false, isAuthenticating: false, abort: null });
 
 	// ── Transfer state (upload to Drive / download from Drive) ──
 	let showDriveFolderPicker = $state(false);
@@ -223,7 +220,6 @@
 	let localPickerPath = $state<string[]>([]);
 	let localPickerEntries = $state<Array<NativeDirectoryFolder | NativeDirectoryFile>>([]);
 	let localPickerLoading = $state(false);
-	let driveLoadAbort   = $state<AbortController | null>(null);
 	let switchingToFavId = $state<string | null>(null); // fav id currently loading
 	let browseLongPressTimer: ReturnType<typeof setTimeout> | null = null;
 	let longPressHandledFileKey = $state<string | null>(null);
@@ -379,8 +375,8 @@
 	const folderPicker = createFolderPicker({
 		driveSession,
 		onRestoreBusyFlagsReset: () => {
-			isDriveAuthenticating = false;
-			isDriveLoading = false;
+			driveBusy.isAuthenticating = false;
+			driveBusy.isLoading = false;
 		},
 		confirmDriveFolderSelection
 	});
@@ -415,6 +411,57 @@
 		// The MiniPlayer toggles the loop without touching the queue, so the module
 		// reads the live flag for advance/repeat-one decisions.
 		isSelectionLoop: () => mediaEngine.musicSelectionLoopActive,
+	});
+
+	// ── Drive library: the logic lives in the per-deck `createDriveLibrary`
+	//    factory (PR 3.5). The module is a rune-free `.ts`, so this view allocates
+	//    the reactive `driveBusy` bag and passes an accessor for every piece of
+	//    view state the module reads or writes. ──
+	const driveLibraryView: DriveLibraryView = {
+		get libraryScanPromise() { return libraryScanPromise; },
+		set libraryScanPromise(v) { libraryScanPromise = v; },
+		get rootDirHandle() { return rootDirHandle; },
+		set rootDirHandle(v) { rootDirHandle = v; },
+		get nativeTreeUri() { return nativeTreeUri; },
+		set nativeTreeUri(v) { nativeTreeUri = v; },
+		get pendingHandle() { return pendingHandle; },
+		set pendingHandle(v) { pendingHandle = v; },
+		get browsePath() { return browsePath; },
+		set browsePath(v) { browsePath = v; },
+		get showQueue() { return showQueue; },
+		set showQueue(v) { showQueue = v; },
+		get showPanel() { return showPanel; },
+		set showPanel(v) { showPanel = v; },
+		get allFiles() { return allFiles; },
+		set allFiles(v) { allFiles = v; },
+		get switchingToFavId() { return switchingToFavId; },
+		set switchingToFavId(v) { switchingToFavId = v; },
+		get drivePickerLoading() { return drivePickerLoading; },
+		set drivePickerLoading(v) { drivePickerLoading = v; },
+		get drivePickerFolders() { return drivePickerFolders; },
+		set drivePickerFolders(v) { drivePickerFolders = v; },
+		get showDriveFolderPicker() { return showDriveFolderPicker; },
+		set showDriveFolderPicker(v) { showDriveFolderPicker = v; },
+		get transferFile() { return transferFile; },
+		set transferFile(v) { transferFile = v; },
+		get transferDirection() { return transferDirection; },
+		set transferDirection(v) { transferDirection = v; },
+		get isTransferring() { return isTransferring; },
+		set isTransferring(v) { isTransferring = v; },
+		get isFileOpRunning() { return isFileOpRunning; },
+		set isFileOpRunning(v) { isFileOpRunning = v; },
+	};
+
+	const driveLibrary = createDriveLibrary({
+		driveSession,
+		folderPicker,
+		busy: driveBusy,
+		view: driveLibraryView,
+		clearPlayer: () => player.clear(),
+		bumpBrowseVersion: () => { browseVersion += 1; },
+		activateDeviceLibrary,
+		confirmDriveFolderSelection,
+		hydrateTracksFromLibrary,
 	});
 
 	// ── derived ──
@@ -1043,81 +1090,12 @@
 	}
 
 	// ── Per-track resume helpers ──────────────────────────────────
-	const formatDriveAuthError = formatGoogleDriveAuthError;
 
 	function activateDeviceLibrary(folderName: string) {
 		musicSettings.librarySource = 'device';
 		musicSettings.lastFolderName = folderName;
 		deckFolderLabel = folderName;
 		driveSearch = '';
-	}
-
-	function activateDriveLibrary() {
-		musicSettings.librarySource = 'drive';
-		musicSettings.nativeTreeUri = '';
-		musicSettings.lastFolderName = 'Google Drive';
-		libraryScanPromise = null;
-		rootDirHandle = null;
-		nativeTreeUri = null;
-		pendingHandle = null;
-		browsePath = [];
-		showQueue = true;
-		showPanel = 'none';
-		browseVersion += 1;
-	}
-
-	async function loadDriveLibrary(interactive: boolean) {
-		if (!googleDriveConfigured) {
-			driveSession.error = 'Google Drive is not configured. Add PUBLIC_GOOGLE_CLIENT_ID to enable sign-in.';
-			clearPendingDriveFolderPickerIntent();
-			return;
-		}
-
-		if (interactive) {
-			markDriveFolderPickerPending();
-			folderPicker.schedulePendingDriveFolderPickerRestore();
-		}
-
-		isDriveAuthenticating = interactive;
-		isDriveLoading = true;
-
-		try {
-			const token = await driveSession.ensureDriveAccessToken(interactive);
-			if (!token) {
-				clearPendingDriveFolderPickerIntent();
-				return;
-			}
-			driveSession.error = '';
-
-			void fetchGoogleDriveUser(token)
-				.then((user) => {
-					driveSession.user = user;
-				})
-				.catch(() => {
-					// Folder selection should still work even if the user profile request fails.
-				});
-
-			// Show folder picker before loading files
-			folderPicker.folderPickerToken = token;
-			folderPicker.folderPickerStack = [];
-			isDriveLoading = false;
-			isDriveAuthenticating = false;
-
-			// Reuse the saved/default Drive folder when one exists — don't re-ask
-			// which folder to load. Only the very first connection (no folder chosen
-			// yet) opens the picker; "change folder" lives in Settings.
-			if (musicSettings.driveFolderId || musicSettings.driveFolderName) {
-				clearPendingDriveFolderPickerIntent();
-				await confirmDriveFolderSelection(musicSettings.driveFolderId || undefined, musicSettings.driveFolderName || undefined);
-			} else {
-				await folderPicker.openFolderPicker();
-			}
-		} catch (error) {
-			driveSession.error = formatDriveAuthError(error);
-		} finally {
-			isDriveAuthenticating = false;
-			isDriveLoading = false;
-		}
 	}
 
 	async function confirmDriveFolderSelection(folderId?: string, folderName?: string) {
@@ -1133,51 +1111,13 @@
 		libraryScanPromise = null;
 		const token = folderPicker.folderPickerToken;
 		folderPicker.folderPickerToken = '';
-		await finishDriveLoad(token, folderId);
+		await driveLibrary.finishDriveLoad(token, folderId);
 	}
 
 	// ── Folder favorites ──────────────────────────────────────────
-	async function switchToFavorite(fav: (typeof musicSettings.favoriteFolders)[0]) {
-		musicFavorites.shown = false;
-		switchingToFavId = fav.id;
-		try {
-		if (fav.source === 'drive') {
-			const folderId = fav.id === '_all' ? undefined : fav.id;
-			musicSettings.librarySource = 'drive';
-			musicSettings.driveFolderId = folderId ?? '';
-			musicSettings.driveFolderName = folderId ? fav.name : '';
-			const token = await driveSession.ensureDriveAccessToken(true);
-			if (!token) { switchingToFavId = null; return; }
-			if (!driveSession.user) {
-				try { driveSession.user = await fetchGoogleDriveUser(token); } catch { /* ignore */ }
-			}
-			await finishDriveLoad(token, folderId);
-		} else if (fav.source === 'device' && fav.treeUri) {
-			rootDirHandle = null;
-			nativeTreeUri = fav.treeUri;
-			musicSettings.nativeTreeUri = fav.treeUri;
-			pendingHandle = null;
-			libraryScanPromise = null;
-			allFiles = [];
-			activateDeviceLibrary(fav.name);
-			browsePath = [];
-			browseVersion++;
-			showQueue = true;
-			const cachedLibrary = await loadDeviceCachedLibrary(fav.treeUri, fav.name);
-			if (cachedLibrary && cachedLibrary.files.length > 0) {
-				allFiles = restoreStoredFilesFromCache(cachedLibrary);
-				hydrateTracksFromLibrary(allFiles);
-				browseVersion++;
-			}
-		}
-		} finally {
-			switchingToFavId = null;
-		}
-	}
-
 	async function rescanCurrentLibraryIndex() {
 		if (musicSettings.librarySource === 'drive') {
-			await refreshGoogleDrive();
+			await driveLibrary.refreshGoogleDrive();
 			return;
 		}
 
@@ -1190,142 +1130,6 @@
 
 		if (nativeTreeUri || rootDirHandle) {
 			startLibraryScan(folderName, { resetExistingFiles: true });
-		}
-	}
-
-	async function finishDriveLoad(token: string, folderId?: string, forceRefresh = false) {
-		// Cancel any in-progress load
-		driveLoadAbort?.abort();
-		const ctrl = new AbortController();
-		driveLoadAbort = ctrl;
-
-		isDriveLoading = true;
-		driveSession.error = '';
-
-		const cacheKey = folderId ?? '_all';
-
-		try {
-			if (!forceRefresh) {
-				const cached = await loadDriveCache(cacheKey);
-				if (cached && !ctrl.signal.aborted) {
-					// Instant restore from IDB — use cached file list immediately
-					player.clear();
-					allFiles = cached.map(createStoredDriveAudioFile);
-					activateDriveLibrary();
-					isDriveLoading = false;
-
-					// Background refresh — update silently without blocking UI
-					void (async () => {
-						const freshFiles: GoogleDriveFile[] = [];
-						try {
-							for await (const batch of streamGoogleDriveMp3Files(token, { folderId, signal: ctrl.signal })) {
-								if (ctrl.signal.aborted) return;
-								freshFiles.push(...batch.files);
-							}
-							if (!ctrl.signal.aborted) {
-								allFiles = freshFiles.map(createStoredDriveAudioFile);
-								browseVersion += 1;
-								await saveDriveCache(cacheKey, freshFiles);
-							}
-						} catch { /* ignore background refresh errors */ }
-					})();
-					return;
-				}
-			}
-
-			// Fresh scan — stop playback then stream files progressively into the UI
-			player.clear();
-			allFiles = [];
-
-			const collectedFiles: GoogleDriveFile[] = [];
-			let libraryActivated = false;
-
-			for await (const batch of streamGoogleDriveMp3Files(token, { folderId, signal: ctrl.signal })) {
-				if (ctrl.signal.aborted) break;
-				collectedFiles.push(...batch.files);
-				// Append batch to the reactive array as a single assignment (not one-at-a-time)
-				const newMapped = batch.files.map(createStoredDriveAudioFile);
-				allFiles = [...allFiles, ...newMapped];
-				browseVersion += 1; // trigger browse view to refresh with new files
-
-				// Activate the library UI as soon as the first files arrive
-				if (!libraryActivated && collectedFiles.length > 0) {
-					activateDriveLibrary();
-					libraryActivated = true;
-				}
-			}
-
-			if (!ctrl.signal.aborted) {
-				if (!libraryActivated) activateDriveLibrary();
-				await saveDriveCache(cacheKey, collectedFiles);
-			}
-		} catch (error) {
-			if (!ctrl.signal.aborted) {
-				driveSession.error = formatDriveAuthError(error);
-			}
-		} finally {
-			if (driveLoadAbort === ctrl) {
-				isDriveLoading = false;
-				driveLoadAbort = null;
-			}
-		}
-	}
-
-
-	async function connectGoogleDrive() {
-		await loadDriveLibrary(true);
-	}
-
-	async function refreshGoogleDrive() {
-		const token = await driveSession.ensureDriveAccessToken(true);
-		if (!token) return;
-		const cacheKey = musicSettings.driveFolderId || '_all';
-		await bustDriveCache(cacheKey);
-		await finishDriveLoad(token, musicSettings.driveFolderId || undefined, true);
-	}
-
-	async function changeDriveFolder() {
-		markDriveFolderPickerPending();
-		const token = await driveSession.ensureDriveAccessToken(false);
-		if (!token) { await loadDriveLibrary(true); return; }
-		folderPicker.folderPickerToken = token;
-		await folderPicker.openFolderPicker();
-	}
-
-	// Drive source: load the last-chosen Drive folder (driveFolderId/Name) when one
-	// is saved; otherwise (first ever connect, or nothing chosen yet) sign in and
-	// open the folder picker. "Change folder" now lives in Settings.
-	async function openDriveSourceButton() {
-		if (!googleDriveConfigured) return;
-
-		// Not signed in this session yet → full connect flow (may show native consent).
-		if (!driveSession.user) {
-			await loadDriveLibrary(true);
-			return;
-		}
-
-		const token = await driveSession.ensureDriveAccessToken(false);
-		if (!token) {
-			// Silent refresh failed (expired/revoked) → run the interactive connect flow.
-			await loadDriveLibrary(true);
-			return;
-		}
-
-		driveSession.accessToken = token;
-		driveSession.error = '';
-
-		if (musicSettings.driveFolderId || musicSettings.driveFolderName) {
-			// Reuse the saved/default Drive folder without re-asking which folder.
-			folderPicker.folderPickerToken = token;
-			await confirmDriveFolderSelection(musicSettings.driveFolderId || undefined, musicSettings.driveFolderName || undefined);
-		} else {
-			// No folder chosen yet — ask once.
-			folderPicker.folderPickerToken = token;
-			folderPicker.folderPickerStack = [];
-			folderPicker.folderPickerFolders = [];
-			folderPicker.folderPickerError = '';
-			folderPicker.showFolderPicker = true;
-			await folderPicker.loadFolderPickerLevel();
 		}
 	}
 
@@ -1406,39 +1210,6 @@
 			// Fall through — the caller will show the plain folder chooser.
 		}
 		return false;
-	}
-
-
-	async function materializeStoredFile(
-		entry: StoredAudioFile,
-		interactiveAuth = false,
-		onProgress?: (loaded: number, total: number) => void
-	): Promise<File> {
-		if (entry.source === 'web') {
-			return entry.file;
-		}
-
-		if (entry.source === 'drive') {
-			const accessToken = await driveSession.ensureDriveAccessToken(interactiveAuth);
-			if (!accessToken) {
-				throw new Error('Your Google Drive session has expired. Sign in again to continue playback.');
-			}
-
-			return downloadGoogleDriveFile({
-				accessToken,
-				fileId: entry.fileId,
-				fileName: entry.name,
-				mimeType: entry.mimeType,
-				modifiedAt: entry.modifiedAt,
-				onProgress,
-			});
-		}
-
-		const blob = await blobFromNativePath(entry.path, entry.mimeType);
-		return new File([blob], entry.name, {
-			type: entry.mimeType ?? blob.type ?? 'audio/mpeg',
-			lastModified: entry.modifiedAt ?? Date.now(),
-		});
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -1562,7 +1333,7 @@
 		}
 
 		try {
-			const file = await materializeStoredFile(
+			const file = await driveLibrary.materializeStoredFile(
 				source,
 				interactiveAuth,
 				isForeground ? (loaded, total) => { trackLoadProgress = { loaded, total }; } : undefined
@@ -2024,18 +1795,6 @@
 
 	// ── Google Drive ↔ Local file transfer ─────────────────────
 
-	async function openDriveUploadFolderPicker(file: StoredAudioFile) {
-		const token = await driveSession.ensureDriveAccessToken(true);
-		if (!token) {
-			addToast({ message: 'Connect to Google Drive first.', type: 'warning' });
-			return;
-		}
-		transferFile = file;
-		transferDirection = 'upload';
-		showDriveFolderPicker = true;
-		await loadDriveFolderPicker('root');
-	}
-
 	async function openLocalDownloadFolderPicker(file: StoredAudioFile) {
 		transferFile = file;
 		transferDirection = 'download';
@@ -2158,53 +1917,6 @@
 			transferFile = null;
 			transferProgress = null;
 			transferPhase = 'downloading';
-		}
-	}
-
-	async function loadDriveFolderPicker(parentId: string) {
-		drivePickerLoading = true;
-		try {
-			const result = await listGoogleDriveFolders(driveSession.accessToken, parentId);
-			drivePickerFolders = result;
-		} catch (e) {
-			addToast({ message: 'Failed to list Drive folders.', type: 'error' });
-		} finally {
-			drivePickerLoading = false;
-		}
-	}
-
-
-
-	async function selectDriveFolderAndUpload(folder: GoogleDriveFolder) {
-		if (isTransferring || isFileOpRunning) return;
-		if (!transferFile) return;
-		const token = await driveSession.ensureDriveAccessToken(true);
-		if (!token) {
-			addToast({ message: 'Drive session expired. Please reconnect.', type: 'warning' });
-			return;
-		}
-		isTransferring = true;
-		showDriveFolderPicker = false;
-		try {
-			const file = await materializeStoredFile(transferFile, true);
-			const blob = new Blob([await file.arrayBuffer()], { type: file.type || 'audio/mpeg' });
-			await uploadGoogleDriveFile({
-				accessToken: token,
-				parentFolderId: folder.id,
-				fileName: transferFile.name,
-				blob,
-			});
-			addToast({ message: `Uploaded "${transferFile.name}" to Drive.`, type: 'info' });
-		} catch (e: any) {
-			const msg = e?.message || '';
-			if (/401|unauthorised|token|auth/i.test(msg)) {
-				addToast({ message: 'Google Drive session expired. Reconnect in Settings.', type: 'warning', autoDismissMs: 5000 });
-			} else {
-				addToast({ message: 'Upload failed.', type: 'error' });
-			}
-		} finally {
-			isTransferring = false;
-			transferFile = null;
 		}
 	}
 
@@ -2522,8 +2234,8 @@
 			// The WebView is foreground again after a native Google consent screen.
 			// Clear transient busy flags up front so a lost native call can never leave
 			// the Connect button disabled and "do nothing" on the next tap.
-			isDriveAuthenticating = false;
-			isDriveLoading = false;
+			driveBusy.isAuthenticating = false;
+			driveBusy.isLoading = false;
 			void folderPicker.restorePendingDriveFolderPickerIfNeeded();
 		};
 
@@ -2553,13 +2265,13 @@
 		untrack(() => {
 		if (musicSettings.librarySource === 'drive') {
 			// Skip if a Drive load is already running (e.g. triggered by folder picker confirmation)
-			if (isDriveLoading) return;
+			if (driveBusy.isLoading) return;
 			// Silently restore Drive library using the persisted session token (survives refresh)
 			void (async () => {
 				try {
 					const token = await driveSession.ensureDriveAccessToken(false);
 					if (token) {
-						await finishDriveLoad(token, musicSettings.driveFolderId || undefined);
+						await driveLibrary.finishDriveLoad(token, musicSettings.driveFolderId || undefined);
 					}
 				} catch {
 					// Silent restore failed — user will see the Connect button
@@ -2689,11 +2401,11 @@
 			{/if}
 			<Button
 				variant="outline"
-				onclick={connectGoogleDrive}
+				onclick={driveLibrary.connectGoogleDrive}
 				class="gap-2 px-6 h-12 text-base w-full"
-				disabled={!googleDriveConfigured || isDriveLoading || isDriveAuthenticating}
+				disabled={!googleDriveConfigured || driveBusy.isLoading || driveBusy.isAuthenticating}
 			>
-				{#if isDriveLoading || isDriveAuthenticating}
+				{#if driveBusy.isLoading || driveBusy.isAuthenticating}
 					<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
 					Connecting…
 				{:else}
@@ -2786,8 +2498,8 @@
 					<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openLocalSourceButton} aria-label="Local folder" title="Local folder">
 						<FolderOpen class="w-5 h-5" />
 					</Button>
-					<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openDriveSourceButton} disabled={isDriveAuthenticating} aria-label="Google Drive" title="Google Drive">
-						{#if isDriveAuthenticating}
+					<Button variant="ghost" size="icon" class="h-10 w-10" onclick={driveLibrary.openDriveSourceButton} disabled={driveBusy.isAuthenticating} aria-label="Google Drive" title="Google Drive">
+						{#if driveBusy.isAuthenticating}
 							<div class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
 						{:else}
 							<Cloud class="w-5 h-5" />
@@ -2863,7 +2575,7 @@
 						? (musicSettings.librarySource === 'drive' && (fav.id === '_all' ? !musicSettings.driveFolderId : musicSettings.driveFolderId === fav.id))
 						: (musicSettings.librarySource === 'device' && nativeTreeUri === fav.treeUri)}
 					<div class="mini-player-control-surface flex items-center gap-0.5 shrink-0 rounded-full pl-2.5 pr-1 py-1 text-xs {isActive ? 'bg-primary text-primary-foreground border-primary' : 'text-foreground'}">
-						<button class="flex items-center gap-1.5 min-w-0" onclick={() => switchToFavorite(fav)} title="Switch to {fav.name}" disabled={switchingToFavId !== null}>
+						<button class="flex items-center gap-1.5 min-w-0" onclick={() => driveLibrary.switchToFavorite(fav)} title="Switch to {fav.name}" disabled={switchingToFavId !== null}>
 							{#if switchingToFavId === fav.id}
 								<div class="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin shrink-0"></div>
 							{:else if fav.source === 'drive'}
@@ -3073,7 +2785,7 @@
 								const front = wrapper?.querySelector('[data-swipe-front]') as HTMLElement | null;
 								if (front) { front.style.transition = 'transform 0.2s ease'; front.style.transform = ''; }
 								if (isDrive) openLocalDownloadFolderPicker(entry.file);
-								else openDriveUploadFolderPicker(entry.file);
+								else driveLibrary.openDriveUploadFolderPicker(entry.file);
 							}}
 							>
 								{#if isDrive}
@@ -3211,7 +2923,7 @@
 				<Button variant="ghost" size="icon" onclick={openFolder} title="Open local folder" class="h-10 w-10">
 					<FolderOpen class="w-5 h-5" />
 				</Button>
-				<Button variant="ghost" size="icon" onclick={driveSession.user ? changeDriveFolder : connectGoogleDrive} title={driveSession.user ? 'Change Google Drive folder' : 'Connect Google Drive'} class="h-10 w-10">
+				<Button variant="ghost" size="icon" onclick={driveSession.user ? driveLibrary.changeDriveFolder : driveLibrary.connectGoogleDrive} title={driveSession.user ? 'Change Google Drive folder' : 'Connect Google Drive'} class="h-10 w-10">
 					<Cloud class="w-5 h-5" />
 				</Button>
 			</div>
@@ -3402,10 +3114,10 @@
 	<!-- Breadcrumb -->
 	{#if drivePickerPath.length > 0}
 	<div class="flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b shrink-0 flex-wrap">
-		<button class="hover:text-foreground" onclick={() => { drivePickerPath = []; void loadDriveFolderPicker('root'); }}>My Drive</button>
+		<button class="hover:text-foreground" onclick={() => { drivePickerPath = []; void driveLibrary.loadDriveFolderPicker('root'); }}>My Drive</button>
 		{#each drivePickerPath as folder, i}
 			<ChevronRight class="w-3 h-3 shrink-0" />
-			<button class="hover:text-foreground truncate max-w-[100px] {i === drivePickerPath.length - 1 ? 'text-foreground font-medium' : ''}" onclick={() => { drivePickerPath = drivePickerPath.slice(0, i + 1); void loadDriveFolderPicker(folder.id); }}>{folder.name}</button>
+			<button class="hover:text-foreground truncate max-w-[100px] {i === drivePickerPath.length - 1 ? 'text-foreground font-medium' : ''}" onclick={() => { drivePickerPath = drivePickerPath.slice(0, i + 1); void driveLibrary.loadDriveFolderPicker(folder.id); }}>{folder.name}</button>
 		{/each}
 	</div>
 	{/if}
@@ -3416,7 +3128,7 @@
 		<p class="text-center text-muted-foreground text-sm py-12">No folders here</p>
 		{:else}
 		{#each drivePickerFolders as folder}
-			<button class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent text-left" onclick={() => selectDriveFolderAndUpload(folder)}>
+			<button class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent text-left" onclick={() => driveLibrary.selectDriveFolderAndUpload(folder)}>
 				<Folder class="w-5 h-5 text-primary shrink-0" />
 				<span class="text-sm truncate">{folder.name}</span>
 			</button>
