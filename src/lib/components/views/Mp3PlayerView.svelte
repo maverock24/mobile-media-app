@@ -9,7 +9,6 @@
 	import { createPlayer, type PlayerTrack } from '$lib/audio/player.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import { bytesFromBase64, arrayBufferFromBytes } from '$lib/audio/fileResolver';
-	import { getRelativePath } from '$lib/models/browse';
 	import type { MediaItem } from '$lib/models/media';
 	import {
 		type StoredAudioFile,
@@ -23,7 +22,6 @@
 		getTrackKey,
 		mergeStoredFiles,
 		fmtGain,
-		isYoutubeFavorite,
 		parseFilename,
 		sortFiles as sortStoredFiles,
 	} from '$lib/models/music';
@@ -67,6 +65,10 @@
 		type PendingFileOp
 	} from '$lib/files/fileOps';
 	import {
+		createFavoriteTracks,
+		type FavoriteTracks
+	} from '$lib/favorites/favoriteTracks';
+	import {
 		saveCachedLibrary,
 		loadDeviceCachedLibrary,
 		restoreStoredFilesFromCache,
@@ -90,8 +92,6 @@
 		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X,
 		Copy, Trash2, FolderInput, Youtube
 	} from 'lucide-svelte';
-
-	type FavoriteTrack = (typeof musicSettings.favoriteTracks)[number];
 
 	const isNativeApp = typeof window !== 'undefined' && Capacitor.isNativePlatform();
 
@@ -347,7 +347,7 @@
 		const tracksList = Array.isArray(musicSettings.favoriteTracks) ? musicSettings.favoriteTracks : [];
 		const favorites = tracksList.map((favorite) => ({
 			favorite,
-			file: resolveFavoriteTrackFile(favorite),
+			file: favoriteTracks.resolveFavoriteTrackFile(favorite),
 		}));
 
 		if (!query) return favorites;
@@ -536,6 +536,27 @@
 		},
 	});
 
+	// ── Track favourites: the logic lives in the per-deck `createFavoriteTracks`
+	//    factory (PR 5). It is a rune-free `.ts`, so the deck keeps `isChangingTrack`
+	//    reactive and passes an accessor alongside `allFiles` and the live queue
+	//    (`player.state.tracks`). The favourites list itself is the global
+	//    `musicSettings.favoriteTracks`, passed by reference. The two deriveds that
+	//    read the machine stay in the view, because they also read view state. ──
+	const favoriteTracks: FavoriteTracks = createFavoriteTracks({
+		view: {
+			get allFiles() { return allFiles; },
+			get tracks() { return player.state.tracks; },
+			get isChangingTrack() { return isChangingTrack; },
+			set isChangingTrack(v) { isChangingTrack = v; },
+		},
+		settings: musicSettings,
+		initAudioContext,
+		beginQueue,
+		startPlayback,
+		openYoutubePanel,
+		addToast,
+	});
+
 	// ── derived ──
 	const tracks       = $derived(player.state.tracks);
 	const currentTime  = $derived(player.state.currentTime);
@@ -543,7 +564,7 @@
 	const isPlaying    = $derived(player.state.isPlaying);
 	const isBuffering  = $derived(player.state.isBuffering);
 	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as PlayerTrack | undefined);
-	const currentTrackIsFavorite = $derived(currentTrack ? isFavoriteTrack(currentTrack.source) : false);
+	const currentTrackIsFavorite = $derived(currentTrack ? favoriteTracks.isFavoriteTrack(currentTrack.source) : false);
 	const currentMusicTrackKey = $derived(
 		musicSettings.lastTrackKey || (currentTrack ? getStoredFileKey(currentTrack.source) : '')
 	);
@@ -848,114 +869,6 @@
 		return sortStoredFiles(files, musicSettings.sortOrder);
 	}
 
-	function createFavoriteTrack(file: StoredAudioFile): FavoriteTrack {
-		const parsed = parseFilename(file.name);
-		// `source` is added per branch so TS keeps the discriminant narrow —
-		// spreading file.source here would widen it to the whole union and no
-		// longer match any FavoriteTrack member.
-		const baseFavorite = {
-			key: getStoredFileKey(file),
-			name: file.name,
-			title: parsed.title,
-			artist: parsed.artist,
-			relativePath: getRelativePath(file),
-		};
-
-		if (file.source === 'native') {
-			return {
-				...baseFavorite,
-				source: 'native',
-				path: file.path,
-				mimeType: file.mimeType,
-				modifiedAt: file.modifiedAt,
-			};
-		}
-
-		if (file.source === 'drive') {
-			return {
-				...baseFavorite,
-				source: 'drive',
-				fileId: file.fileId,
-				mimeType: file.mimeType,
-				modifiedAt: file.modifiedAt,
-				sizeBytes: file.sizeBytes,
-				webViewLink: file.webViewLink,
-			};
-		}
-
-		return { ...baseFavorite, source: 'web' };
-	}
-
-	function resolveFavoriteTrackFile(favorite: FavoriteTrack): StoredAudioFile | null {
-		const loadedFile = allFiles.find((file) => getStoredFileKey(file) === favorite.key)
-			?? tracks.find((track) => getStoredFileKey(track.source) === favorite.key)?.source;
-		if (loadedFile) return loadedFile;
-
-		if (favorite.source === 'native' && favorite.path) {
-			return {
-				source: 'native',
-				name: favorite.name,
-				relativePath: favorite.relativePath,
-				path: favorite.path,
-				mimeType: favorite.mimeType,
-				modifiedAt: favorite.modifiedAt,
-			};
-		}
-
-		if (favorite.source === 'drive' && favorite.fileId) {
-			return {
-				source: 'drive',
-				name: favorite.name,
-				relativePath: favorite.relativePath,
-				fileId: favorite.fileId,
-				mimeType: favorite.mimeType,
-				modifiedAt: favorite.modifiedAt,
-				sizeBytes: favorite.sizeBytes,
-				webViewLink: favorite.webViewLink,
-			};
-		}
-
-		return null;
-	}
-
-	function isFavoriteTrack(file: StoredAudioFile): boolean {
-		const key = getStoredFileKey(file);
-		return Array.isArray(musicSettings.favoriteTracks)
-			? musicSettings.favoriteTracks.some((favorite) => favorite.key === key)
-			: false;
-	}
-
-	function toggleFavoriteTrack(file: StoredAudioFile): void {
-		const favorite = createFavoriteTrack(file);
-		const current = Array.isArray(musicSettings.favoriteTracks) ? musicSettings.favoriteTracks : [];
-		const exists = current.some((entry) => entry.key === favorite.key);
-		musicSettings.favoriteTracks = exists
-			? current.filter((entry) => entry.key !== favorite.key)
-			: [...current, favorite];
-	}
-
-	function removeFavoriteTrack(key: string): void {
-		const current = Array.isArray(musicSettings.favoriteTracks) ? musicSettings.favoriteTracks : [];
-		musicSettings.favoriteTracks = current.filter((favorite) => favorite.key !== key);
-	}
-
-	function getResolvedFavoriteTrackFiles(): StoredAudioFile[] {
-		const seen = new Set<string>();
-		const files: StoredAudioFile[] = [];
-
-		const favorites = Array.isArray(musicSettings.favoriteTracks) ? musicSettings.favoriteTracks : [];
-		for (const favorite of favorites) {
-			const file = resolveFavoriteTrackFile(favorite);
-			if (!file) continue;
-			const key = getStoredFileKey(file);
-			if (seen.has(key)) continue;
-			seen.add(key);
-			files.push(file);
-		}
-
-		return files;
-	}
-
 	function clearBrowseLongPressTimer() {
 		if (browseLongPressTimer !== null) {
 			clearTimeout(browseLongPressTimer);
@@ -1011,42 +924,6 @@
 	function clearBrowseSelection() {
 		selectedBrowseFileKeys = [];
 		mediaEngine.musicSelectionLoopActive = false;
-	}
-
-	async function playFavoriteTrack(favorite: FavoriteTrack) {
-		if (isChangingTrack) return;
-
-		// A YouTube favorite has no file to resolve, and its stream URL is
-		// short-lived and IP-bound, so it can never join the music deck queue.
-		// Hand off to the YouTube panel, which re-resolves and owns that audio.
-		if (isYoutubeFavorite(favorite)) {
-			openYoutubePanel(favorite.videoId);
-			return;
-		}
-
-		const resolvedTrack = resolveFavoriteTrackFile(favorite);
-		if (!resolvedTrack) {
-			addToast({ message: 'This favorite track is not available in the current library.', type: 'warning' });
-			return;
-		}
-
-		initAudioContext();
-		isChangingTrack = true;
-		try {
-			const files = getResolvedFavoriteTrackFiles();
-			if (files.length === 0) {
-				addToast({ message: 'No favorite tracks are currently available.', type: 'warning' });
-				return;
-			}
-
-			// Load tracks in display order (not sorted), so playback follows
-			// the same order the user sees in the favorites list.
-			const nextIndex = files.findIndex((file) => getStoredFileKey(file) === favorite.key);
-			beginQueue('Favorite Tracks');
-			await startPlayback(files, Math.max(0, nextIndex), { preserveOrder: true });
-		} finally {
-			isChangingTrack = false;
-		}
 	}
 
 	function getCurrentBrowseFileEntries(): (BrowseEntry & { kind: 'file' })[] {
@@ -1996,7 +1873,7 @@
 						<div class="browse-list-row list-row-surface flex items-center gap-2 px-4 py-2 border-b transition-colors {isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent'}">
 							<button
 								class="tap-feedback flex-1 min-w-0 flex items-center gap-2 rounded-xl px-2 py-2 transition-colors text-left {playable ? (isCurrentTrack ? 'bg-primary/10 ring-1 ring-inset ring-primary/30 active:bg-primary/15' : listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80') : 'opacity-60'}"
-								onclick={() => playFavoriteTrack(entry.favorite)}
+								onclick={() => favoriteTracks.playFavoriteTrack(entry.favorite)}
 								disabled={!playable}
 								aria-label={playable ? `Play ${entry.favorite.title}` : `${entry.favorite.title} is unavailable`}
 								aria-current={isCurrentTrack ? 'true' : undefined}
@@ -2022,7 +1899,7 @@
 								class="h-10 w-10 shrink-0 text-yellow-400"
 								onclick={(event) => {
 									event.stopPropagation();
-									removeFavoriteTrack(entry.favorite.key);
+									favoriteTracks.removeFavoriteTrack(entry.favorite.key);
 								}}
 								aria-label={`Remove ${entry.favorite.title} from favorite tracks`}
 								title="Remove from favorite tracks"
@@ -2238,15 +2115,15 @@
 						<Button
 							variant="ghost"
 							size="icon"
-							class={`h-10 w-10 shrink-0 ${isFavoriteTrack(entry.file) ? 'text-yellow-400' : 'text-muted-foreground'}`}
+							class={`h-10 w-10 shrink-0 ${favoriteTracks.isFavoriteTrack(entry.file) ? 'text-yellow-400' : 'text-muted-foreground'}`}
 							onclick={(event) => {
 								event.stopPropagation();
-								toggleFavoriteTrack(entry.file);
+								favoriteTracks.toggleFavoriteTrack(entry.file);
 							}}
-							aria-label={`${isFavoriteTrack(entry.file) ? 'Remove' : 'Add'} ${parseFilename(entry.name).title} ${isFavoriteTrack(entry.file) ? 'from' : 'to'} favorite tracks`}
-							title={isFavoriteTrack(entry.file) ? 'Remove from favorite tracks' : 'Add to favorite tracks'}
+							aria-label={`${favoriteTracks.isFavoriteTrack(entry.file) ? 'Remove' : 'Add'} ${parseFilename(entry.name).title} ${favoriteTracks.isFavoriteTrack(entry.file) ? 'from' : 'to'} favorite tracks`}
+							title={favoriteTracks.isFavoriteTrack(entry.file) ? 'Remove from favorite tracks' : 'Add to favorite tracks'}
 						>
-							<Star class="w-5 h-5" fill={isFavoriteTrack(entry.file) ? 'currentColor' : 'none'} />
+							<Star class="w-5 h-5" fill={favoriteTracks.isFavoriteTrack(entry.file) ? 'currentColor' : 'none'} />
 						</Button>
 					</div>
 					</div>
@@ -2326,7 +2203,7 @@
 				<p class="text-muted-foreground text-sm truncate">{currentTrack.artist}</p>
 			</div>
 			<Button variant="ghost" size="icon"
-				onclick={() => currentTrack && toggleFavoriteTrack(currentTrack.source)}
+				onclick={() => currentTrack && favoriteTracks.toggleFavoriteTrack(currentTrack.source)}
 				class="{currentTrackIsFavorite ? 'text-yellow-400' : 'text-muted-foreground'} ml-2 shrink-0"
 				aria-label={currentTrackIsFavorite ? 'Remove current track from favorite tracks' : 'Add current track to favorite tracks'}
 			>
