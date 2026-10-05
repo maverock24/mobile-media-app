@@ -16,8 +16,6 @@
 	import {
 		type StoredAudioFile,
 		type BrowseEntry,
-		type CachedLibrary,
-		type CachedLibraryFile,
 		type CachedWebLibraryFile,
 		type CachedNativeLibraryFile,
 		EQ_LABELS,
@@ -32,15 +30,13 @@
 		parseFilename,
 		sortFiles as sortStoredFiles,
 		createStoredAudioFile,
-		createStoredWebAudioFile,
 		createStoredNativeAudioFile,
 		createStoredDriveAudioFile,
 	} from '$lib/models/music';
 	import {
-		idbGet, idbPut, idbDelete,
-		openIDB,
+		idbGet, idbDelete,
 		saveHandleToIDB, loadHandleFromIDB,
-		loadCachedLibrary, deleteCachedLibrary,
+		deleteCachedLibrary,
 		saveDriveCache, loadDriveCache, bustDriveCache,
 	} from '$lib/utils/idb';
 	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
@@ -61,6 +57,18 @@
 	} from '$lib/google-drive';
 	import { formatGoogleDriveAuthError } from '$lib/google-drive-auth-error';
 	import { createDriveSession } from '$lib/drive/driveSession.svelte';
+	import {
+		LAST_LIBRARY_CACHE_KEY,
+		getDeviceLibraryCacheKey,
+		saveCachedLibrary,
+		loadDeviceCachedLibrary,
+		restoreStoredFilesFromCache,
+		collectStoredFilesFromSnapshot,
+		pathToString,
+		collectFilesFromDirHandle,
+		collectStoredFilesFromDirHandle,
+		resolveDirAtPath
+	} from '$lib/browse/libraryCache';
 	import { appSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	
@@ -89,7 +97,6 @@
 	const googleDriveConfigured = isGoogleDriveConfigured();
 	const googleDriveClientId = getGoogleDriveClientId();
 
-	const LAST_LIBRARY_CACHE_KEY = 'last-library';
 	const BACKGROUND_LIBRARY_SCAN_BATCH_SIZE = 500;
 	const FOLDER_PLAY_SCAN_BATCH_SIZE = 48;
 	const listTileToneClasses = $derived(getListTileToneClasses(appSettings.listTileTone));
@@ -97,81 +104,6 @@
 	const FOLDER_PLAY_PRIME_COUNT = 1;
 	const FOLDER_PLAY_QUEUE_FLUSH_SIZE = 400;
 	const BROWSE_LONG_PRESS_MS = 450;
-
-	function getDeviceLibraryCacheKey(options: { treeUri?: string | null; folderName?: string | null } = {}): string {
-		if (options.treeUri) return `device:${options.treeUri}`;
-		if (options.folderName) return `device-folder:${options.folderName}`;
-		return LAST_LIBRARY_CACHE_KEY;
-	}
-
-	// ── IndexedDB persistence (primitives live in $lib/utils/idb) ───
-	// saveCachedLibrary / loadDeviceCachedLibrary are view-coupled (they derive
-	// the cache key from nativeTreeUri via getDeviceLibraryCacheKey); the generic
-	// idbGet/Put/Delete, openIDB, openDriveCacheIDB, handle/library/drive-cache
-	// helpers are imported from $lib/utils/idb.
-	async function saveCachedLibrary(folderName: string, files: StoredAudioFile[], cacheKey = getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName })) {
-		const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
-			if (file.source === 'web') {
-				accumulator.push({
-					source: 'web',
-					name: file.name,
-					relativePath: file.relativePath,
-					file: file.file,
-				});
-				return accumulator;
-			}
-
-			if (file.source === 'native') {
-				accumulator.push({
-					source: 'native',
-					name: file.name,
-					relativePath: file.relativePath,
-					path: file.path,
-					mimeType: file.mimeType,
-					modifiedAt: file.modifiedAt,
-				});
-			}
-
-			return accumulator;
-		}, []);
-
-		if (cachedFiles.length === 0) return;
-		try {
-			const db = await openIDB();
-			const payload = { folderName, files: cachedFiles, savedAt: Date.now(), cacheKey } satisfies CachedLibrary;
-			await idbPut(db, 'libraries', payload, cacheKey);
-			if (cacheKey !== LAST_LIBRARY_CACHE_KEY) {
-				await idbPut(db, 'libraries', payload, LAST_LIBRARY_CACHE_KEY);
-			}
-			db.close();
-		}
-		catch { /* ignore cache write failures */ }
-	}
-	async function loadDeviceCachedLibrary(treeUri: string | null, folderName: string): Promise<CachedLibrary | null> {
-		const cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName });
-		const cached = await loadCachedLibrary(cacheKey);
-		if (cached) return cached;
-		if (cacheKey === LAST_LIBRARY_CACHE_KEY) return null;
-		const fallback = await loadCachedLibrary(LAST_LIBRARY_CACHE_KEY);
-		return fallback?.folderName === folderName ? fallback : null;
-	}
-
-	function restoreStoredFilesFromCache(cachedLibrary: CachedLibrary): StoredAudioFile[] {
-		return cachedLibrary.files.map((file) => {
-			if (file.source === 'web') {
-				return createStoredWebAudioFile(file.file, file.relativePath);
-			}
-
-			return {
-				source: 'native',
-				name: file.name,
-				relativePath: file.relativePath,
-				path: file.path,
-				mimeType: file.mimeType,
-				modifiedAt: file.modifiedAt,
-			} satisfies StoredAudioFile;
-		});
-	}
 
 	/** Load the library into the deck queue without starting playback. */
 	function hydrateTracksFromLibrary(files: StoredAudioFile[], resetToStart = false) {
@@ -790,9 +722,6 @@
 		return sortStoredFiles(files, musicSettings.sortOrder);
 	}
 
-	function pathToString(path: string[]): string | undefined {
-		return path.length > 0 ? path.join('/') : undefined;
-	}
 	function createFavoriteTrack(file: StoredAudioFile): FavoriteTrack {
 		const parsed = parseFilename(file.name);
 		// `source` is added per branch so TS keeps the discriminant narrow —
@@ -1057,13 +986,6 @@
 		clearBrowseLongPressTimer();
 	}
 
-	function collectStoredFilesFromSnapshot(files: StoredAudioFile[], path: string[]): StoredAudioFile[] {
-		const prefix = path.length > 0 ? path.join('/') + '/' : '';
-		return sortFiles(files.filter((file) => {
-			const relativePath = getRelativePath(file);
-			return prefix ? relativePath.startsWith(prefix) : true;
-		}));
-	}
 	async function yieldScanToUi(): Promise<void> {
 		if (typeof window === 'undefined') return;
 		await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
@@ -1156,7 +1078,7 @@
 				allFiles = scannedFiles;
 				scanProgress = null;
 				if (!trackListLockedByUser) hydrateTracksFromLibrary(scannedFiles);
-				await saveCachedLibrary(folderName, scannedFiles, getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName }));
+				await saveCachedLibrary(nativeTreeUri, folderName, scannedFiles);
 			})
 			.catch((error) => {
 				console.error('Failed to scan selected library.', error);
@@ -1833,62 +1755,17 @@
 		if (loadId === _browseLoadId) browseLoading = false;
 	}
 
-	// ── Collect all MP3s from a directory handle recursively ──
-	async function collectFilesFromDirHandle(dir: FileSystemDirectoryHandle): Promise<File[]> {
-		const result: File[] = [];
-		for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-			if (handle.kind === 'file' && isSupportedAudioFile(name)) {
-				result.push(await (handle as FileSystemFileHandle).getFile());
-			} else if (handle.kind === 'directory') {
-				result.push(...await collectFilesFromDirHandle(handle as FileSystemDirectoryHandle));
-			}
-		}
-		return result;
-	}
-
-	async function collectStoredFilesFromDirHandle(
-		dir: FileSystemDirectoryHandle,
-		pathSegments: string[] = []
-	): Promise<StoredAudioFile[]> {
-		const result: StoredAudioFile[] = [];
-		for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-			if (handle.kind === 'file' && isSupportedAudioFile(name)) {
-				const file = await (handle as FileSystemFileHandle).getFile();
-				result.push(createStoredWebAudioFile(file, [...pathSegments, name].join('/')));
-			} else if (handle.kind === 'directory') {
-				result.push(...await collectStoredFilesFromDirHandle(handle as FileSystemDirectoryHandle, [...pathSegments, name]));
-			}
-		}
-		return result;
-	}
-
-	// ── Navigate to a dir handle following a path ──
-	async function resolveDirAtPath(path: string[]): Promise<FileSystemDirectoryHandle | null> {
-		if (!rootDirHandle) return null;
-		let dir: FileSystemDirectoryHandle = rootDirHandle;
-		for (const segment of path) {
-			let found = false;
-			for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-				if (handle.kind === 'directory' && name === segment) {
-					dir = handle as FileSystemDirectoryHandle; found = true; break;
-				}
-			}
-			if (!found) return null;
-		}
-		return dir;
-	}
-
 	// ── Collect all files under a browse path ──
 	async function collectAllFromPath(path: string[]): Promise<StoredAudioFile[]> {
 		if (musicSettings.librarySource === 'drive') {
-			return collectStoredFilesFromSnapshot(allFiles, path);
+			return collectStoredFilesFromSnapshot(allFiles, path, musicSettings.sortOrder);
 		} else if (allFiles.length > 0) {
-			return collectStoredFilesFromSnapshot(allFiles, path);
+			return collectStoredFilesFromSnapshot(allFiles, path, musicSettings.sortOrder);
 		} else if (libraryScanPromise) {
 			const scannedFiles = await libraryScanPromise;
-			return collectStoredFilesFromSnapshot(scannedFiles, path);
+			return collectStoredFilesFromSnapshot(scannedFiles, path, musicSettings.sortOrder);
 		} else if (rootDirHandle) {
-			const dir = await resolveDirAtPath(path);
+			const dir = await resolveDirAtPath(rootDirHandle, path);
 			return dir ? (await collectFilesFromDirHandle(dir)).map((file) => createStoredAudioFile(file)) : [];
 		} else if (nativeTreeUri) {
 			const result = await DirectoryReader.listAudioFiles({ treeUri: nativeTreeUri, path: pathToString(path) });
@@ -2112,7 +1989,7 @@
 		browseVersion++;  // triggers browse entry reload
 		showQueue = true;
 		hydrateTracksFromLibrary(allFiles);
-		void saveCachedLibrary(musicSettings.lastFolderName || 'Selected Files', allFiles);
+		void saveCachedLibrary(nativeTreeUri, musicSettings.lastFolderName || 'Selected Files', allFiles);
 		input.value = '';
 	}
 
@@ -2139,7 +2016,7 @@
 		browseVersion++;
 		showQueue = true;
 		hydrateTracksFromLibrary(allFiles, true);
-		void saveCachedLibrary('Selected Files', allFiles);
+		void saveCachedLibrary(nativeTreeUri, 'Selected Files', allFiles);
 		input.value = '';
 	}
 
@@ -2239,7 +2116,7 @@
 			if (path.length === 0 && collectedFiles.length > 0) {
 				allFiles = collectedFiles;
 				browseVersion += 1;
-				await saveCachedLibrary(folderLabel, collectedFiles, getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName: folderLabel }));
+				await saveCachedLibrary(nativeTreeUri, folderLabel, collectedFiles);
 			}
 			if (!hasResolvedStart) {
 				hasResolvedStart = true;
@@ -2309,7 +2186,7 @@
 		loadingFolderPath = folderKey;
 		initAudioContext(); // unlock AudioContext while still in user gesture
 		try {
-			const indexedFiles = collectStoredFilesFromSnapshot(allFiles, path);
+			const indexedFiles = collectStoredFilesFromSnapshot(allFiles, path, musicSettings.sortOrder);
 			if (indexedFiles.length > 0) {
 				beginQueue(folderLabel);
 				if (!(await startFirstPlayableTrack(indexedFiles))) {
