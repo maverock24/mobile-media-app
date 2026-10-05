@@ -1,6 +1,6 @@
 # Refactoring plan
 
-- Status: active, PR 1 open
+- Status: PR 1 through PR 11 merged; the PR 3 series (3.1 to 3.8) is complete
 - Base: `main` at `8dc7495`
 - Branch per PR: `refactor/dead-code`, `refactor/adr-0001-player`, `refactor/mp3-drive-domain`, ...
 - Scope: `src/` only. `android/` is out of scope.
@@ -130,7 +130,7 @@ named. Line ranges are anchors from the recon snapshot (`/tmp/pr3-recon.md`),
 taken before the dead-code follow-up above; treat them as anchors, not current
 offsets.
 
-Status: 3.1 to 3.7 merged. 3.8 delivered on `refactor/pr3-8-file-ops`, which
+Status: 3.1 to 3.8 merged. 3.8 merged from `refactor/pr3-8-file-ops`, which
 completes the series. The view is still above the 2,500-line target in the
 definition of done; the honest count and what remains are recorded under 3.8.
 

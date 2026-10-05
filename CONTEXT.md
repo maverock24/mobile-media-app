@@ -32,6 +32,32 @@ and Google Drive music libraries. The live code in `src/` is authoritative.
   and the others are persisted stores. Podcasts/settings live only on-device
   (the Google Drive settings/podcast sync was removed).
 
+## View composition
+
+`Mp3PlayerView` composes eight per-deck modules, one set per deck rather than a
+module singleton, because two decks mount at once. Six are factories:
+`createDriveSession` (`src/lib/drive/driveSession.svelte.ts`),
+`createFolderPicker` (`src/lib/drive/folderPicker.svelte.ts`),
+`createDriveLibrary` (`src/lib/drive/driveLibrary.ts`),
+`createDeviceLibrary` (`src/lib/device/deviceLibrary.svelte.ts`),
+`createBrowseNavigation` (`src/lib/browse/browseNavigation.svelte.ts`) and
+`createFileOps` (`src/lib/files/fileOps.ts`). The other two are pure modules the
+view and the factories call directly, `src/lib/browse/libraryCache.ts` and
+`src/lib/browse/folderScan.ts`.
+
+State shared by more than one module stays in the view and is injected through
+accessors: `allFiles`, `browsePath`, `showQueue`, `pendingFileOp` and the
+transfer fields (`transferFile`, `transferDirection`, `isTransferring`,
+`transferProgress`, `transferPhase`). Each factory owns only the state its own
+functions drive.
+
+Two effects stay in the view for their timing. The mount effect wraps its restore
+preamble in `untrack()` so reads such as `driveSession.ensureDriveAccessToken`
+are not dependencies; without it the effect re-runs while hydration writes those
+signals and fires concurrent `finishDriveLoad` calls. The browse reload effect
+depends on `browsePath`, `driveSearch`, `browseVersion` and
+`musicSettings.librarySource`.
+
 ## File management (move / copy / delete)
 
 A browse-row action strip (swipe-left reveal) provides Download, Move, Copy, and
@@ -44,5 +70,9 @@ destination picker. Drive file management was removed (ADR-0002, revised).
 - Architecture map and conventions: `AGENTS.md`.
 - `src/lib/audio/` — audio modules (`equalizer.ts`, `fileResolver.ts`,
   `player.svelte.ts`).
+- `src/lib/browse/` — pure library cache and folder scan, plus browse navigation.
+- `src/lib/drive/` — the per-deck Drive session, folder picker and library.
+- `src/lib/device/` — the per-deck device library.
+- `src/lib/files/` — the per-deck file operations.
 - `src/lib/stores/` — rune stores (`mediaEngine`, `settings`, `library`, …).
 - `src/lib/components/views/` — feature screens.

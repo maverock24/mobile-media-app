@@ -96,7 +96,19 @@ audio/*
   └── must NOT import: components
 
 drive/*
-  ├── can import: models/*, utils/*, stores/*, google-drive.ts, google-drive-auth-error.ts
+  ├── can import: models/*, utils/*, stores/*, google-drive.ts, google-drive-auth-error.ts, audio/*, browse/*, drive/*
+  └── must NOT import: components
+
+browse/*
+  ├── can import: models/*, utils/*, native/*, stores/*, browse/*
+  └── must NOT import: components
+
+device/*
+  ├── can import: models/*, utils/*, native/*, stores/*, google-drive.ts, browse/*, drive/*
+  └── must NOT import: components
+
+files/*
+  ├── can import: models/*, native/*, stores/*, browse/*, device/*
   └── must NOT import: components
 
 models/*
