@@ -130,7 +130,7 @@ named. Line ranges are anchors from the recon snapshot (`/tmp/pr3-recon.md`),
 taken before the dead-code follow-up above; treat them as anchors, not current
 offsets.
 
-Status: 3.1 to 3.5 merged. 3.6 delivered on `refactor/pr3-6-device-library`. 3.7 and 3.8 not started.
+Status: 3.1 to 3.6 merged. 3.7 delivered on `refactor/pr3-7-browse-navigation`. 3.8 not started.
 
 **3.1 `driveSession` (`src/lib/drive/driveSession.svelte.ts`).**
 `hasValidDriveToken` (1259-1261), `ensureDriveAccessToken` (1263-1319) and the
@@ -290,6 +290,30 @@ and write the `deviceLibrary` instance, and `createDriveLibrary`'s injected
 `navigateToParentFolderFromSwipe` (2457-2461), `navigateUp` (2462-2472).
 `navigateUp` and `navigateToParentFolderFromSwipe` write `musicFavorites.shown`,
 so that store is an explicit dependency.
+
+Delivered on `refactor/pr3-7-browse-navigation` with 21 unit tests in
+`tests/unit/browse/browseNavigation.test.ts`. `createBrowseNavigation` is a
+factory, like the earlier extractions, so the load-id counter stays per deck and
+one deck's load cannot cancel the other's in-flight one. The module owns
+`browseEntries`, `browseLoading` and that counter. `browsePath`,
+`fileSearchQuery` and `selectedBrowseFileKeys` stay in the view and arrive
+through an injected `view` accessor: the breadcrumb markup and other view
+functions read and write `browsePath` directly, `fileSearchQuery` is a
+`bind:value` input, and `selectedBrowseFileKeys` drives the view's selection
+effect. The loader reads the deck's `deviceLibrary` for `libraryScanPromise`,
+`nativeTreeUri` and `rootDirHandle`. The browse reload effect stays in the view
+and is unchanged: it still reads `browsePath`, `driveSearch`, `browseVersion` and
+`musicSettings.librarySource` and calls `browseNavigation.loadBrowseEntries`,
+which runs synchronously under the effect, so the reads inside it (library
+source, sort order, file list, device handles) still register as dependencies.
+
+This paragraph was wrong twice. It says only `navigateUp` and
+`navigateToParentFolderFromSwipe` write `musicFavorites.shown`; `navigateInto`
+and `goToFileFolder` write it too, so all four navigation functions touch the
+store. And it omitted that `goToFileFolder` also clears `fileSearchQuery` and
+`selectedBrowseFileKeys` and sets `mediaEngine.musicSelectionLoopActive = false`.
+The line anchors above are stale (the view shrank after 3.4 to 3.6); the function
+names are the reliable locator.
 
 **3.8 `fileOps` (`src/lib/files/fileOps.ts`).** `openDestinationForOp`
 (2661-2664), `openLocalDestinationPicker` (2666-2677), `confirmAndDelete`
