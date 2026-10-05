@@ -37,7 +37,8 @@ This file captures the repo's current implementation boundaries. If it ever disa
   URL adapter, the per-deck volume/mute/speed controls and the equalizer hook, and
   builds the file lists (scan, Drive, favourites, folder pickers) it hands over
   with `play`/`load`/`append`.
-- `PodcastView`, `RadioView` and `YoutubePanel` still own their own `<audio>` elements.
+- `PodcastView` and `YoutubePanel` still own their own `<audio>` elements. The radio
+  stream is engine-owned: `mediaEngine` plays it through its own `_streamAudio` element.
 - Cross-source exclusivity depends on `claimAudio()` and `registerAudioSource()`:
   each music deck registers `player.stop()`, which unloads that deck's element but
   keeps its queue so a later play/resume can restart it.

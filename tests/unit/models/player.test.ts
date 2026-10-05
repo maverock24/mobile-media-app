@@ -127,6 +127,82 @@ describe('player — repeat-one', () => {
 		expect(audio.currentTime).toBe(0);  // rewound
 		expect(audio.playCalls).toBeGreaterThan(playsBefore);
 	});
+
+	it('reads the live selection-loop getter, not the snapshot from play()', async () => {
+		let loop = false;
+		const { player, audio, state } = makePlayer({
+			settings: {
+				lastTrackIndex: 0, lastTrackKey: '', lastTrackTimestamp: 0,
+				isRepeat: true, isShuffle: false, rewindOnPrev: false, sortOrder: 'name',
+			},
+			isSelectionLoop: () => loop,
+		});
+		// The queue was loaded as a selection loop, but the MiniPlayer turned the
+		// live flag off again: the getter is the source of truth.
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0, { selectionLoop: true });
+		await flush();
+
+		audio.currentTime = 10;
+		audio.emit('ended');
+		await flush();
+		expect(state.currentIndex).toBe(0);
+		expect(audio.currentTime).toBe(0);
+
+		// Live flag on: the loop wins over repeat-one and the queue advances.
+		loop = true;
+		audio.emit('ended');
+		await flush();
+		expect(state.currentIndex).toBe(1);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Queue generation. A URL can land after the queue it was resolved for is gone
+// (the user picked another folder while a Drive file was still downloading), so
+// the module must not write it into the replacement queue.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('player — in-flight resolves vs queue replacement', () => {
+	it('drops a URL that resolved after the queue was replaced', async () => {
+		const { player, state, resolveUrl } = makePlayer();
+		const pending: Array<(url: string | null) => void> = [];
+		resolveUrl.mockImplementation(() => new Promise<string | null>((resolve) => { pending.push(resolve); }));
+
+		// The first queue's resolve is still in flight when the queue is replaced.
+		const firstPlay = player.play([mkSrc('a.mp3', 'a')], 0);
+		await flush();
+		expect(pending).toHaveLength(1);
+
+		player.load([mkSrc('b.mp3', 'b')], { startIndex: 0 });
+
+		// The URL for 'a.mp3' arrives only now, after the replacement.
+		pending[0]('blob:a.mp3');
+		await firstPlay;
+		await flush();
+
+		expect(state.tracks.map((t) => t.filename)).toEqual(['b.mp3']);
+		// The replacement queue's slot stays empty: no stale URL, no orphan blob.
+		expect(state.tracks[0].url).toBe('');
+		expect(state.tracks[0].cleanup).toBeUndefined();
+	});
+
+	it('keeps an in-flight resolve alive when files are appended', async () => {
+		const { player, state, resolveUrl } = makePlayer();
+		const pending: Array<(url: string | null) => void> = [];
+		resolveUrl.mockImplementation(() => new Promise<string | null>((resolve) => { pending.push(resolve); }));
+
+		const playing = player.play([mkSrc('a.mp3', 'a')], 0);
+		await flush();
+
+		// A streaming folder scan appends while 'a.mp3' is still resolving: this is
+		// not a queue replacement, so its URL must still be adopted.
+		player.append([mkSrc('b.mp3', 'b')]);
+		pending[0]('blob:a.mp3');
+		await playing;
+		await flush();
+
+		expect(state.tracks.map((t) => t.filename)).toEqual(['a.mp3', 'b.mp3']);
+		expect(state.tracks.find((t) => t.filename === 'a.mp3')?.url).toBe('blob:a.mp3');
+	});
 });
 
 describe('player — pause / resume / seek / prev', () => {
@@ -278,6 +354,19 @@ describe('player — stop and resume (cross-source exclusivity)', () => {
 
 		expect(audio.src).toBe('blob:b.mp3');
 		expect(state.currentIndex).toBe(1);
+	});
+
+	it('clears the buffering state when resume cannot resolve a URL', async () => {
+		const { player, state, resolveUrl } = makePlayer();
+		resolveUrl.mockResolvedValue(null);
+		player.load([mkSrc('a.mp3', 'a')], { startIndex: 0 });
+
+		await player.resume();
+		await flush();
+
+		// The "Loading track…" overlay must not stick on a failed resolve.
+		expect(state.isBuffering).toBe(false);
+		expect(state.isPlaying).toBe(false);
 	});
 });
 

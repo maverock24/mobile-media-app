@@ -478,6 +478,9 @@
 		native: isNativeApp,
 		applyEqualizer: attachEqualizer,
 		onBeforeAdvance: () => { syncLoopTracksToSelection(); },
+		// The MiniPlayer toggles the loop without touching the queue, so the module
+		// reads the live flag for advance/repeat-one decisions.
+		isSelectionLoop: () => mediaEngine.musicSelectionLoopActive,
 	});
 
 	// ── derived ──
@@ -1999,6 +2002,10 @@
 		// also materializes the *next* track in the background, and the player view
 		// shows a "Loading track…" overlay whenever progress is set.
 		const isForeground = player.state.tracks[player.state.currentIndex]?.source === source;
+		// The queued track this URL will belong to, captured before the await: a
+		// queue replacement (play/load/clear) can land while the file materializes,
+		// and a URL for a track that is no longer queued would never be released.
+		const queued = player.state.tracks.find((entry) => entry.source === source);
 
 		// Fast path for native files: Capacitor converts content:// / file:// paths to a local
 		// HTTP bridge URL (http://localhost/_capacitor_content_/... or _capacitor_file_/...).
@@ -2020,10 +2027,16 @@
 				isForeground ? (loaded, total) => { trackLoadProgress = { loaded, total }; } : undefined
 			);
 			const url = URL.createObjectURL(file);
+			// Verify the captured track is still the one in the queue (identity, not
+			// source lookup): if the queue was replaced during the await, drop the URL
+			// and revoke it here so the blob is not orphaned.
+			if (!queued || !player.state.tracks.includes(queued)) {
+				URL.revokeObjectURL(url);
+				return null;
+			}
 			// Hand the revocation path to the module through the queued track's
 			// `cleanup` field: the module calls it when it releases the URL.
-			const queued = player.state.tracks.find((entry) => entry.source === source);
-			if (queued) queued.cleanup = () => URL.revokeObjectURL(url);
+			queued.cleanup = () => URL.revokeObjectURL(url);
 			return url;
 		} catch (error) {
 			console.error('Failed to prepare track for playback.', error);
@@ -2848,16 +2861,30 @@
 	}
 
 	/** mediaEngine transport: skip. The module advances/preloads and keeps the
-	 *  queue in step; the view only has to refresh a changed selection loop first. */
+	 *  queue in step; the view only has to refresh a changed selection loop first.
+	 *  A skip is a playback start, so it claims the audio channel for this deck the
+	 *  way startPlayback does (flag first, then claim) — a layer playing elsewhere,
+	 *  such as a YouTube panel, must stop when this deck takes over. */
+	function claimDeckAudioForSkip() {
+		// An empty queue is the old code's early return: a skip that cannot load
+		// anything must not claim the channel or flag the deck as playing.
+		if (player.state.tracks.length === 0) return;
+		const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
+		mediaEngine[deckFlag] = true;
+		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
+	}
+
 	function skipNext() {
 		if (isChangingTrack) return;
 		syncLoopTracksToSelection();
 		player.next();
+		claimDeckAudioForSkip();
 	}
 
 	function skipPrev() {
 		if (isChangingTrack) return;
 		player.prev();
+		claimDeckAudioForSkip();
 	}
 
 	function handleSeekSeconds(seconds: number) {
