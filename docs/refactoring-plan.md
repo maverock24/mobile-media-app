@@ -461,11 +461,53 @@ batch skip and de-dup, and `playFavoriteTrack` for a resolved favourite, an
 unresolvable one, an empty batch, the changing-track guard and a YouTube
 hand-off.
 
+### PR 6: podcast domain (group 1 delivered)
+
+`PodcastView.svelte` (1,392 lines, complexity 242, its own `safePlay`) is the
+last single-file target. It is extracted in dependency order, each group its
+own behaviour-preserving step, and logic only: the effects and the markup stay
+in the component. The five groups: `episodeDisplay` (pure), `itunes` (pure),
+`progress` (coupled to `podcastData`), `podcastLibrary` (factory) and
+`podcastPlayer` (factory).
+
+**Decision: the podcast transport keeps its own module and
+`src/lib/audio/player.svelte.ts` is not modified.** The podcast path has
+behaviours the music player does not: stop on end; resume persistence
+throttled to one write per 20 seconds and flushed on pause and on end;
+rebuild-on-restart that loads a source without playing; a network reconnect
+path with an `online` listener; system-pause auto-resume; MediaSession updates
+routed through `mediaEngine`; and a per-episode playback-speed reset.
+
+**Two facts the transport work rests on.** `PodcastView` mounts once and stays
+mounted behind `class:hidden`, so its effects, timers and element listeners
+keep running in the background when another tab is shown. And no unit test
+mounts `PodcastView`; the e2e suite only clicks the Podcasts tab and asserts
+that two `<audio>` elements exist, so nothing guards the transport today.
+
+**6.1 `episodeDisplay` (`src/lib/podcast/episodeDisplay.ts`, pure).** Delivered
+on `refactor/pr6-podcast-display`, with 28 unit tests in
+`tests/unit/podcast/episodeDisplay.test.ts`. Moved `isActiveEpisode`,
+`getEpisodeProgressPercent`, `getEpisodeProgressLabel`, `isNewEpisode` and
+`artworkFallback`, plus the `NEW_EPISODE_WINDOW_MS` constant (moved in whole,
+not parameterised). The first four closed over view state: `isActiveEpisode`
+reads `currentEpisode.episode.id`; the two progress helpers read
+`currentEpisode`, `currentTime` and `duration`; `isNewEpisode` reads the
+constant. Each now takes that state as a parameter. `artworkFallback` already
+took its podcast and was pure in place, so only its import changed. `isNewEpisode`
+takes an optional `now` so tests can pin the window boundary; its call site is
+unchanged. The view still owns `formatDuration` for the episode-row duration at
+`PodcastView.svelte:1108`; the module imports the same helper from
+`$lib/models/music`. Of the twelve references to the five helpers in the
+component, five stay as markup calls (four with new arguments, `artworkFallback`
+unchanged) and seven moved with the code (five declarations and the two
+`isActiveEpisode` calls inside the two progress helpers). The view drops from
+1,392 to 1,342 lines. Groups 2 to 5 are not started.
+
 ### After the programme
 
-`PodcastView.svelte` (1,400 lines, complexity 242, its own `safePlay`) is the
-next single-file target and needs its own decision about whether the podcast
-engine shares `createPlayer`. The three duplicated handlers in
+`PodcastView.svelte` (1,342 lines after group 1, complexity 242, its own
+`safePlay`) is the next single-file target; PR 6 records the decision not to
+share `createPlayer` and the five-group order. The three duplicated handlers in
 `RadioView.svelte` fold into that pass.
 
 ## Known follow-ups
