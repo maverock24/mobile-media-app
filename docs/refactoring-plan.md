@@ -1,7 +1,7 @@
 # Refactoring plan
 
-- Status: PR 1 through PR 11 merged; the PR 3 series (3.1 to 3.8) is complete
-- Base: `main` at `8dc7495`
+- Status: complete. GitHub PRs 1 to 11 are merged, and the PR 3 series (3.1 to 3.8) is done
+- Base: `main` at `8dc7495` when the programme started; it is far ahead of that now
 - Branch per PR: `refactor/dead-code`, `refactor/adr-0001-player`, `refactor/mp3-drive-domain`, ...
 - Scope: `src/` only. `android/` is out of scope.
 - Rule: every PR is behaviour-preserving. Store APIs stay source-compatible.
