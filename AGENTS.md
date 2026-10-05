@@ -12,10 +12,10 @@ The live code in `src/` is authoritative. Planning docs (`01_PRD.md`, `PROGRESS.
 |---|---|
 | SvelteKit app shell | `src/app.html`, `src/app.d.ts`, `src/app.css` |
 | Routes / API endpoints | `src/routes/` (`api/podcast/{feed,search,lookup}`, `api/radio/search`, `essays`) |
-| Svelte 5 rune stores | `src/lib/stores/*.svelte.ts` — `mediaEngine` (playback core, 821L), `library`, `settings`, `googleDriveSession`, `sleepTimer`, `toastStore`, `runtimeDiagnostics`, `driveConfigSync`, `history`, `mixerShared` |
+| Svelte 5 rune stores | `src/lib/stores/*.svelte.ts` — `mediaEngine` (playback core, 832L), `settings`, `googleDriveSession`, `musicView`, `sleepTimer`, `toastStore`, `youtubePanel`, `runtimeDiagnostics`, `library` (types only) |
 | UI components | `src/lib/components/views/*` (feature screens), `src/lib/components/ui/*` (primitives) |
-| Google Drive | `src/lib/google-drive.ts` (API), `src/lib/google-drive-native.ts` (Android bridge), `src/lib/drive-config.ts`, `src/lib/google-drive-auth-error.ts` |
-| Audio | `src/lib/audio/fileResolver.ts`, `src/lib/audio/equalizer.ts` |
+| Google Drive | `src/lib/google-drive.ts` (API), `src/lib/google-drive-native.ts` (Android bridge), `src/lib/google-drive-auth-error.ts`, `src/lib/drive/` (extracted modules, currently `driveSession.svelte.ts`) |
+| Audio | `src/lib/audio/player.svelte.ts` (per-deck player), `src/lib/audio/fileResolver.ts`, `src/lib/audio/equalizer.ts` |
 | Native bridges (Android/Capacitor) | `src/lib/native/*` (`haptics`, `directory-reader`, `media-controls`) |
 | Models | `src/lib/models/` (`media`, `music`, `browse`) |
 | Utils | `src/lib/utils/`, `src/lib/persisted.svelte.ts` |
