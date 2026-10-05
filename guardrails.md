@@ -23,6 +23,8 @@ This file captures the repo's current implementation boundaries. If it ever disa
   the equalizer).
 - Per-deck Drive session factories live in `src/lib/drive/` (`createDriveSession`
   is rune state but one instance per deck, so it is not a store singleton).
+- Per-deck track favourites live in `src/lib/favorites/` (`createFavoriteTracks`,
+  one instance per deck).
 - Pure data models live in `src/lib/models/`.
 - Capacitor wrappers live in `src/lib/native/`.
 
@@ -109,6 +111,10 @@ device/*
 
 files/*
   ├── can import: models/*, native/*, stores/*, browse/*, device/*
+  └── must NOT import: components
+
+favorites/*
+  ├── can import: models/*, audio/*, stores/*
   └── must NOT import: components
 
 models/*
