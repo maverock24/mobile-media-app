@@ -519,9 +519,35 @@ thin `runITunesSearch` wrapper that owns both state writes, so the debounce
 response, a malformed body and any fetch rejection all still yield `[]`. The
 view drops from 1,342 to 1,317 lines. Groups 3 to 5 are not started.
 
+**6.3 `progress` (`src/lib/podcast/progress.ts`, coupled to `podcastData`).**
+Delivered on `refactor/pr6-podcast-progress`, with 17 unit tests in
+`tests/unit/podcast/progress.test.ts`. Moved `syncPersistedEpisodeState`,
+`markEpisodeFullyPlayed`, `mergeEpisodeHistory` and `getEpisodeResumePosition`,
+plus the 20-second `PROGRESS_PERSIST_MS` constant. Unlike groups 1 and 2 this
+module is not pure: it imports the shared `podcastData` store directly, the same
+way `fileOps.ts` imports `musicSettings`. The two other objects
+`syncPersistedEpisodeState` writes, `selectedPodcast` and `currentEpisode`, are
+component `$state`, so they arrive through an injected `PodcastProgressView`
+accessor (getter/setter pairs) — the same shape `createFileOps` uses for
+`pendingFileOp`, chosen over extra return values so the six call sites stay
+one-line and the view keeps ownership of its reactive state. The throttle
+*decision* stays in the view's timeupdate handler alongside the per-element
+`_lastProgressPersist` timestamp; only the constant and an equivalent pure
+boundary predicate (`shouldPersistProgress(lastPersistMs, now)`) moved, so the
+boundary is testable. Every persistence semantic is preserved: the persisting
+object's four copied keys (`played`, `progress`, `positionSec ?? 0`, `duration`)
+and the mirror into `selectedPodcast` / `currentEpisode`; the forced flush on
+pause and on end; `markEpisodeFullyPlayed`'s `played = true`, `progress = 100`,
+`positionSec = 0` and the store's `lastEpisodeId` / `lastPodcastId` /
+`lastPositionSec = 0` writes; `mergeEpisodeHistory`'s saved-state-wins rule with
+its id → audioUrl → title+date matching and `lastEpisodeId` remap; and
+`getEpisodeResumePosition`'s `Math.max(savedPosition, lastPositionSec)` on the
+last-played episode and bare `positionSec ?? 0` for every other episode. The
+view drops from 1,317 to 1,252 lines. Groups 4 and 5 are not started.
+
 ### After the programme
 
-`PodcastView.svelte` (1,317 lines after group 2, complexity 242, its own
+`PodcastView.svelte` (1,252 lines after group 3, complexity 242, its own
 `safePlay`) is the next single-file target; PR 6 records the decision not to
 share `createPlayer` and the five-group order. The three duplicated handlers in
 `RadioView.svelte` fold into that pass.
