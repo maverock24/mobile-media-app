@@ -48,23 +48,20 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
 		checkFolderHasSubfolders,
-		consumePendingGoogleDriveAccessToken,
 		downloadGoogleDriveFile,
 		fetchGoogleDriveUser,
 		getGoogleDriveClientId,
 		isGoogleDriveConfigured,
 		listGoogleDriveFolders,
 		streamGoogleDriveMp3Files,
-		requestGoogleDriveAccessToken,
 		revokeGoogleDriveAccess,
 		uploadGoogleDriveFile,
 		type GoogleDriveFile,
-		type GoogleDriveFolder,
-		type GoogleDriveUser
+		type GoogleDriveFolder
 	} from '$lib/google-drive';
 	import { formatGoogleDriveAuthError } from '$lib/google-drive-auth-error';
+	import { createDriveSession } from '$lib/drive/driveSession.svelte';
 	import { appSettings, musicSettings } from '$lib/stores/settings.svelte';
-	import { googleDriveSession } from '$lib/stores/googleDriveSession.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	
 	import { mediaEngine, claimAudio, registerAudioSource, markUserPaused } from '$lib/stores/mediaEngine.svelte';
@@ -245,10 +242,9 @@
 	let browseVersion    = $state(0);                          // bump to force reload
 	let deckFolderLabel  = $state('Library');                      // per-deck folder name
 	let selectedBrowseFileKeys = $state<string[]>([]);
-	let driveAccessToken = $state('');
-	let driveTokenExpiresAt = $state(0);
-	let driveUser        = $state<GoogleDriveUser | null>(null);
-	let driveError       = $state('');
+	// Per-deck Drive session (token, expiry, user, error). One instance per deck,
+	// created here so two mounted decks never share a token.
+	const driveSession = createDriveSession({ addToast, clientId: googleDriveClientId });
 	let driveSearch      = $state('');
 	let isDriveAuthenticating = $state(false);
 	let isDriveLoading   = $state(false);
@@ -1207,7 +1203,7 @@
 
 		isRestoringPendingDriveFolderPicker = true;
 		try {
-			const token = await ensureDriveAccessToken(false);
+			const token = await driveSession.ensureDriveAccessToken(false);
 			if (!token) {
 				// Native auth was attempted while the WebView was backgrounded; if its
 				// result never came back, don't leave the Connect control wedged in a
@@ -1255,68 +1251,6 @@
 		pendingDriveFolderPickerRestoreTimers = [];
 	}
 
-	function hasValidDriveToken(): boolean {
-		return driveAccessToken.length > 0 && Date.now() < driveTokenExpiresAt - 60_000;
-	}
-
-	async function ensureDriveAccessToken(interactive: boolean): Promise<string | null> {
-		if (hasValidDriveToken()) {
-			return driveAccessToken;
-		}
-
-		// Hydrate silently from the persisted session (survives page refresh)
-		googleDriveSession.hydrateFromStorage();
-		if (googleDriveSession.hasValidToken()) {
-			driveAccessToken = googleDriveSession.accessToken;
-			driveTokenExpiresAt = googleDriveSession.expiresAt;
-			driveUser = googleDriveSession.user;
-			return driveAccessToken;
-		}
-
-		try {
-			const pendingNativeAuthorization = await consumePendingGoogleDriveAccessToken();
-			if (pendingNativeAuthorization?.access_token) {
-				driveAccessToken = pendingNativeAuthorization.access_token;
-				driveTokenExpiresAt = Date.now() + Number(pendingNativeAuthorization.expires_in ?? 3600) * 1000;
-				driveUser = googleDriveSession.user;
-				driveError = '';
-				googleDriveSession.accessToken = driveAccessToken;
-				googleDriveSession.expiresAt = driveTokenExpiresAt;
-				googleDriveSession.persist();
-				return driveAccessToken;
-			}
-		} catch {
-			// Native auth recovery is best-effort; fall through to the normal flow.
-		}
-
-		if (!interactive) {
-			return null;
-		}
-
-		try {
-			const response = await requestGoogleDriveAccessToken({
-				clientId: googleDriveClientId,
-				prompt: driveAccessToken ? '' : 'consent'
-			});
-
-			driveAccessToken = response.access_token;
-			driveTokenExpiresAt = Date.now() + Number(response.expires_in ?? 3600) * 1000;
-			driveError = '';
-			googleDriveSession.accessToken = driveAccessToken;
-			googleDriveSession.expiresAt = driveTokenExpiresAt;
-			googleDriveSession.persist();
-			return driveAccessToken;
-		} catch (error) {
-			driveError = formatDriveAuthError(error);
-			// Surface the real failure in every view (the browse header has no error
-			// slot), so a failed Google sign-in is never a silent "nothing happened".
-			if (interactive) {
-				addToast({ message: driveError, type: 'error' });
-			}
-			return null;
-		}
-	}
-
 	function activateDeviceLibrary(folderName: string) {
 		musicSettings.librarySource = 'device';
 		musicSettings.lastFolderName = folderName;
@@ -1340,7 +1274,7 @@
 
 	async function loadDriveLibrary(interactive: boolean) {
 		if (!googleDriveConfigured) {
-			driveError = 'Google Drive is not configured. Add PUBLIC_GOOGLE_CLIENT_ID to enable sign-in.';
+			driveSession.error = 'Google Drive is not configured. Add PUBLIC_GOOGLE_CLIENT_ID to enable sign-in.';
 			clearPendingDriveFolderPickerIntent();
 			return;
 		}
@@ -1354,16 +1288,16 @@
 		isDriveLoading = true;
 
 		try {
-			const token = await ensureDriveAccessToken(interactive);
+			const token = await driveSession.ensureDriveAccessToken(interactive);
 			if (!token) {
 				clearPendingDriveFolderPickerIntent();
 				return;
 			}
-			driveError = '';
+			driveSession.error = '';
 
 			void fetchGoogleDriveUser(token)
 				.then((user) => {
-					driveUser = user;
+					driveSession.user = user;
 				})
 				.catch(() => {
 					// Folder selection should still work even if the user profile request fails.
@@ -1385,7 +1319,7 @@
 				await openFolderPicker();
 			}
 		} catch (error) {
-			driveError = formatDriveAuthError(error);
+			driveSession.error = formatDriveAuthError(error);
 		} finally {
 			isDriveAuthenticating = false;
 			isDriveLoading = false;
@@ -1490,10 +1424,10 @@
 			musicSettings.librarySource = 'drive';
 			musicSettings.driveFolderId = folderId ?? '';
 			musicSettings.driveFolderName = folderId ? fav.name : '';
-			const token = await ensureDriveAccessToken(true);
+			const token = await driveSession.ensureDriveAccessToken(true);
 			if (!token) { switchingToFavId = null; return; }
-			if (!driveUser) {
-				try { driveUser = await fetchGoogleDriveUser(token); } catch { /* ignore */ }
+			if (!driveSession.user) {
+				try { driveSession.user = await fetchGoogleDriveUser(token); } catch { /* ignore */ }
 			}
 			await finishDriveLoad(token, folderId);
 		} else if (fav.source === 'device' && fav.treeUri) {
@@ -1553,7 +1487,7 @@
 		driveLoadAbort = ctrl;
 
 		isDriveLoading = true;
-		driveError = '';
+		driveSession.error = '';
 
 		const cacheKey = folderId ?? '_all';
 
@@ -1614,7 +1548,7 @@
 			}
 		} catch (error) {
 			if (!ctrl.signal.aborted) {
-				driveError = formatDriveAuthError(error);
+				driveSession.error = formatDriveAuthError(error);
 			}
 		} finally {
 			if (driveLoadAbort === ctrl) {
@@ -1630,7 +1564,7 @@
 	}
 
 	async function refreshGoogleDrive() {
-		const token = await ensureDriveAccessToken(true);
+		const token = await driveSession.ensureDriveAccessToken(true);
 		if (!token) return;
 		const cacheKey = musicSettings.driveFolderId || '_all';
 		await bustDriveCache(cacheKey);
@@ -1639,7 +1573,7 @@
 
 	async function changeDriveFolder() {
 		markDriveFolderPickerPending();
-		const token = await ensureDriveAccessToken(false);
+		const token = await driveSession.ensureDriveAccessToken(false);
 		if (!token) { await loadDriveLibrary(true); return; }
 		folderPickerToken = token;
 		await openFolderPicker();
@@ -1652,20 +1586,20 @@
 		if (!googleDriveConfigured) return;
 
 		// Not signed in this session yet → full connect flow (may show native consent).
-		if (!driveUser) {
+		if (!driveSession.user) {
 			await loadDriveLibrary(true);
 			return;
 		}
 
-		const token = await ensureDriveAccessToken(false);
+		const token = await driveSession.ensureDriveAccessToken(false);
 		if (!token) {
 			// Silent refresh failed (expired/revoked) → run the interactive connect flow.
 			await loadDriveLibrary(true);
 			return;
 		}
 
-		driveAccessToken = token;
-		driveError = '';
+		driveSession.accessToken = token;
+		driveSession.error = '';
 
 		if (musicSettings.driveFolderId || musicSettings.driveFolderName) {
 			// Reuse the saved/default Drive folder without re-asking which folder.
@@ -1772,7 +1706,7 @@
 		}
 
 		if (entry.source === 'drive') {
-			const accessToken = await ensureDriveAccessToken(interactiveAuth);
+			const accessToken = await driveSession.ensureDriveAccessToken(interactiveAuth);
 			if (!accessToken) {
 				throw new Error('Your Google Drive session has expired. Sign in again to continue playback.');
 			}
@@ -2443,7 +2377,7 @@
 	// ── Google Drive ↔ Local file transfer ─────────────────────
 
 	async function openDriveUploadFolderPicker(file: StoredAudioFile) {
-		const token = await ensureDriveAccessToken(true);
+		const token = await driveSession.ensureDriveAccessToken(true);
 		if (!token) {
 			addToast({ message: 'Connect to Google Drive first.', type: 'warning' });
 			return;
@@ -2505,7 +2439,7 @@
 			return;
 		}
 		if (!transferFile) return;
-		const token = await ensureDriveAccessToken(true);
+		const token = await driveSession.ensureDriveAccessToken(true);
 		if (!token) {
 			addToast({ message: 'Drive session expired. Please reconnect.', type: 'warning' });
 			return;
@@ -2582,7 +2516,7 @@
 	async function loadDriveFolderPicker(parentId: string) {
 		drivePickerLoading = true;
 		try {
-			const result = await listGoogleDriveFolders(driveAccessToken, parentId);
+			const result = await listGoogleDriveFolders(driveSession.accessToken, parentId);
 			drivePickerFolders = result;
 		} catch (e) {
 			addToast({ message: 'Failed to list Drive folders.', type: 'error' });
@@ -2596,7 +2530,7 @@
 	async function selectDriveFolderAndUpload(folder: GoogleDriveFolder) {
 		if (isTransferring || isFileOpRunning) return;
 		if (!transferFile) return;
-		const token = await ensureDriveAccessToken(true);
+		const token = await driveSession.ensureDriveAccessToken(true);
 		if (!token) {
 			addToast({ message: 'Drive session expired. Please reconnect.', type: 'warning' });
 			return;
@@ -2708,7 +2642,7 @@
 
 	async function downloadToLocalFolder(file: StoredAudioFile) {
 		if (isTransferring) return;
-		const token = await ensureDriveAccessToken(true);
+		const token = await driveSession.ensureDriveAccessToken(true);
 		if (!token) {
 			addToast({ message: 'Connect to Google Drive first.', type: 'warning' });
 			return;
@@ -2962,8 +2896,8 @@
 	});
 
 	// ── Restore last folder handle from IndexedDB on mount ───────
-	// untrack() prevents any reactive reads in the sync preamble (e.g. driveAccessToken reads
-	// inside ensureDriveAccessToken) from becoming effect dependencies, which would otherwise
+	// untrack() prevents any reactive reads in the sync preamble (e.g. driveSession.accessToken reads
+	// inside driveSession.ensureDriveAccessToken) from becoming effect dependencies, which would otherwise
 	// cause this effect to re-run when those signals are written during hydration — leading to
 	// multiple concurrent finishDriveLoad calls and a spinner that never resolves.
 	$effect(() => {
@@ -2975,7 +2909,7 @@
 			// Silently restore Drive library using the persisted session token (survives refresh)
 			void (async () => {
 				try {
-					const token = await ensureDriveAccessToken(false);
+					const token = await driveSession.ensureDriveAccessToken(false);
 					if (token) {
 						await finishDriveLoad(token, musicSettings.driveFolderId || undefined);
 					}
@@ -3134,8 +3068,8 @@
 				Google Drive sign-in is disabled until PUBLIC_GOOGLE_CLIENT_ID is configured.
 			</p>
 		{/if}
-		{#if driveError}
-			<p class="text-xs text-destructive max-w-xs">{driveError}</p>
+		{#if driveSession.error}
+			<p class="text-xs text-destructive max-w-xs">{driveSession.error}</p>
 		{/if}
 	</div>
 
@@ -3629,7 +3563,7 @@
 				<Button variant="ghost" size="icon" onclick={openFolder} title="Open local folder" class="h-10 w-10">
 					<FolderOpen class="w-5 h-5" />
 				</Button>
-				<Button variant="ghost" size="icon" onclick={driveUser ? changeDriveFolder : connectGoogleDrive} title={driveUser ? 'Change Google Drive folder' : 'Connect Google Drive'} class="h-10 w-10">
+				<Button variant="ghost" size="icon" onclick={driveSession.user ? changeDriveFolder : connectGoogleDrive} title={driveSession.user ? 'Change Google Drive folder' : 'Connect Google Drive'} class="h-10 w-10">
 					<Cloud class="w-5 h-5" />
 				</Button>
 			</div>
