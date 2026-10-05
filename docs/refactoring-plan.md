@@ -130,7 +130,7 @@ named. Line ranges are anchors from the recon snapshot (`/tmp/pr3-recon.md`),
 taken before the dead-code follow-up above; treat them as anchors, not current
 offsets.
 
-Status: 3.1 and 3.2 merged (PR 4 and PR 5). 3.3 delivered on `refactor/pr3-3-folder-scan` (PR 6). 3.4 to 3.8 not started.
+Status: 3.1 to 3.3 merged. 3.4 delivered on `refactor/pr3-4-folder-picker`. 3.5 to 3.8 not started.
 
 **3.1 `driveSession` (`src/lib/drive/driveSession.svelte.ts`).**
 `hasValidDriveToken` (1259-1261), `ensureDriveAccessToken` (1263-1319) and the
@@ -182,12 +182,32 @@ but module imports and globals, so their signatures are unchanged.
 (1431-1434), `navigateFolderPickerBack` (1436-1439), `cancelFolderPicker`
 (1457-1466), `confirmCurrentFolder` (1562-1569), and the favorites trio
 `removeFavoriteFolder` (1488-1490), `isDriveFolderPickerFavorited` (1492-1494),
-`toggleDriveFolderPickerFavorite` (1496-1504). The module must own
-`showFolderPicker` (444), the `folderPicker*` state (445-449),
-`folderHasSubFolders` (450) and the intent key (442), because the focus and
-visibility effects read them. `confirmDriveFolderSelection` (1441-1455) stays a
-thin view-level composition: it resets `rootDirHandle`, `nativeTreeUri` and
-`libraryScanPromise` and calls `finishDriveLoad`.
+`toggleDriveFolderPickerFavorite` (1496-1504), delivered with 25 unit tests in
+`tests/unit/drive/folderPicker.test.ts`. The module owns `showFolderPicker`, the
+`folderPicker*` state, `folderHasSubFolders`, the intent key, the per-instance
+`isRestoringPendingDriveFolderPicker` flag and the restore-timer array. It is a
+factory (`createFolderPicker`), not a singleton, so two mounted decks never share
+a picker; the caller injects the deck's `driveSession`, a callback that resets
+the view's `isDriveAuthenticating`/`isDriveLoading` flags after a restore, and the
+view's `confirmDriveFolderSelection`. `confirmDriveFolderSelection` (1441-1455)
+stays a thin view-level composition: it resets `rootDirHandle`, `nativeTreeUri`
+and `libraryScanPromise` and calls `finishDriveLoad`.
+
+The recon was wrong about why the module must own the state. It said the focus
+and visibility effects read `showFolderPicker`/`folderPicker*`. They do not: the
+retry effect reads only `hasPendingDriveFolderPickerIntent` and calls
+`restorePendingDriveFolderPickerIfNeeded`, and the focus/visibility effect reads
+the same helper, writes the two busy flags and calls the restore/clear methods.
+The state belongs to the module because the moved functions read and write it and
+the picker template renders it. `hasRestoredPendingDriveFolderPicker` stays in the
+view, because it is the latch on that view's own restore effect.
+
+The recon also implied a `folderPickerToken` staleness guard in
+`loadFolderPickerLevel`, so a superseded load writes nothing. There is no such
+guard, and there never was: the view (and now the module) assigns
+`folderPickerFolders` from the awaited listing with no token or load-id check, so
+when two loads overlap the last to resolve wins. The extraction preserves that;
+adding a guard would be a behaviour change.
 
 **3.5 `driveLibrary` (`src/lib/drive/driveLibrary.ts`).**
 `activateDriveLibrary` (1328-1340), `finishDriveLoad` (1571-1654),
@@ -247,12 +267,13 @@ calls and leaves a spinner that never resolves.
 
 #### Test coverage
 
-Extractions 3.4 to 3.8 have no test coverage. `tests/unit` stops at
+Extractions 3.5 to 3.8 have no test coverage. `tests/unit` stops at
 `models/browse`, `models/player`, `utils/idb`, `utils/google-drive-auth-error`,
-the stores and the equalizer, and `tests/e2e/music-player.test.ts` drives a
-local folder only, with no Drive path, no folder picker and no transfer.
-Extractions 3.2 (`libraryCache`) and 3.3 (`folderScan`) are pure and ship unit
-tests of their own with their PRs.
+the stores, the equalizer and the three extracted browse/drive modules, and
+`tests/e2e/music-player.test.ts` drives a local folder only, with no Drive path,
+no folder picker and no transfer. Extractions 3.2 (`libraryCache`), 3.3
+(`folderScan`) and 3.4 (`folderPicker`) ship unit tests of their own with their
+PRs; 3.2 and 3.3 are pure, 3.4 mocks the two Drive calls.
 
 ### PR 4: browse and scan domain (absorbed into PR 3)
 
