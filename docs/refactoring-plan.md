@@ -503,9 +503,25 @@ unchanged) and seven moved with the code (five declarations and the two
 `isActiveEpisode` calls inside the two progress helpers). The view drops from
 1,392 to 1,342 lines. Groups 2 to 5 are not started.
 
+**6.2 `itunes` (`src/lib/podcast/itunes.ts`, pure).** Delivered on
+`refactor/pr6-podcast-itunes`, with 12 unit tests in
+`tests/unit/podcast/itunes.test.ts` (`fetch` mocked, no network). Moved
+`resolvePodcastApiUrl` and `searchITunes`, and the `ItunesResult` interface with
+them. `resolvePodcastApiUrl` now takes `(path, baseUrl)`; of its four view call
+sites, the one inside `searchITunes` moved with the function and the other three
+(the `rssFetchConfig` closure and the two iTunes-lookup URLs) now pass
+`podcastApiBaseUrl`. `searchITunes` takes `(q, { baseUrl, useHostedProxy })` and
+returns `ItunesResult[]`; it no longer writes `searchResults` or `searchLoading`.
+Returning the results (rather than accepting setters) keeps the module pure and
+lets the tests assert the value instead of spying on a callback. The view keeps a
+thin `runITunesSearch` wrapper that owns both state writes, so the debounce
+(400 ms) and the discover effect are unchanged. A short query, a non-ok
+response, a malformed body and any fetch rejection all still yield `[]`. The
+view drops from 1,342 to 1,317 lines. Groups 3 to 5 are not started.
+
 ### After the programme
 
-`PodcastView.svelte` (1,342 lines after group 1, complexity 242, its own
+`PodcastView.svelte` (1,317 lines after group 2, complexity 242, its own
 `safePlay`) is the next single-file target; PR 6 records the decision not to
 share `createPlayer` and the five-group order. The three duplicated handlers in
 `RadioView.svelte` fold into that pass.
