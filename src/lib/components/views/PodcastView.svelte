@@ -19,6 +19,10 @@
 	} from '$lib/podcast/rss';
 	import { runConcurrently } from '$lib/podcast/refresh';
 	import {
+		isActiveEpisode, getEpisodeProgressPercent, getEpisodeProgressLabel,
+		isNewEpisode, artworkFallback,
+	} from '$lib/podcast/episodeDisplay';
+	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
 		RefreshCw, X
@@ -474,60 +478,6 @@
 				positionSec: existing.positionSec
 			};
 		});
-	}
-
-	// ── Helpers ─────────────────────────────────────────────────
-	function isActiveEpisode(episode: Episode): boolean {
-		return currentEpisode?.episode.id === episode.id;
-	}
-	function getEpisodeProgressPercent(episode: Episode): number {
-		const savedProgress = episode.progress ?? 0;
-
-		if (!isActiveEpisode(episode)) {
-			return savedProgress;
-		}
-
-		const liveDuration = duration > 0 ? duration : episode.duration;
-		if (liveDuration <= 0 || currentTime <= 0) {
-			return savedProgress;
-		}
-
-		return Math.min(100, Number(((currentTime / liveDuration) * 100).toFixed(1)));
-	}
-	function getEpisodeProgressLabel(episode: Episode): string {
-		if (!isActiveEpisode(episode)) {
-			return '';
-		}
-
-		const progressPosition = currentTime > 0 ? currentTime : (episode.positionSec ?? 0);
-		if (progressPosition <= 0) {
-			return '';
-		}
-
-		const liveDuration = duration > 0 ? duration : episode.duration;
-		if (liveDuration <= 0) {
-			return `Playing ${formatDuration(progressPosition)}`;
-		}
-
-		return `${formatDuration(progressPosition)} of ${formatDuration(liveDuration)}`;
-	}
-	function artworkFallback(podcast: Podcast): string {
-		// Use a nice gradient placeholder if no artwork
-		const colors = [
-			'from-indigo-500 to-purple-600',
-			'from-cyan-500 to-blue-600',
-			'from-emerald-500 to-teal-600',
-			'from-orange-500 to-pink-600',
-		];
-		return colors[podcast.id % colors.length];
-	}
-	const NEW_EPISODE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
-	function isNewEpisode(episode: Episode): boolean {
-		if (episode.played || (episode.progress ?? 0) > 0 || (episode.positionSec ?? 0) > 0) return false;
-		if (!episode.publishedAt) return true;
-		const publishedTime = new Date(episode.publishedAt).getTime();
-		if (!Number.isFinite(publishedTime)) return true;
-		return Date.now() - publishedTime <= NEW_EPISODE_WINDOW_MS;
 	}
 
 	// ── iTunes Search ────────────────────────────────────────────
@@ -1112,9 +1062,9 @@
 				</div>
 			{:else}
 				{#each selectedPodcast.episodes as episode}
-					{@const activeEpisode = isActiveEpisode(episode)}
-					{@const episodeProgress = getEpisodeProgressPercent(episode)}
-					{@const episodeProgressLabel = getEpisodeProgressLabel(episode)}
+					{@const activeEpisode = isActiveEpisode(episode, currentEpisode)}
+					{@const episodeProgress = getEpisodeProgressPercent(episode, currentEpisode, currentTime, duration)}
+					{@const episodeProgressLabel = getEpisodeProgressLabel(episode, currentEpisode, currentTime, duration)}
 					{@const newEpisode = isNewEpisode(episode)}
 					<div
 						class="tap-feedback list-row-surface relative overflow-hidden border-l-[6px] p-4 border-b transition-colors cursor-pointer {newEpisode ? 'border-l-primary bg-gradient-to-r from-primary/20 via-primary/10 to-background shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] hover:from-primary/25 hover:via-primary/15 active:from-primary/30' : `border-l-transparent ${listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}`}"
