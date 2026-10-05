@@ -78,6 +78,23 @@ dead copies around.
 Left in place by choice, because they are exported helpers rather than local
 leftovers: `src/lib/utils/storage.ts:22 setJSON` and `:31 removeJSON`.
 
+### PR 1b: dead-code follow-up (delivered)
+
+Landed as branch `refactor/dead-code-followup` on top of `5e4e48f`, in two
+commits.
+
+- `Mp3PlayerView.svelte`: deleted `currentFolderAsFavorite` (zero callers) and
+the write-only `driveLoadProgress` state, 29 lines.
+- `src/lib/stores/library.svelte.ts`: deleted the whole dead `LibraryStore`
+class and `export const library = new LibraryStore()`, keeping only the
+`StoredAudioFile` and `BrowseEntry` types that `src/lib/models/browse.ts:1`,
+`src/lib/audio/fileResolver.ts:5` and `tests/unit/models/browse.test.ts:3-4`
+import. The five imports the class alone used are gone.
+- The file keeps its `.svelte.ts` name. The only reference to it beyond the
+three type importers is the gitignored analyzer snapshot
+`codedeck-analysis.json`, so the rename to `library.ts` is left for a later
+pass.
+
 ### PR 2: wire the ADR-0001 player module
 
 ADR-0001 (`docs/adr/0001-player-module.md`, accepted 2026-08-22) decided this
@@ -98,16 +115,121 @@ source to register a stop callback with `mediaEngine`. Deck A and Deck B would
 both keep playing. The view must register the module's `pause()` with
 `registerAudioSource`, and the migration PR must prove exclusivity with e2e.
 
-### PR 3: Drive and folder-picker domain
+### PR 3: Drive and folder-picker domain (eight extractions)
 
-About 52 Drive-related functions in the view, against a 703-line
-`src/lib/google-drive.ts` and `src/lib/stores/googleDriveSession.svelte.ts`
-already in place. Move the orchestration out of the view into those modules.
+Replaces the earlier single-step PR 3. Each extraction is its own
+behaviour-preserving PR, listed in dependency order, and each depends only on
+the earlier ones. Function names are in
+`src/lib/components/views/Mp3PlayerView.svelte` unless a target module is
+named. Line ranges are anchors from the recon snapshot (`/tmp/pr3-recon.md`),
+taken before the dead-code follow-up above; treat them as anchors, not current
+offsets.
 
-### PR 4: browse and scan domain
+**3.1 `driveSession` (`src/lib/drive/driveSession.svelte.ts`).**
+`hasValidDriveToken` (1259-1261), `ensureDriveAccessToken` (1263-1319) and the
+`formatDriveAuthError` alias (1178). Takes the `driveAccessToken`,
+`driveTokenExpiresAt`, `driveUser` and `driveError` state. `googleDriveSession`
+stays the persistence owner.
 
-About 30 functions. `src/lib/models/browse.ts` and
-`src/lib/native/directory-reader.ts` are the seams.
+**3.2 `libraryCache` (`src/lib/browse/libraryCache.ts`, pure).**
+`getDeviceLibraryCacheKey` (104-114, taking `treeUri` as a parameter instead of
+the `nativeTreeUri` default), `saveCachedLibrary` (115-152),
+`loadDeviceCachedLibrary` (153-160), `restoreStoredFilesFromCache` (162-179),
+`collectStoredFilesFromSnapshot` (1065-1071), `pathToString` (798-800),
+`collectFilesFromDirHandle` (1932-1942), `collectStoredFilesFromDirHandle`
+(1944-1960), `resolveDirAtPath` (1961-1976).
+
+**3.3 `folderScan` (`src/lib/browse/folderScan.ts`, pure).** `yieldScanToUi`
+(1072-1075), `scanNativeAudioFiles` (1077-1126), `collectAllFromPath`
+(1977-1999), `pickNativeAudioDirectory` (1826-1838). Driven by injected
+`{ nativeTreeUri, rootDirHandle, onBatch }`.
+
+**3.4 `folderPicker` (`src/lib/drive/folderPicker.svelte.ts`).**
+`hasPendingDriveFolderPickerIntent` (1180-1186), `markDriveFolderPickerPending`
+(1188-1194), `clearPendingDriveFolderPickerIntent` (1196-1202),
+`restorePendingDriveFolderPickerIfNeeded` (1204-1233),
+`schedulePendingDriveFolderPickerRestore` (1235-1248),
+`clearPendingDriveFolderPickerRestoreTimers` (1250-1257), `openFolderPicker`
+(1396-1402), `loadFolderPickerLevel` (1404-1429), `navigateFolderPickerInto`
+(1431-1434), `navigateFolderPickerBack` (1436-1439), `cancelFolderPicker`
+(1457-1466), `confirmCurrentFolder` (1562-1569), and the favorites trio
+`removeFavoriteFolder` (1488-1490), `isDriveFolderPickerFavorited` (1492-1494),
+`toggleDriveFolderPickerFavorite` (1496-1504). The module must own
+`showFolderPicker` (444), the `folderPicker*` state (445-449),
+`folderHasSubFolders` (450) and the intent key (442), because the focus and
+visibility effects read them. `confirmDriveFolderSelection` (1441-1455) stays a
+thin view-level composition: it resets `rootDirHandle`, `nativeTreeUri` and
+`libraryScanPromise` and calls `finishDriveLoad`.
+
+**3.5 `driveLibrary` (`src/lib/drive/driveLibrary.ts`).**
+`activateDriveLibrary` (1328-1340), `finishDriveLoad` (1571-1654),
+`loadDriveLibrary` (1342-1394), `connectGoogleDrive` (1657-1659),
+`refreshGoogleDrive` (1661-1667), `changeDriveFolder` (1669-1679),
+`openDriveSourceButton` (1680-1715), `materializeStoredFile` (1794-1824),
+`loadDriveFolderPicker` (2611-2621), `selectDriveFolderAndUpload` (2625-2659),
+`openDriveUploadFolderPicker` (2474-2484), `switchToFavorite` (1506-1542). Seams
+to inject: `player.clear`, the `allFiles`/`browseVersion` sink,
+`openFolderPicker`, `confirmDriveFolderSelection`.
+
+**3.6 `deviceLibrary` (`src/lib/device/deviceLibrary.svelte.ts`).**
+`activateDeviceLibrary` (1321-1326), `openFolder` (2114-2194),
+`handleFolderInput` (2196-2212), `handleNativeFileInput` (2214-2243),
+`reconnectFolder` (2244-2271), `restoreLocalLibrary` (1725-1791),
+`openLocalSourceButton` (1716-1723), `rescanCurrentLibraryIndex` (1544-1560),
+`startLibraryScan` (1128-1178), `loadLocalFolderPicker` (2509-2520),
+`navigateLocalPickerInto` (2522-2525), `selectLocalFolderAndDownload`
+(2528-2609), `downloadToLocalFolder` (2738-2797),
+`openLocalDownloadFolderPicker` (2486-2507). Needs the two `bind:this` input
+refs (`folderInputEl`, `nativeFileInputEl`) injected. `rescanCurrentLibraryIndex`
+must stay externally callable: `SettingsView.svelte:764` dispatches
+`music-library:rescan`, handled at 3065-3070.
+
+**3.7 `browseNavigation` (`src/lib/browse/browseNavigation.svelte.ts`).**
+`loadBrowseEntries` (1839-1931) with `_browseLoadId` (1838) kept per instance,
+`navigateInto` (2438-2443), `goToFileFolder` (2444-2456),
+`navigateToParentFolderFromSwipe` (2457-2461), `navigateUp` (2462-2472).
+`navigateUp` and `navigateToParentFolderFromSwipe` write `musicFavorites.shown`,
+so that store is an explicit dependency.
+
+**3.8 `fileOps` (`src/lib/files/fileOps.ts`).** `openDestinationForOp`
+(2661-2664), `openLocalDestinationPicker` (2666-2677), `confirmAndDelete`
+(2679-2687), `runPendingFileOp` (2689-2707), `deleteFileOp` (2709-2713),
+`moveOrCopyFileOp` (2715-2724), `handleMoveEntry`/`handleCopyEntry`/
+`handleDeleteEntry` (2726-2729), `folderOpNotice` (2730-2732),
+`reloadCurrentBrowse` (2734-2736). Needs only `nativeTreeUri` plus the
+local-picker callbacks.
+
+#### Two hard hazards
+
+1. Per-instance state must not become module-global. Two decks mount at once
+(the `deck` prop at `Mp3PlayerView.svelte:86`), so `_browseLoadId` (1838),
+`queueSessionId` (219), `trackListLockedByUser` (230), `libraryScanPromise`
+(231), `hasRestoredPendingDriveFolderPicker` (451),
+`isRestoringPendingDriveFolderPicker` (452) and
+`pendingDriveFolderPickerRestoreTimers` (453) must stay per instance or be
+threaded through a factory. Share them and deck A's load bumps the counter,
+deck B's in-flight `loadBrowseEntries` bails at 1861, 1909 or 1927, and
+`browseLoading` stays stale.
+2. The `untrack()` boundary at `Mp3PlayerView.svelte:2998-3063` is deliberate.
+It keeps reactive reads in the sync preamble, such as the `driveAccessToken`
+reads inside `ensureDriveAccessToken`, out of the mount effect's dependency
+set. The comment at 2993-2997 records the reason: without it the effect re-runs
+while hydration writes those signals, which fires concurrent `finishDriveLoad`
+calls and leaves a spinner that never resolves.
+
+#### Test coverage
+
+Extractions 3.4 to 3.8 have no test coverage. `tests/unit` stops at
+`models/browse`, `models/player`, `utils/idb`, `utils/google-drive-auth-error`,
+the stores and the equalizer, and `tests/e2e/music-player.test.ts` drives a
+local folder only, with no Drive path, no folder picker and no transfer.
+Extractions 3.2 (`libraryCache`) and 3.3 (`folderScan`) are pure and ship unit
+tests of their own with their PRs.
+
+### PR 4: browse and scan domain (absorbed into PR 3)
+
+Now covered by PR 3.2 (`libraryCache`), PR 3.3 (`folderScan`) and PR 3.7
+(`browseNavigation`), so no separate PR is needed.
 
 ### PR 5: favourites domain
 
@@ -145,6 +267,16 @@ not lost; none of them blocks this PR.
   the src without starting playback, resolves `false`, and does not claim the
   channel. Pinned by "next from a loaded, paused deck changes track without
   beginning playback" in `tests/unit/models/player.test.ts`.
+- `resolveTrackUrl` (`Mp3PlayerView.svelte:2000-2058`) and
+  `appendTracksToQueue` (2105-2113) still duplicate the URL lifecycle and queue
+  merge that `src/lib/audio/player.svelte.ts` owns in `ensureUrl` (240),
+  `releaseUrl` (261) and `loadQueue` (279). Retire both when the view binds to
+  the module.
+- The PR 1 dead-code sweep missed the two view leftovers
+  (`currentFolderAsFavorite`, `driveLoadProgress`) and the whole dead
+  `LibraryStore` class, so the analyzer behind it produced false negatives as
+  well as false positives. Use its candidate list as a starting point only and
+  confirm every deletion with a word-boundary grep.
 
 ## Out of scope
 
