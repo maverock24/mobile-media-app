@@ -130,19 +130,30 @@ named. Line ranges are anchors from the recon snapshot (`/tmp/pr3-recon.md`),
 taken before the dead-code follow-up above; treat them as anchors, not current
 offsets.
 
+Status: 3.1 merged (PR 4). 3.2 in review (PR 5). 3.3 to 3.8 not started.
+
 **3.1 `driveSession` (`src/lib/drive/driveSession.svelte.ts`).**
 `hasValidDriveToken` (1259-1261), `ensureDriveAccessToken` (1263-1319) and the
 `formatDriveAuthError` alias (1178). Takes the `driveAccessToken`,
 `driveTokenExpiresAt`, `driveUser` and `driveError` state. `googleDriveSession`
 stays the persistence owner.
 
-**3.2 `libraryCache` (`src/lib/browse/libraryCache.ts`, pure).**
-`getDeviceLibraryCacheKey` (104-114, taking `treeUri` as a parameter instead of
-the `nativeTreeUri` default), `saveCachedLibrary` (115-152),
-`loadDeviceCachedLibrary` (153-160), `restoreStoredFilesFromCache` (162-179),
-`collectStoredFilesFromSnapshot` (1065-1071), `pathToString` (798-800),
-`collectFilesFromDirHandle` (1932-1942), `collectStoredFilesFromDirHandle`
-(1944-1960), `resolveDirAtPath` (1961-1976).
+**3.2 `libraryCache` (`src/lib/browse/libraryCache.ts`, pure).** Delivered, with
+40 unit tests in `tests/unit/browse/libraryCache.test.ts`. Moved:
+`getDeviceLibraryCacheKey`, `saveCachedLibrary`, `loadDeviceCachedLibrary`,
+`restoreStoredFilesFromCache`, `collectStoredFilesFromSnapshot`, `pathToString`,
+`collectFilesFromDirHandle`, `collectStoredFilesFromDirHandle`,
+`resolveDirAtPath`, plus the `LAST_LIBRARY_CACHE_KEY` constant.
+
+The recon was wrong about two of these. `getDeviceLibraryCacheKey` already took
+`treeUri` in its options object, with no `nativeTreeUri` default, and
+`collectStoredFilesFromDirHandle` already took its directory as a parameter.
+Only `resolveDirAtPath` closed over component state. The signatures that did
+change: `saveCachedLibrary(treeUri, folderName, files)` now requires the tree
+URI that three of its four callers already passed,
+`collectStoredFilesFromSnapshot(files, path, sortOrder)` takes the sort order
+instead of calling the view's wrapper, and `resolveDirAtPath(root, path)` takes
+the root handle.
 
 **3.3 `folderScan` (`src/lib/browse/folderScan.ts`, pure).** `yieldScanToUi`
 (1072-1075), `scanNativeAudioFiles` (1077-1126), `collectAllFromPath`
@@ -249,8 +260,8 @@ engine shares `createPlayer`. The three duplicated handlers in
 
 ## Known follow-ups
 
-Non-blocking items the three audits of PR 2 left open. Recorded here so they are
-not lost; none of them blocks this PR.
+Non-blocking items left open by the PR 2 audits and by the PR 3 extractions.
+Recorded here so they are not lost; none of them blocks a PR.
 
 - A re-sorting `append()` can put a resolved URL on the wrong index. `ensureUrl`
   writes the URL to the index captured before its `await`, so a file that sorts
@@ -282,6 +293,14 @@ not lost; none of them blocks this PR.
   `LibraryStore` class, so the analyzer behind it produced false negatives as
   well as false positives. Use its candidate list as a starting point only and
   confirm every deletion with a word-boundary grep.
+- `Mp3PlayerView.svelte` still imports `idbGet`, `idbDelete`,
+  `CachedWebLibraryFile` and `CachedNativeLibraryFile` without using them. They
+  predate the PR 3 extractions and belong with the browse groups that will touch
+  those imports anyway. `src/lib/utils/idb.ts:9` also still describes
+  `saveCachedLibrary` as view-coupled, which stopped being true in 3.2.
+- `saveCachedLibrary` silently drops files whose source is Drive, so a
+  drive-only library is never cached. Behaviour unchanged and pinned by a test
+  in `tests/unit/browse/libraryCache.test.ts`; fix it deliberately or not at all.
 
 ## Out of scope
 
