@@ -130,7 +130,7 @@ named. Line ranges are anchors from the recon snapshot (`/tmp/pr3-recon.md`),
 taken before the dead-code follow-up above; treat them as anchors, not current
 offsets.
 
-Status: 3.1 to 3.4 merged. 3.5 delivered on `refactor/pr3-5-drive-library`. 3.6 to 3.8 not started.
+Status: 3.1 to 3.5 merged. 3.6 delivered on `refactor/pr3-6-device-library`. 3.7 and 3.8 not started.
 
 **3.1 `driveSession` (`src/lib/drive/driveSession.svelte.ts`).**
 `hasValidDriveToken` (1259-1261), `ensureDriveAccessToken` (1263-1319) and the
@@ -253,6 +253,37 @@ refs (`folderInputEl`, `nativeFileInputEl`) injected. `rescanCurrentLibraryIndex
 must stay externally callable: `SettingsView.svelte:764` dispatches
 `music-library:rescan`, handled at 3065-3070.
 
+Delivered on `refactor/pr3-6-device-library` with 35 unit tests in
+`tests/unit/device/deviceLibrary.test.ts`. `createDeviceLibrary` is a factory,
+like the earlier extractions. It owns `libraryScanPromise`, `rootDirHandle`,
+`nativeTreeUri`, `pendingHandle`, `scanProgress`, `trackListLockedByUser`,
+`deckFolderLabel` and the Android local-picker fields (`localPickerPath`,
+`localPickerEntries`, `localPickerLoading`). Everything else is injected:
+`allFiles` and `browsePath` (the browse view owns and reads them),
+`showQueue`, the open-folder spinner `isLoading`, the `driveSearch` write target,
+the transfer state shared with 3.5 and 3.8 (`transferFile`,
+`transferDirection`, `isTransferring`, `transferProgress`, `transferPhase`,
+`showLocalFolderPicker`, `isFileOpRunning`, `pendingFileOp`), the
+`bumpBrowseVersion` / `hydrateTracksFromLibrary` / `runPendingFileOp` callbacks,
+the Drive library's `refreshGoogleDrive` (for the drive branch of
+`rescanCurrentLibraryIndex`), `isNativeApp`, and the two input refs as getters.
+
+This paragraph understated the seam: naming only the two input refs implied the
+module needs nothing else from the view. It needs the accessor and callback list
+above. The 3.5 paragraph was also wrong that `browsePath`, `showQueue` and
+`showPanel` settle into 3.6: they do not. `browsePath` and `showQueue` stay in
+the view (extraction 3.7 owns them) and `showPanel` is EQ-panel state. Moving
+`libraryScanPromise`, `rootDirHandle`, `nativeTreeUri` and `pendingHandle` did
+re-point 3.5's injected `view` accessor: those four getters and setters now read
+and write the `deviceLibrary` instance, and `createDriveLibrary`'s injected
+`activateDeviceLibrary` is now `deviceLibrary.activateDeviceLibrary`.
+`driveLibrary.ts` is otherwise unchanged.
+
+`rescanCurrentLibraryIndex` stays externally callable: the view keeps the
+`music-library:rescan` window listener and calls
+`deviceLibrary.rescanCurrentLibraryIndex()` from it, so
+`SettingsView.svelte:764` is untouched.
+
 **3.7 `browseNavigation` (`src/lib/browse/browseNavigation.svelte.ts`).**
 `loadBrowseEntries` (1839-1931) with `_browseLoadId` (1838) kept per instance,
 `navigateInto` (2438-2443), `goToFileFolder` (2444-2456),
@@ -288,14 +319,16 @@ calls and leaves a spinner that never resolves.
 
 #### Test coverage
 
-Extractions 3.6 to 3.8 have no test coverage. `tests/unit` stops at
+Extractions 3.7 and 3.8 have no test coverage. `tests/unit` stops at
 `models/browse`, `models/player`, `utils/idb`, `utils/google-drive-auth-error`,
-the stores, the equalizer and the extracted browse/drive modules, and
+the stores, the equalizer and the extracted browse/drive/device modules, and
 `tests/e2e/music-player.test.ts` drives a local folder only, with no Drive path,
 no folder picker and no transfer. Extractions 3.2 (`libraryCache`), 3.3
-(`folderScan`), 3.4 (`folderPicker`) and 3.5 (`driveLibrary`) ship unit tests of
-their own with their PRs; 3.2 and 3.3 are pure, 3.4 mocks the two Drive calls,
-3.5 mocks the Drive calls, the Drive cache and the native resolver.
+(`folderScan`), 3.4 (`folderPicker`), 3.5 (`driveLibrary`) and 3.6
+(`deviceLibrary`) ship unit tests of their own with their PRs; 3.2 and 3.3 are
+pure, 3.4 mocks the two Drive calls, 3.5 mocks the Drive calls, the Drive cache
+and the native resolver, and 3.6 mocks the native plugin, the cache, the Drive
+download and the File System Access API.
 
 ### PR 4: browse and scan domain (absorbed into PR 3)
 
