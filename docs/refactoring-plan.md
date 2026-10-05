@@ -130,7 +130,7 @@ named. Line ranges are anchors from the recon snapshot (`/tmp/pr3-recon.md`),
 taken before the dead-code follow-up above; treat them as anchors, not current
 offsets.
 
-Status: 3.1 to 3.3 merged. 3.4 delivered on `refactor/pr3-4-folder-picker`. 3.5 to 3.8 not started.
+Status: 3.1 to 3.4 merged. 3.5 delivered on `refactor/pr3-5-drive-library`. 3.6 to 3.8 not started.
 
 **3.1 `driveSession` (`src/lib/drive/driveSession.svelte.ts`).**
 `hasValidDriveToken` (1259-1261), `ensureDriveAccessToken` (1263-1319) and the
@@ -215,9 +215,30 @@ adding a guard would be a behaviour change.
 `refreshGoogleDrive` (1661-1667), `changeDriveFolder` (1669-1679),
 `openDriveSourceButton` (1680-1715), `materializeStoredFile` (1794-1824),
 `loadDriveFolderPicker` (2611-2621), `selectDriveFolderAndUpload` (2625-2659),
-`openDriveUploadFolderPicker` (2474-2484), `switchToFavorite` (1506-1542). Seams
-to inject: `player.clear`, the `allFiles`/`browseVersion` sink,
-`openFolderPicker`, `confirmDriveFolderSelection`.
+`openDriveUploadFolderPicker` (2474-2484), `switchToFavorite` (1506-1542).
+
+Delivered on `refactor/pr3-5-drive-library` with 24 unit tests in
+`tests/unit/drive/driveLibrary.test.ts`. `createDriveLibrary` is a factory, like
+`createDriveSession` and `createFolderPicker`. It is a plain `.ts` module and
+holds no runes: the deck allocates the reactive busy bag (`isDriveLoading`,
+`isDriveAuthenticating`, `driveLoadAbort`) and the factory owns every transition
+of it.
+
+The recon was wrong about the seam list, and so was this paragraph. The four
+seams listed before (`player.clear`, the `allFiles`/`browseVersion` sink,
+`openFolderPicker`, `confirmDriveFolderSelection`) are not enough. `openFolderPicker`
+is not a standalone seam at all: it arrives on the injected `folderPicker`
+instance. The module also needs `hydrateTracksFromLibrary` and
+`activateDeviceLibrary` (both reached by `switchToFavorite`), an accessor for
+every piece of view state the functions wrote (`allFiles`, and the device-side
+`libraryScanPromise`/`rootDirHandle`/`nativeTreeUri`/`pendingHandle`/`browsePath`/
+`showQueue`/`showPanel` that settle into 3.6, the `switchingToFavId` favourite
+spinner, and the Drive transfer picker state `drivePickerLoading`/
+`drivePickerFolders`/`showDriveFolderPicker`/`transferFile`/`transferDirection`/
+`isTransferring`/`isFileOpRunning` that settles into 3.8), and the `busy` bag
+itself. The mount effect's `untrack()` boundary is unchanged: the effect still
+calls `driveLibrary.finishDriveLoad(...)` from inside it, so no reactive read in
+`finishDriveLoad`'s synchronous preamble becomes an effect dependency.
 
 **3.6 `deviceLibrary` (`src/lib/device/deviceLibrary.svelte.ts`).**
 `activateDeviceLibrary` (1321-1326), `openFolder` (2114-2194),
@@ -267,13 +288,14 @@ calls and leaves a spinner that never resolves.
 
 #### Test coverage
 
-Extractions 3.5 to 3.8 have no test coverage. `tests/unit` stops at
+Extractions 3.6 to 3.8 have no test coverage. `tests/unit` stops at
 `models/browse`, `models/player`, `utils/idb`, `utils/google-drive-auth-error`,
-the stores, the equalizer and the three extracted browse/drive modules, and
+the stores, the equalizer and the extracted browse/drive modules, and
 `tests/e2e/music-player.test.ts` drives a local folder only, with no Drive path,
 no folder picker and no transfer. Extractions 3.2 (`libraryCache`), 3.3
-(`folderScan`) and 3.4 (`folderPicker`) ship unit tests of their own with their
-PRs; 3.2 and 3.3 are pure, 3.4 mocks the two Drive calls.
+(`folderScan`), 3.4 (`folderPicker`) and 3.5 (`driveLibrary`) ship unit tests of
+their own with their PRs; 3.2 and 3.3 are pure, 3.4 mocks the two Drive calls,
+3.5 mocks the Drive calls, the Drive cache and the native resolver.
 
 ### PR 4: browse and scan domain (absorbed into PR 3)
 
