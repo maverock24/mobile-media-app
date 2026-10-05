@@ -2868,8 +2868,13 @@
 	 *  this deck the way startPlayback does (flag first, then claim) — a layer
 	 *  playing elsewhere, such as a YouTube panel, must stop when this deck takes
 	 *  over. A skip that rewinds in place, stops at the end of the queue, loops the
-	 *  same track or finds every track broken does not claim, matching the
-	 *  pre-migration code that only claimed after a URL had been resolved. */
+	 *  same track or finds every track broken does not claim, and neither does a
+	 *  step back on a paused deck, which only loads the src and starts nothing.
+	 *  Claiming follows the start of playback, not a resolved URL: the pre-migration
+	 *  code claimed as soon as a URL landed, paused deck included, and set the
+	 *  deck's playing flag with no isPlaying change, so the flag stuck true. That
+	 *  claim without playback is deliberately gone. A next() from a paused deck
+	 *  does start playback here, so it claims, in step with isPlaying. */
 	function claimDeckAudioForSkip() {
 		// Set the playing flag before claiming so mediaEngine.isPlaying never
 		// transiently drops to false while other sources are paused — the same
