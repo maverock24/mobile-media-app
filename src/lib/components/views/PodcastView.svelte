@@ -6,10 +6,10 @@
 	import { pullToRefresh, swipeBack } from '$lib/actions/touch';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
-	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
+	import { triggerSwipeBackHaptic } from '$lib/native/haptics';
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import { appSettings, podcastSettings, podcastData } from '$lib/stores/settings.svelte';
-	import { mediaEngine, claimAudio, registerAudioSource, markUserPaused } from '$lib/stores/mediaEngine.svelte';
+	import { mediaEngine, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	import { formatDuration } from '$lib/models/music';
@@ -22,12 +22,15 @@
 		searchITunes, type ItunesResult,
 	} from '$lib/podcast/itunes';
 	import {
-		syncPersistedEpisodeState, markEpisodeFullyPlayed,
-		getEpisodeResumePosition, shouldPersistProgress, type PodcastProgressView,
+		syncPersistedEpisodeState,
+		getEpisodeResumePosition, type PodcastProgressView,
 	} from '$lib/podcast/progress';
 	import {
 		createPodcastLibrary, type PodcastLibrary,
 	} from '$lib/podcast/podcastLibrary';
+	import {
+		createPodcastPlayer, type PodcastPlayer,
+	} from '$lib/podcast/podcastPlayer';
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
@@ -95,7 +98,6 @@
 	let currentTime    = $state(0);
 	let duration       = $state(0);
 	let audioEl: HTMLAudioElement;
-	let _userPaused = false;
 
 	// The progress module is a plain `.ts`; it reads and replaces the two
 	// component-owned objects through this accessor (the shape fileOps uses).
@@ -135,6 +137,30 @@
 		config: { baseUrl: podcastApiBaseUrl, useHostedProxy: useHostedPodcastProxy },
 	});
 
+	// The podcast transport lives in the per-view `createPodcastPlayer` factory
+	// (PR 6 group 5). It is a rune-free `.ts`; the component keeps the reactive
+	// playback state and hands it over through this accessor, and the
+	// `bind:this`-bound `<audio>` element through `getAudioEl`. The pending
+	// reconnect listener, the user-pause flag and the element throttle stamps
+	// are private to the factory.
+	const podcastPlayer: PodcastPlayer = createPodcastPlayer({
+		view: {
+			get selectedPodcast() { return selectedPodcast; },
+			set selectedPodcast(v) { selectedPodcast = v; },
+			get currentEpisode() { return currentEpisode; },
+			set currentEpisode(v) { currentEpisode = v; },
+			get isPlaying() { return isPlaying; },
+			set isPlaying(v) { isPlaying = v; },
+			get isBuffering() { return isBuffering; },
+			set isBuffering(v) { isBuffering = v; },
+			get currentTime() { return currentTime; },
+			set currentTime(v) { currentTime = v; },
+			get duration() { return duration; },
+			set duration(v) { duration = v; },
+		},
+		getAudioEl: () => audioEl,
+	});
+
 	// ── Register stop-callback ───────────────────────────────────
 	$effect(() => {
 		registerAudioSource('podcast', () => {
@@ -149,224 +175,15 @@
 		});
 	});
 
-	function claimPodcastControls() {
-		if (typeof mediaEngine.setPlaybackHandlers === 'function') {
-			mediaEngine.setPlaybackHandlers(
-				() => { resumePlayback(); },
-				() => { pausePlayback(); },
-				(pos) => { handleSeekSeconds(pos); }
-			);
-		}
-
-		if (typeof mediaEngine.setSkipHandlers === 'function') {
-			mediaEngine.setSkipHandlers(
-				() => { nextEpisode(); },
-				() => { prevEpisode(); }
-			);
-		}
-	}
-
-	// ── Network-loss auto-resume ─────────────────────────────────
-	// When a MEDIA_ERR_NETWORK error fires (or the stream stalls while offline),
-	// we save the URL + position and listen for the 'online' event. Once the
-	// connection returns we reload the stream and seek back to where it stopped.
-	let _reconnectListener: (() => void) | null = null;
-
-	/** Retry audioEl.play() on AbortError — remote URLs can abort on Android
-	 *  WebView when the source isn't ready yet after setting src. Uses up to 6
-	 *  retries on native (3 on web) with longer backoff for cold Capacitor starts. */
-	function safePlay(onFailure?: () => void) {
-		const maxRetries = Capacitor.isNativePlatform() ? 6 : 3;
-		const retryDelayMs = Capacitor.isNativePlatform() ? 250 : 150;
-		const tryPlay = (attempt: number) => {
-			audioEl!.play().catch((err: Error) => {
-				if (err?.name === 'AbortError' && attempt < maxRetries) {
-					setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
-				} else {
-					onFailure?.();
-				}
-			});
-		};
-		tryPlay(0);
-	}
-
-	function cancelNetworkRetry() {
-		if (_reconnectListener) {
-			window.removeEventListener('online', _reconnectListener);
-			_reconnectListener = null;
-		}
-	}
-
-	function scheduleReconnectResume(url: string, positionSec: number) {
-		cancelNetworkRetry(); // replace any previous pending retry
-		_reconnectListener = () => {
-			cancelNetworkRetry();
-			if (!currentEpisode || !audioEl) return;
-			audioEl.src = url;
-			if (positionSec > 1) {
-				audioEl.addEventListener('loadedmetadata', () => {
-					if (audioEl.currentTime < positionSec) audioEl.currentTime = positionSec;
-				}, { once: true });
-			}
-			mediaEngine.podcastPlaying = true;
-			claimAudio('podcast');
-			isBuffering = true;
-			safePlay(() => {
-				isBuffering = false;
-				mediaEngine.podcastPlaying = false;
-				addToast({ message: 'Reconnected but failed to resume. Tap play to retry.', type: 'warning', autoDismissMs: 5000 });
-			});
-		};
-		window.addEventListener('online', _reconnectListener);
-	}
-
 	// ── Audio element event wiring ───────────────────────────────
+	// The nine element listeners — including the throttled progress persist and
+	// the reconnect/auto-resume/ended handlers — now live in the transport
+	// module. This effect still owns their lifecycle: it attaches them when the
+	// `bind:this` element is available and tears them down (and cancels any
+	// pending reconnect) on cleanup, at exactly the same moments as before.
 	$effect(() => {
 		if (!audioEl) return;
-		// Throttle timeupdate to ~4Hz — smooth for seek bar, 15× less CPU than 60fps
-		let _lastTimeUpdate = 0;
-		let _lastProgressPersist = 0; // last time we flushed progress to the persisted store
-		const onTimeUpdate = () => {
-			const now = Date.now();
-			if (now - _lastTimeUpdate < 250) return;
-			_lastTimeUpdate = now;
-			currentTime = audioEl.currentTime;
-			if (mediaEngine.source === 'podcast') {
-				mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
-			}
-			const playbackDuration =
-				(isFinite(audioEl.duration) && audioEl.duration > 0)
-					? audioEl.duration
-					: currentEpisode?.episode.duration ?? duration;
-			if (currentEpisode && playbackDuration > 0) {
-				const updatedEpisode = {
-					...currentEpisode.episode,
-					progress: Math.min(100, Number(((audioEl.currentTime / playbackDuration) * 100).toFixed(1))),
-					positionSec: audioEl.currentTime,
-					duration: playbackDuration,
-				};
-				// Keep the in-memory position current for the UI every tick, but only
-				// commit to the persisted store on a coarse cadence. Persisting on
-				// every 250ms tick re-serialises the WHOLE podcast-data blob (all
-				// subscriptions' episodes) 4x/second — that main-thread + storage churn
-				// is a major source of jank and of localStorage quota pressure on
-				// Android, and a single over-quota write permanently kills that store.
-				currentEpisode = { ...currentEpisode, episode: updatedEpisode };
-				if (shouldPersistProgress(_lastProgressPersist, now)) {
-					_lastProgressPersist = now;
-					syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode, progressView);
-				}
-			}
-		};
-		const onLoadedMetadata = () => {
-			duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
-			if (currentEpisode && duration > 0) {
-				syncPersistedEpisodeState(currentEpisode.podcast.id, {
-					...currentEpisode.episode,
-					duration,
-				}, progressView);
-			}
-			if (mediaEngine.source === 'podcast') {
-				mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
-			}
-		};
-		const onPlay  = () => { isPlaying = true;  isBuffering = false; mediaEngine.podcastPlaying = true;  };
-		const onPause = () => {
-			const wasUserPaused = _userPaused;
-			_userPaused = false;
-			isPlaying = false;
-			mediaEngine.podcastPlaying = false;
-			// Pause is a natural checkpoint — flush the current position to the
-			// persisted store so a kill/background right after pausing still has an
-			// exact resume point (timeupdate persistence is throttled to ~5s).
-			if (currentEpisode) {
-				_lastProgressPersist = Date.now();
-				const positionSec = audioEl?.currentTime ?? currentEpisode.episode.positionSec ?? 0;
-				const playbackDuration =
-					(isFinite(audioEl?.duration ?? 0) && (audioEl?.duration ?? 0) > 0)
-						? (audioEl?.duration ?? 0)
-						: (currentEpisode.episode.duration ?? duration ?? 0);
-				const progress = playbackDuration > 0
-					? Math.min(100, Number(((positionSec / playbackDuration) * 100).toFixed(1)))
-					: currentEpisode.episode.progress ?? 0;
-				const updatedEpisode = {
-					...currentEpisode.episode,
-					positionSec,
-					progress,
-					duration: playbackDuration || currentEpisode.episode.duration,
-				};
-				syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode, progressView);
-				podcastData.lastPositionSec = positionSec;
-			}
-			// System paused us (Android Doze, audio-focus churn) — try to resume.
-			// Retry up to 3 times with backoff, same pattern as MP3 safePlay.
-			// Do NOT resume when the audio reached its natural end (ended fires
-			// before pause, so audioEl.ended is already true by here).
-			if (!wasUserPaused && currentEpisode && !audioEl.ended) {
-				const tryResume = (attempt: number) => {
-					audioEl?.play().catch(() => {
-						if (attempt < 3) setTimeout(() => tryResume(attempt + 1), 300 * (attempt + 1));
-					});
-				};
-				setTimeout(() => tryResume(0), 150);
-			}
-		};
-		const onWaiting  = () => { isBuffering = true; };
-		const onPlaying  = () => { isBuffering = false; };
-		const onEnded = () => {
-			isPlaying = false;
-			isBuffering = false;
-			mediaEngine.podcastPlaying = false;
-			if (currentEpisode) {
-				markEpisodeFullyPlayed(currentEpisode.podcast.id, currentEpisode.episode, progressView);
-			}
-			// Stop — do NOT auto-play the next episode. Clear the now-playing item
-			// so the background-resume watchdog doesn't replay the ended episode.
-			mediaEngine.item = null;
-		};
-		const onError = () => {
-			const err = audioEl.error;
-			isBuffering = false;
-			if (err?.code === 2 && currentEpisode) {
-				scheduleReconnectResume(audioEl.src, audioEl.currentTime);
-				addToast({ message: 'Connection lost — will resume when reconnected.', type: 'warning', autoDismissMs: 6000 });
-			} else {
-				isPlaying = false;
-				mediaEngine.podcastPlaying = false;
-				if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-					addToast({ message: 'This audio format is not supported.', type: 'error', autoDismissMs: 4000 });
-				}
-			}
-		};
-		// stalled = browser requested audio data but received nothing (common on network drop).
-		// Only treat it as a connectivity loss when the device reports it is offline.
-		const onStalled = () => {
-			if (!navigator.onLine && currentEpisode && !_reconnectListener) {
-				scheduleReconnectResume(audioEl.src, audioEl.currentTime);
-				addToast({ message: 'Connection lost — will resume when reconnected.', type: 'warning', autoDismissMs: 6000 });
-			}
-		};
-		audioEl.addEventListener('timeupdate',     onTimeUpdate);
-		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
-		audioEl.addEventListener('play',    onPlay);
-		audioEl.addEventListener('pause',   onPause);
-		audioEl.addEventListener('ended',   onEnded);
-		audioEl.addEventListener('error',   onError);
-		audioEl.addEventListener('waiting', onWaiting);
-		audioEl.addEventListener('playing', onPlaying);
-		audioEl.addEventListener('stalled', onStalled);
-		return () => {
-			audioEl?.removeEventListener('timeupdate',     onTimeUpdate);
-			audioEl?.removeEventListener('loadedmetadata', onLoadedMetadata);
-			audioEl?.removeEventListener('play',    onPlay);
-			audioEl?.removeEventListener('pause',   onPause);
-			audioEl?.removeEventListener('ended',   onEnded);
-			audioEl?.removeEventListener('error',   onError);
-			audioEl?.removeEventListener('waiting', onWaiting);
-			audioEl?.removeEventListener('playing', onPlaying);
-			audioEl?.removeEventListener('stalled', onStalled);
-			cancelNetworkRetry();
-		};
+		return podcastPlayer.attachElementListeners(audioEl);
 	});
 
 	// ── Sync playback speed ──────────────────────────────────────
@@ -447,149 +264,6 @@
 		}
 	});
 
-	// ── Playback ─────────────────────────────────────────────────
-	function syncEpisodeAudioSource(podcast: Podcast, episode: Episode, resumeAt: number) {
-		audioEl.playbackRate = podcastSettings.playbackSpeed;
-		if (audioEl.src !== episode.audioUrl) {
-			audioEl.src = episode.audioUrl;
-			if (resumeAt > 10) {
-				audioEl.addEventListener('loadedmetadata', () => {
-					if (currentEpisode?.episode.id !== episode.id) return;
-					audioEl.currentTime = resumeAt;
-					currentTime = resumeAt;
-				}, { once: true });
-			}
-		}
-
-		mediaEngine.setNowPlaying({
-			id:         episode.id,
-			source:     'podcast',
-			title:      episode.title,
-			subtitle:   podcast.title,
-			audioUrl:   episode.audioUrl,
-			artworkUrl: podcast.artworkUrl,
-			duration:   episode.duration
-		}, 'podcast');
-		claimPodcastControls();
-	}
-
-	function playEpisode(podcast: Podcast, episode: Episode) {
-		if (!episode.audioUrl) {
-			addToast({ message: 'This episode has no playable audio URL.', type: 'error' });
-			return;
-		}
-		cancelNetworkRetry(); // clear any pending retry for the previous episode
-		podcastSettings.playbackSpeed = 1.0; // reset speed for each new episode so the 1.5x button is off by default
-		void triggerPlaybackHaptic(true);
-
-		// If another episode is currently playing, pause it explicitly before
-		// claiming audio. This makes the audio element's 'pause' event fire while
-		// currentEpisode still points to the OLD episode, so its position is saved
-		// correctly and the auto-resume logic is skipped. Without this,
-		// claimAudio() fires the stop callback after currentEpisode has already
-		// been swapped, causing stale position data to be written to the new
-		// episode and triggering a spurious auto-resume.
-		if (audioEl && isPlaying && currentEpisode && currentEpisode.episode.id !== episode.id) {
-			_userPaused = true;
-			audioEl.pause();
-		}
-
-		// Set playing flag BEFORE claimAudio so isPlaying never transiently
-		// drops to false — prevents rapid focus abandon→request on Android.
-		mediaEngine.podcastPlaying = true;
-		claimAudio('podcast');
-
-		currentEpisode = { podcast, episode };
-		// Calculate resume position BEFORE updating lastEpisodeId, otherwise
-		// getEpisodeResumePosition() thinks the new episode is the last-played
-		// one and applies lastPositionSec from the previous episode.
-		const resumeAt = getEpisodeResumePosition(episode);
-		// Record this as the last-played episode and seed lastPositionSec with
-		// the resume point so a pause/background later saves to the right episode.
-		podcastData.lastEpisodeId = episode.id;
-		podcastData.lastPodcastId = podcast.id;
-		podcastData.lastPositionSec = resumeAt;
-
-		duration = episode.duration;
-		currentTime = resumeAt > 10 ? resumeAt : 0;
-		syncEpisodeAudioSource(podcast, episode, resumeAt);
-		isBuffering = true;
-		safePlay(() => {
-			isBuffering = false;
-			mediaEngine.podcastPlaying = false;
-			console.error('[Podcast] play() failed:', 'url:', episode.audioUrl);
-			addToast({ message: `Playback failed.`, type: 'error' });
-		});
-	}
-
-	function activateEpisode(podcast: Podcast, episode: Episode) {
-		if (currentEpisode?.episode.id === episode.id) {
-			togglePlay();
-			return;
-		}
-
-		playEpisode(podcast, episode);
-	}
-
-	function togglePlay() {
-		if (isPlaying) {
-			pausePlayback();
-		} else {
-			resumePlayback();
-		}
-	}
-
-	function pausePlayback() {
-		if (!audioEl || !currentEpisode || !isPlaying) return;
-		_userPaused = true;
-		// Deliberate pause: tell the engine too, so the Android background recovery
-		// does not restart the episode when the phone is later locked.
-		markUserPaused();
-		void triggerPlaybackHaptic(false);
-		cancelNetworkRetry();
-		audioEl.pause();
-	}
-
-	function resumePlayback() {
-		if (!audioEl || !currentEpisode || isPlaying) return;
-		_userPaused = false;
-		void triggerPlaybackHaptic(true);
-		mediaEngine.podcastPlaying = true;
-		claimAudio('podcast');
-		syncEpisodeAudioSource(
-			currentEpisode.podcast,
-			currentEpisode.episode,
-			getEpisodeResumePosition(currentEpisode.episode)
-		);
-		safePlay(() => {
-			mediaEngine.podcastPlaying = false;
-			console.error('[Podcast] resumePlayback() failed');
-		});
-	}
-
-	function prevEpisode() {
-		if (!currentEpisode) return;
-		const podcast = podcastData.podcasts.find(p => p.id === currentEpisode!.podcast.id);
-		if (!podcast) return;
-		const eps = podcast.episodes;
-		const idx = eps.findIndex(e => e.id === currentEpisode!.episode.id);
-		if (idx > 0) playEpisode(podcast, eps[idx - 1]);
-	}
-
-	function nextEpisode() {
-		if (!currentEpisode) return;
-		const podcast = podcastData.podcasts.find(p => p.id === currentEpisode!.podcast.id);
-		if (!podcast) return;
-		const eps = podcast.episodes;
-		const idx = eps.findIndex(e => e.id === currentEpisode!.episode.id);
-		if (idx >= 0 && idx < eps.length - 1) playEpisode(podcast, eps[idx + 1]);
-	}
-
-	function handleSeekSeconds(seconds: number) {
-		currentTime = seconds;
-		if (audioEl) audioEl.currentTime = seconds;
-	}
-
 	// ── Persist position on pause / end; sync episode progress into the store ──
 	$effect(() => {
 		if (!audioEl) return;
@@ -647,7 +321,7 @@
 			artworkUrl: pod.artworkUrl,
 			duration:   ep.duration,
 		}, 'podcast');
-		claimPodcastControls();
+		podcastPlayer.claimPodcastControls();
 		mediaEngine.updateTime(resumeAt, ep.duration);
 		mediaEngine.podcastPlaying = false;
 	});
@@ -746,11 +420,11 @@
 						class="tap-feedback list-row-surface relative overflow-hidden border-l-[6px] p-4 border-b transition-colors cursor-pointer {newEpisode ? 'border-l-primary bg-gradient-to-r from-primary/20 via-primary/10 to-background shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] hover:from-primary/25 hover:via-primary/15 active:from-primary/30' : `border-l-transparent ${listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}`}"
 						role="button"
 						tabindex="0"
-						onclick={() => selectedPodcast && activateEpisode(selectedPodcast, episode)}
+						onclick={() => selectedPodcast && podcastPlayer.activateEpisode(selectedPodcast, episode)}
 						onkeydown={(event) => {
 							if (event.key !== 'Enter' && event.key !== ' ') return;
 							event.preventDefault();
-							if (selectedPodcast) activateEpisode(selectedPodcast, episode);
+							if (selectedPodcast) podcastPlayer.activateEpisode(selectedPodcast, episode);
 						}}
 					>
 						{#if newEpisode}
@@ -808,7 +482,7 @@
 								onclick={(event) => {
 									event.stopPropagation();
 									if (selectedPodcast) {
-										activateEpisode(selectedPodcast, episode);
+										podcastPlayer.activateEpisode(selectedPodcast, episode);
 									}
 								}}
 							>
