@@ -120,6 +120,31 @@ next single-file target and needs its own decision about whether the podcast
 engine shares `createPlayer`. The three duplicated handlers in
 `RadioView.svelte` fold into that pass.
 
+## Known follow-ups
+
+Non-blocking items the three audits of PR 2 left open. Recorded here so they are
+not lost; none of them blocks this PR.
+
+- A re-sorting `append()` can put a resolved URL on the wrong index. `ensureUrl`
+  writes the URL to the index captured before its `await`, so a file that sorts
+  ahead of the resolved track takes that slot and playback follows the wrong
+  entry. Same in the pre-migration code, so it is not a migration regression.
+- A resolve superseded by a queue replacement keeps its blob attached as
+  `cleanup` instead of revoking it immediately: one object URL survives until
+  the next `clear()` or `destroy()`, for a track that is no longer queued.
+- `mediaEngine` has no `unregisterAudioSource`, so the view's register effect
+  has no teardown. Podcast, Radio and YouTube have the same shape; the fix
+  belongs in `mediaEngine`, not in one view.
+- The deck element is now a detached `new Audio()` with `preload = 'none'`
+  instead of an in-DOM `<audio>`. Its behaviour on Android and iOS WebViews is
+  unverified without a device, like the rest of the native path.
+- `next()` from a loaded, paused deck starts playback and resolves `true`, where
+  the audit expected `false`. `advanceTrack` has no `wasPlaying` guard, unlike
+  the `loadAndPlayAt` path `prev()` uses, so the audit's premise that a paused
+  skip never claims holds for `prev()` only. Either add the guard, so a paused
+  skip just loads the src, or correct the documented behaviour. The behaviour
+  today is pinned by a test in `tests/unit/models/player.test.ts`.
+
 ## Out of scope
 
 - `android/`: `DirectoryReaderPlugin.java` (627 lines, 21 functions) and

@@ -25,12 +25,24 @@ factory `createPlayer(...)`, per-deck instance, with a small interface:
 ```ts
 type Player = {
   state: PlayerState;                 // reactive $state
-  play(tracks: Track[], startIndex?: number): Promise<void>;
+  play(tracks: StoredAudioFile[], startIndex?: number, options?: PlayerQueueOptions): Promise<void>;
+  load(tracks: StoredAudioFile[], options?: PlayerLoadOptions): void;
+  append(files: StoredAudioFile[]): void;
+  clear(): void; stop(): void;
   pause(): void; resume(): void;
-  next(): void; prev(): void; seek(toSec: number): void;
+  next(): Promise<boolean>; prev(): Promise<boolean>;
+  seek(toSec: number): void;
   destroy(): void;
 };
 ```
+
+As built, `next()` and `prev()` resolve a `Promise<boolean>` rather than `void`:
+both are `true` only when the skip changed track *and* began playback, which is
+exactly the condition under which the view claims the audio channel, and a `void`
+signature cannot carry that without adding a callback. The snippet above also
+lists `load`, `append`, `clear` and `stop`, and `play`'s `Promise`, because the
+view builds and drops queues with them; the original snippet was incomplete, the
+decision is unchanged.
 
 - The module owns the `HTMLAudioElement` and the advance/preload/retry/loop
   behaviour.
