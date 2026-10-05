@@ -130,7 +130,9 @@ named. Line ranges are anchors from the recon snapshot (`/tmp/pr3-recon.md`),
 taken before the dead-code follow-up above; treat them as anchors, not current
 offsets.
 
-Status: 3.1 to 3.6 merged. 3.7 delivered on `refactor/pr3-7-browse-navigation`. 3.8 not started.
+Status: 3.1 to 3.7 merged. 3.8 delivered on `refactor/pr3-8-file-ops`, which
+completes the series. The view is still above the 2,500-line target in the
+definition of done; the honest count and what remains are recorded under 3.8.
 
 **3.1 `driveSession` (`src/lib/drive/driveSession.svelte.ts`).**
 `hasValidDriveToken` (1259-1261), `ensureDriveAccessToken` (1263-1319) and the
@@ -315,13 +317,58 @@ store. And it omitted that `goToFileFolder` also clears `fileSearchQuery` and
 The line anchors above are stale (the view shrank after 3.4 to 3.6); the function
 names are the reliable locator.
 
-**3.8 `fileOps` (`src/lib/files/fileOps.ts`).** `openDestinationForOp`
-(2661-2664), `openLocalDestinationPicker` (2666-2677), `confirmAndDelete`
-(2679-2687), `runPendingFileOp` (2689-2707), `deleteFileOp` (2709-2713),
-`moveOrCopyFileOp` (2715-2724), `handleMoveEntry`/`handleCopyEntry`/
-`handleDeleteEntry` (2726-2729), `folderOpNotice` (2730-2732),
-`reloadCurrentBrowse` (2734-2736). Needs only `nativeTreeUri` plus the
-local-picker callbacks.
+**3.8 `fileOps` (`src/lib/files/fileOps.ts`).** The last PR 3 group. Moved
+`openDestinationForOp`, `openLocalDestinationPicker`, `confirmAndDelete`,
+`runPendingFileOp`, `deleteFileOp`, `moveOrCopyFileOp`, `handleMoveEntry`,
+`handleCopyEntry`, `handleDeleteEntry`, `folderOpNotice` and
+`reloadCurrentBrowse`, plus the `OpTarget` and `PendingFileOp` types. Delivered
+on `refactor/pr3-8-fileOps` with 24 unit tests in
+`tests/unit/files/fileOps.test.ts`.
+
+`createFileOps` is a factory, like the earlier groups, so two decks never share
+a pending op. It is a plain `.ts` and holds no runes, so it does not own the
+reactive state: `pendingFileOp` and `isFileOpRunning` stay in the view and
+arrive through an injected `view` accessor, the same shape `driveLibrary.ts`
+already uses for `isFileOpRunning`. Both are read reactively by the
+local-picker markup and a plain `.ts` cannot hold `$state`, so moving them
+would have forced the module to `.svelte.ts` and churned the 3.5 and 3.6
+accessors for no behaviour gain. The transfer fields (`transferFile`,
+`transferDirection`, `isTransferring`, `transferProgress`, `transferPhase`)
+stay in the view and with 3.5/3.6; `fileOps` touches none of them except
+`showLocalFolderPicker`, which does not move either.
+
+It needs the deck's `deviceLibrary` (`nativeTreeUri`, `openFolder`,
+`loadLocalFolderPicker`), the deck's `browseNavigation` (`loadBrowseEntries`)
+and `isNativeApp`. The recon's "needs only `nativeTreeUri` plus the local-picker
+callbacks" is wrong: `reloadCurrentBrowse` is in this group and needs the browse
+navigation.
+
+One seam was re-pointed. 3.6's `createDeviceLibrary` injection
+`runPendingFileOp: (destination) => runPendingFileOp(destination)` is now
+`fileOps.runPendingFileOp`. The 3.5 `DriveLibraryView.isFileOpRunning` and the
+3.6 `DeviceLibraryView.pendingFileOp`/`isFileOpRunning` accessors are unchanged,
+because that state did not move; `deviceLibrary.svelte.ts` and `driveLibrary.ts`
+are otherwise untouched.
+
+Behaviour preserved: the `pendingFileOp` set/run/clear lifecycle; the confirm
+toast and its Delete-action ordering; `folderOpNotice`'s text and type;
+`openLocalDestinationPicker`'s native and web branches and both its warning
+toasts; `runPendingFileOp`'s per-op failure toast; the three handlers setting
+`pendingFileOp` before the picker opens; and `reloadCurrentBrowse`'s
+`loadBrowseEntries(browsePath, 'drive' | undefined)` arguments and its
+synchronous call from the runner. The recon's line anchors for this group
+(2661-2736) are stale; every function was read in place before the move.
+
+**Where the series landed.** With 3.8, all eight PR 3 groups are out of the
+view. `Mp3PlayerView.svelte` is 2,665 lines (1,706 script, 935 template, 24
+style), down from 4,032 at the start of PR 3 but still above the 2,500-line
+target in the definition of done. What remains is not one of the eight domains:
+the playback transport and URL lifecycle (`resolveTrackUrl`, `appendTracksToQueue`,
+`hydrateTracksFromLibrary` and the queue/session glue), the track-favourite
+machine, the browse selection and play-folder logic, the EQ panel wiring, and
+the 935 lines of markup this pass deliberately did not touch (logic extraction
+only). Closing the gap needs PR 5 (`favourites`) and a markup split, neither of
+which is in this branch.
 
 #### Two hard hazards
 
@@ -343,7 +390,9 @@ calls and leaves a spinner that never resolves.
 
 #### Test coverage
 
-Extractions 3.7 and 3.8 have no test coverage. `tests/unit` stops at
+Extractions 3.7 and 3.8 now ship unit tests (21 in
+`tests/unit/browse/browseNavigation.test.ts` and 24 in
+`tests/unit/files/fileOps.test.ts`). `tests/unit` stops at
 `models/browse`, `models/player`, `utils/idb`, `utils/google-drive-auth-error`,
 the stores, the equalizer and the extracted browse/drive/device modules, and
 `tests/e2e/music-player.test.ts` drives a local folder only, with no Drive path,
