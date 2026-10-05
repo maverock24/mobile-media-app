@@ -45,7 +45,7 @@ fix costs four edits:
 
 ## The programme
 
-### PR 1: verified dead code (this branch)
+### PR 1: verified dead code (merged)
 
 Fifteen functions with no reference anywhere in `src/`, `tests/`, `scripts/` or
 the root config files. The proof method is at the bottom of this file.
@@ -78,10 +78,9 @@ dead copies around.
 Left in place by choice, because they are exported helpers rather than local
 leftovers: `src/lib/utils/storage.ts:22 setJSON` and `:31 removeJSON`.
 
-### PR 1b: dead-code follow-up (delivered)
+### PR 1b: dead-code follow-up (this PR)
 
-Landed as branch `refactor/dead-code-followup` on top of `5e4e48f`, in two
-commits.
+On branch `refactor/dead-code-followup`, rebased onto `5e4e48f`, in two commits.
 
 - `Mp3PlayerView.svelte`: deleted `currentFolderAsFavorite` (zero callers) and
 the write-only `driveLoadProgress` state, 29 lines.
@@ -95,25 +94,31 @@ three type importers is the gitignored analyzer snapshot
 `codedeck-analysis.json`, so the rename to `library.ts` is left for a later
 pass.
 
-### PR 2: wire the ADR-0001 player module
+### PR 2: wire the ADR-0001 player module (merged)
 
-ADR-0001 (`docs/adr/0001-player-module.md`, accepted 2026-08-22) decided this
-already. The module landed in commit `af3f6e5` and is complete with tests, but
-nothing in `src/` calls it: the only caller of `createPlayer`
-(`src/lib/audio/player.svelte.ts:88`) is
-`tests/unit/models/player.test.ts:43`. `Mp3PlayerView.svelte` still binds its own
-`<audio bind:this={audioEl}>` and keeps its own `safePlay` at line 853.
+ADR-0001 (`docs/adr/0001-player-module.md`, accepted 2026-08-22) decided this.
+The module landed in commit `af3f6e5` with tests and had no caller until this
+PR, which merged to `main` as `4f02339` through `5e4e48f`.
 
-Work: construct one `createPlayer` instance per deck inside `Mp3PlayerView`,
-supply the `resolveUrl` adapter, bind the view to `player.state`, then delete the
-in-view playback copies. Scanning, Drive auth, favourites and folder pickers stay
-where they are; PR 3 to PR 5 move those separately.
+`Mp3PlayerView.svelte` now builds one `createPlayer` instance per deck
+(`src/lib/audio/player.svelte.ts`), supplies the `resolveUrl` adapter and binds
+the view to `player.state`. The in-view `<audio bind:this={audioEl}>`,
+`safePlay`, `ensureTrackUrl`, `preloadNextTrack`, `advanceTrack`, `prevTrack`,
+`revokeAll`, `releaseTrackUrl` and the volume, mute and speed effects are gone.
+The view went from 4,578 to 4,032 lines and the module from 418 to 654.
 
-The landmine: the module never calls `claimAudio` (zero hits in
-`src/lib/audio/player.svelte.ts`) while `guardrails.md` requires every audio
-source to register a stop callback with `mediaEngine`. Deck A and Deck B would
-both keep playing. The view must register the module's `pause()` with
-`registerAudioSource`, and the migration PR must prove exclusivity with e2e.
+The landmine was handled in the view: the module still never calls `claimAudio`
+(zero hits in `src/lib/audio/player.svelte.ts`), so the view registers the
+module's `pause()` with `registerAudioSource` and proves exclusivity in e2e.
+Three adversarial review rounds found and fixed two regressions before merge: a
+preload resolving after a queue replacement wrote a foreign URL by index and
+orphaned the blob, and the first fix keyed on `PlayerTrack` wrapper identity
+while `append()` rebuilds wrappers but keeps source objects.
+
+Deliberate divergence from pre-migration `main`: claiming the audio channel now
+follows the start of playback, so a skip on a paused deck neither plays nor
+claims, where `main` claimed unconditionally once a URL had landed. Follow-up
+(e) records the lost `wasPlaying` guard that made a paused skip start playing.
 
 ### PR 3: Drive and folder-picker domain (eight extractions)
 
