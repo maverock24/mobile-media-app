@@ -288,7 +288,6 @@
 	let localPickerPath = $state<string[]>([]);
 	let localPickerEntries = $state<Array<NativeDirectoryFolder | NativeDirectoryFile>>([]);
 	let localPickerLoading = $state(false);
-	let driveLoadProgress = $state({ filesFound: 0, foldersScanned: 0, foldersQueued: 0 });
 	let driveLoadAbort   = $state<AbortController | null>(null);
 	let switchingToFavId = $state<string | null>(null); // fav id currently loading
 	let browseLongPressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1464,27 +1463,6 @@
 	}
 
 	// ── Folder favorites ──────────────────────────────────────────
-	function currentFolderAsFavorite() {
-		if (musicSettings.librarySource === 'drive') {
-			return {
-				id: musicSettings.driveFolderId || '_all',
-				name: musicSettings.driveFolderName || 'All files',
-				source: 'drive' as const,
-			};
-		}
-		if (nativeTreeUri) {
-			return {
-				id: nativeTreeUri,
-				name: musicSettings.lastFolderName,
-				source: 'device' as const,
-				treeUri: nativeTreeUri,
-			};
-		}
-		return null;
-	}
-
-
-
 	function removeFavoriteFolder(id: string, source: string) {
 		musicSettings.favoriteFolders = musicSettings.favoriteFolders.filter(f => !(f.id === id && f.source === source));
 	}
@@ -1575,7 +1553,6 @@
 		driveLoadAbort = ctrl;
 
 		isDriveLoading = true;
-		driveLoadProgress = { filesFound: 0, foldersScanned: 0, foldersQueued: 0 };
 		driveError = '';
 
 		const cacheKey = folderId ?? '_all';
@@ -1587,7 +1564,6 @@
 					// Instant restore from IDB — use cached file list immediately
 					player.clear();
 					allFiles = cached.map(createStoredDriveAudioFile);
-					driveLoadProgress = { filesFound: cached.length, foldersScanned: 0, foldersQueued: 0 };
 					activateDriveLibrary();
 					isDriveLoading = false;
 
@@ -1620,11 +1596,6 @@
 			for await (const batch of streamGoogleDriveMp3Files(token, { folderId, signal: ctrl.signal })) {
 				if (ctrl.signal.aborted) break;
 				collectedFiles.push(...batch.files);
-				driveLoadProgress = {
-					filesFound: collectedFiles.length,
-					foldersScanned: batch.foldersScanned,
-					foldersQueued: batch.foldersQueued
-				};
 				// Append batch to the reactive array as a single assignment (not one-at-a-time)
 				const newMapped = batch.files.map(createStoredDriveAudioFile);
 				allFiles = [...allFiles, ...newMapped];
