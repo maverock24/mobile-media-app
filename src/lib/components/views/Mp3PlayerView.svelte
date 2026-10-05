@@ -4,7 +4,6 @@
 	import { swipeItem } from '$lib/actions/swipeItem';
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
-	import { FilePicker } from '@capawesome/capacitor-file-picker';
 	import Input from '$lib/components/ui/Input.svelte';
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
@@ -65,10 +64,13 @@
 		restoreStoredFilesFromCache,
 		collectStoredFilesFromSnapshot,
 		pathToString,
-		collectFilesFromDirHandle,
-		collectStoredFilesFromDirHandle,
-		resolveDirAtPath
+		collectStoredFilesFromDirHandle
 	} from '$lib/browse/libraryCache';
+	import {
+		scanNativeAudioFiles,
+		collectAllFromPath,
+		pickNativeAudioDirectory
+	} from '$lib/browse/folderScan';
 	import { appSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	
@@ -986,62 +988,6 @@
 		clearBrowseLongPressTimer();
 	}
 
-	async function yieldScanToUi(): Promise<void> {
-		if (typeof window === 'undefined') return;
-		await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-	}
-
-	async function scanNativeAudioFiles(
-		path: string[],
-		batchSize: number,
-		options: { initialBatchSize?: number } = {},
-		onBatch?: (batch: StoredAudioFile[], state: { done: boolean; foldersScanned: number; foldersQueued: number; totalFiles: number }) => Promise<void> | void,
-	): Promise<StoredAudioFile[]> {
-		if (!nativeTreeUri) return [];
-
-		const collectedFiles: StoredAudioFile[] = [];
-		let scanCompleted = false;
-		let scanId = '';
-		let isFirstBatch = true;
-
-		try {
-			const startedScan = await DirectoryReader.startAudioScan({ treeUri: nativeTreeUri, path: pathToString(path) });
-			scanId = startedScan.scanId;
-
-			while (!scanCompleted) {
-				const effectiveBatchSize = isFirstBatch
-					? Math.max(1, options.initialBatchSize ?? batchSize)
-					: batchSize;
-				const batch = await DirectoryReader.getAudioScanBatch({ scanId, batchSize: effectiveBatchSize });
-				isFirstBatch = false;
-				const mappedBatch = batch.files.map((file) => createStoredNativeAudioFile(file));
-				if (mappedBatch.length > 0) {
-					collectedFiles.push(...mappedBatch);
-					await onBatch?.(mappedBatch, {
-						done: batch.done,
-						foldersScanned: batch.foldersScanned,
-						foldersQueued: batch.foldersQueued,
-						totalFiles: collectedFiles.length,
-					});
-				}
-				scanCompleted = batch.done;
-				if (!scanCompleted) {
-					await yieldScanToUi();
-				}
-			}
-		} finally {
-			if (scanId && !scanCompleted) {
-				try {
-					await DirectoryReader.cancelAudioScan({ scanId });
-				} catch (error) {
-					console.warn('Unable to cancel native audio scan.', error);
-				}
-			}
-		}
-
-		return collectedFiles;
-	}
-
 	function startLibraryScan(folderName: string, options: { resetExistingFiles?: boolean } = {}) {
 		if (options.resetExistingFiles) {
 			allFiles = [];
@@ -1057,7 +1003,7 @@
 			}
 
 			if (nativeTreeUri) {
-				return scanNativeAudioFiles([], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {}, async (mappedBatch: StoredAudioFile[], state) => {
+				return scanNativeAudioFiles(nativeTreeUri, [], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {}, async (mappedBatch: StoredAudioFile[], state) => {
 					if (scanPromise && libraryScanPromise === scanPromise) {
 						allFiles = [...allFiles, ...mappedBatch];
 						browseVersion += 1;
@@ -1650,15 +1596,6 @@
 		});
 	}
 
-	async function pickNativeAudioDirectory(): Promise<{ treeUri: string; folderName: string }> {
-		const result = await FilePicker.pickDirectory();
-		const directory = await DirectoryReader.listEntries({ treeUri: result.path });
-		return {
-			treeUri: result.path,
-			folderName: directory.folderName,
-		};
-	}
-
 	// ─────────────────────────────────────────────────────────────
 	// Browse — async entry loading
 	// ─────────────────────────────────────────────────────────────
@@ -1753,25 +1690,6 @@
 			}
 		} catch { if (loadId === _browseLoadId) browseEntries = []; }
 		if (loadId === _browseLoadId) browseLoading = false;
-	}
-
-	// ── Collect all files under a browse path ──
-	async function collectAllFromPath(path: string[]): Promise<StoredAudioFile[]> {
-		if (musicSettings.librarySource === 'drive') {
-			return collectStoredFilesFromSnapshot(allFiles, path, musicSettings.sortOrder);
-		} else if (allFiles.length > 0) {
-			return collectStoredFilesFromSnapshot(allFiles, path, musicSettings.sortOrder);
-		} else if (libraryScanPromise) {
-			const scannedFiles = await libraryScanPromise;
-			return collectStoredFilesFromSnapshot(scannedFiles, path, musicSettings.sortOrder);
-		} else if (rootDirHandle) {
-			const dir = await resolveDirAtPath(rootDirHandle, path);
-			return dir ? (await collectFilesFromDirHandle(dir)).map((file) => createStoredAudioFile(file)) : [];
-		} else if (nativeTreeUri) {
-			const result = await DirectoryReader.listAudioFiles({ treeUri: nativeTreeUri, path: pathToString(path) });
-			return result.files.map((file) => createStoredNativeAudioFile(file));
-		}
-		return [];
 	}
 
 	/**
@@ -2066,6 +1984,7 @@
 
 		const collectedFiles: StoredAudioFile[] = [];
 		void scanNativeAudioFiles(
+			nativeTreeUri,
 			path,
 			FOLDER_PLAY_SCAN_BATCH_SIZE,
 			{ initialBatchSize: FOLDER_PLAY_INITIAL_BATCH_SIZE },
@@ -2202,7 +2121,14 @@
 				return;
 			}
 
-			const files = await collectAllFromPath(path);
+			const files = await collectAllFromPath(path, {
+				librarySource: musicSettings.librarySource,
+				sortOrder: musicSettings.sortOrder,
+				allFiles,
+				libraryScanPromise,
+				rootDirHandle,
+				nativeTreeUri,
+			});
 			if (files.length === 0) { alert('No audio files found in this folder.'); return; }
 			beginQueue(folderLabel);
 			if (!(await startFirstPlayableTrack(files))) {
