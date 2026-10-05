@@ -576,14 +576,66 @@ conditions are untouched. `unsubscribe` has no call site in the view before or
 after the move (a word-boundary grep confirms it, and the analyzer's dead-code
 snapshot flags it); it is kept on the factory and covered by a test rather than
 deleted. The view drops from 1,252 to 1,018
-lines. Group 5 is not started.
+lines.
+
+**6.5 `podcastPlayer` (`src/lib/podcast/podcastPlayer.ts`, factory).**
+Delivered on `refactor/pr6-podcast-player`, with 31 unit tests in
+`tests/unit/podcast/podcastPlayer.test.ts`. Moved `safePlay`,
+`cancelNetworkRetry`, `scheduleReconnectResume`, `syncEpisodeAudioSource`,
+`playEpisode`, `activateEpisode`, `togglePlay`, `pausePlayback`,
+`resumePlayback`, `prevEpisode`, `nextEpisode`, `handleSeekSeconds` and
+`claimPodcastControls`, plus the nine element listeners that used to be wired
+inside the view's element effect. `createPodcastPlayer` is a per-view factory,
+like `createPodcastLibrary`: one instance per `PodcastView`. It is a plain
+`.ts` with no runes, the same choice as the two earlier factories, so the
+reactive playback state stays in the component and arrives through the
+injected accessor (`selectedPodcast`, `currentEpisode`, `isPlaying`,
+`isBuffering`, `currentTime`, `duration`). The template-bound `<audio>` element
+arrives through a `getAudioEl()` accessor; the `online` reconnect listener, the
+user-pause flag and the per-wiring throttle timestamps are private to the
+factory. A `.svelte.ts` was rejected because the module owns no new reactive
+state and would only add runes it does not need.
+
+The effects did not move. The element-listener effect stays in the component
+and now delegates: it reads `audioEl`, calls
+`podcastPlayer.attachElementListeners(audioEl)` and returns its cleanup, so the
+nine listeners are still attached once after mount and removed (with the
+pending reconnect cancelled) on teardown. The handler bodies moved as one
+block, so `stalled` / `MEDIA_ERR_NETWORK` (code 2) reconnect scheduling, the
+3-retry system-pause auto-resume behind the user-pause guard, the
+fully-played-on-`ended` write and `mediaEngine.item = null`, and the throttled
+progress persist all fire at the same moments. Behaviour preserved and checked
+against the pre-move text: `safePlay`'s 6/250 ms native and 3/150 ms web
+`AbortError` retries, with `onFailure` on exhaustion and on every other
+rejection and no synchronous-throw guard; the reconnect path (one `online`
+listener, replaced on each schedule, removed by `cancelNetworkRetry`); `ended`
+stops without advancing to the next episode; the per-episode speed reset
+(`playbackSpeed = 1.0`); the channel claim on play and resume
+(`podcastPlaying = true` then `claimAudio('podcast')`) and the deliberate
+`markUserPaused()` pause; `syncEpisodeAudioSource`'s stored resume position
+(> 10 s) applied on `loadedmetadata` and its `setNowPlaying` metadata;
+`getEpisodeResumePosition` read before `lastEpisodeId` is overwritten; and
+`handleSeekSeconds` setting the element time directly with no suppression
+guard. Five call sites were converted: `claimPodcastControls` in the restart
+rebuild effect and the three markup `activateEpisode` calls (row click, row
+keydown, play button), plus the element-listener effect. The view drops from
+1,018 to 692 lines.
+
+**The transport remains unverified on a device.** No test in this repository
+plays a podcast. The e2e suite only asserts that two `<audio>` elements exist
+and that the Podcasts tab renders, so **element events, network loss, the
+Android audio stack, background resume and MediaSession are verified only by
+reading and by unit tests of the isolated logic**. Nothing here has exercised a
+real Android WebView, a real network drop, an OS-initiated pause or a lock
+screen. The phase is complete.
 
 ### After the programme
 
-`PodcastView.svelte` (1,018 lines after group 4, complexity 242, its own
-`safePlay`) is the next single-file target; PR 6 records the decision not to
-share `createPlayer` and the five-group order. The three duplicated handlers in
-`RadioView.svelte` fold into that pass.
+PR 6 is complete: `PodcastView.svelte` is down to 692 lines with the five
+groups (`episodeDisplay`, `itunes`, `progress`, `podcastLibrary`,
+`podcastPlayer`) extracted and only logic, never markup, moved. A later pass
+can fold the three duplicated handlers in `RadioView.svelte` into the shared
+player.
 
 ## Known follow-ups
 
