@@ -111,8 +111,13 @@ export interface Player {
 	stop(): void;
 	pause(): void;
 	resume(): void;
-	next(): void;
-	prev(): void;
+	/** Advance to the next track. Resolves true when it moved to a different track
+	 *  and began playback, false when it stopped at the end of the queue, looped
+	 *  the same track, or found nothing playable. */
+	next(): Promise<boolean>;
+	/** Step back. Resolves false when it only rewound the current track in place
+	 *  or found nothing playable, true when it changed track and began playback. */
+	prev(): Promise<boolean>;
 	seek(toSec: number): void;
 	destroy(): void;
 }
@@ -284,6 +289,12 @@ export function createPlayer(opts: PlayerOptions): Player {
 		});
 		selectionLoop = options.selectionLoop ?? false;
 		state.error = null;
+		// A queue replacement supersedes any in-flight resume/prev that was showing
+		// the "Loading track…" overlay. That continuation drops out on the generation
+		// check below instead of clearing the flag (the new queue owns the state
+		// now), so the stale buffering flag has to be cleared here or it sticks with
+		// isPlaying false.
+		state.isBuffering = false;
 		errorRetries = 0;
 		preloadRequestId += 1;
 		preloadedIndex = null;
@@ -345,10 +356,10 @@ export function createPlayer(opts: PlayerOptions): Player {
 		});
 	}
 
-	function loadAndPlayAt(index: number, wasPlaying: boolean, interactiveAuth: boolean) {
-		if (!state.tracks[index]) return;
+	function loadAndPlayAt(index: number, wasPlaying: boolean, interactiveAuth: boolean): Promise<boolean> {
+		if (!state.tracks[index]) return Promise.resolve(false);
 		const generation = queueGeneration;
-		void (async () => {
+		return (async () => {
 			const url = await ensureUrl(index, interactiveAuth);
 			if (!url) {
 				// No playable URL (resolution failed, or the queue was replaced): never
@@ -356,20 +367,22 @@ export function createPlayer(opts: PlayerOptions): Player {
 				// this queue is still the current one — a replaced queue owns the state
 				// now. isPlaying stays false: nothing was handed to the element.
 				if (wasPlaying && generation === queueGeneration) state.isBuffering = false;
-				return;
+				return false;
 			}
 			opts.applyEqualizer?.(el());
 			el().src = url;
 			preloadNextTrack(index);
-			if (wasPlaying) {
-				state.isBuffering = true;
-				safePlay(() => { state.isBuffering = false; state.isPlaying = false; });
-			}
+			// A paused deck only loads the src: no play() means no playback start, so
+			// the caller must not claim the channel or flag the deck as playing.
+			if (!wasPlaying) return false;
+			state.isBuffering = true;
+			safePlay(() => { state.isBuffering = false; state.isPlaying = false; });
+			return true;
 		})();
 	}
 
-	async function advanceTrack(wasPlaying: boolean) {
-		if (changingTrack || state.tracks.length === 0 || destroyed) return;
+	async function advanceTrack(wasPlaying: boolean): Promise<boolean> {
+		if (changingTrack || state.tracks.length === 0 || destroyed) return false;
 		changingTrack = true;
 		try {
 			// The view refreshes a changed selection loop here, before the next
@@ -378,7 +391,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 
 			const idx = state.currentIndex;
 			const next = nextIndex(idx);
-			if (next === null) { haltPlayback(); return; }
+			if (next === null) { haltPlayback(); return false; }
 
 			// Same-track loop (single selected track).
 			if (next === idx) {
@@ -392,7 +405,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 					el().currentTime = 0;
 				}
 				if (wasPlaying) { state.isBuffering = false; safePlay(() => { state.isPlaying = false; }); }
-				return;
+				return false;
 			}
 
 			setCurrentTrack(next);
@@ -412,7 +425,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 					attemptIndex = nextAttempt;
 					attemptCount++;
 				}
-				if (!foundUrl) { haltPlayback(); return; }
+				if (!foundUrl) { haltPlayback(); return false; }
 				if (attemptIndex !== next) setCurrentTrack(attemptIndex);
 				releaseUrl(idx);
 				opts.applyEqualizer?.(el());
@@ -420,7 +433,9 @@ export function createPlayer(opts: PlayerOptions): Player {
 				preloadNextTrack(attemptIndex);
 				state.isBuffering = true;
 				safePlay(() => { state.isBuffering = false; state.isPlaying = false; });
+				return true;
 			}
+			return false;
 		} finally {
 			changingTrack = false;
 		}
@@ -570,7 +585,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 				state.isBuffering = true;
 				// loadAndPlayAt clears isBuffering again when no URL comes back (the
 				// resolve failed, or the queue was replaced) and never sets isPlaying.
-				loadAndPlayAt(index, true, true);
+				void loadAndPlayAt(index, true, true);
 				return;
 			}
 			if (native) {
@@ -593,14 +608,20 @@ export function createPlayer(opts: PlayerOptions): Player {
 				if (state.currentIndex >= 0) releaseUrl(state.currentIndex);
 			});
 		},
-		next() { void advanceTrack(state.isPlaying || state.isBuffering); },
+		// Advance: resolves true only when it moved to a different track and began
+		// playback, so the view claims the channel on exactly that path.
+		next() { return advanceTrack(state.isPlaying || state.isBuffering); },
+		// Step back: resolves false when it only rewound the current track in place
+		// (nothing to claim) or found nothing playable, true when it changed track
+		// and began playback. A paused deck only loads the src, so it resolves false
+		// too — the view must not flag it as playing.
 		prev() {
-			if (state.tracks.length === 0) return;
+			if (state.tracks.length === 0) return Promise.resolve(false);
 			const element = el();
 			if (settings.rewindOnPrev && element.currentTime > 3) {
 				element.currentTime = 0;
 				safePlay();
-				return;
+				return Promise.resolve(false);
 			}
 			const oldIndex = state.currentIndex < 0 ? 0 : state.currentIndex;
 			const prevIndex = (oldIndex - 1 + state.tracks.length) % state.tracks.length;
@@ -608,7 +629,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 			setCurrentTrack(prevIndex);
 			settings.lastTrackTimestamp = 0;
 			state.currentTime = 0; state.duration = 0;
-			loadAndPlayAt(prevIndex, wasPlaying, true);
+			return loadAndPlayAt(prevIndex, wasPlaying, true);
 		},
 		seek(toSec) {
 			seeking = toSec;
