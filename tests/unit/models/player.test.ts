@@ -282,21 +282,24 @@ describe('player — skip results', () => {
 		expect(state.isPlaying).toBe(false);
 	});
 
-	// The counterpart the audit named, which reads "next() from a loaded, paused
-	// deck -> false". It cannot hold: advanceTrack, unlike the loadAndPlayAt path
-	// that prev() uses, has no wasPlaying guard, so a paused deck's next() sets
-	// the src, calls play() and resolves true. Pinned as it behaves today, with
-	// the gap recorded in docs/refactoring-plan.md under "Known follow-ups" so
-	// the assertion the audit asked for is not silently dropped.
-	it('next from a loaded, paused deck starts playback and resolves true', async () => {
+	// The counterpart the audit named: "next() from a loaded, paused deck ->
+	// false". It now holds. advanceTrack's main branch has the same wasPlaying
+	// guard the same-track branch and the loadAndPlayAt path prev() uses carry,
+	// so a paused deck's next() changes track, loads the src and resolves false
+	// without calling play(), which is why the view does not claim the audio
+	// channel (and does not stop a podcast, radio or YouTube layer).
+	it('next from a loaded, paused deck changes track without beginning playback', async () => {
 		const { player, audio, state } = makePlayer();
 		player.load([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], { startIndex: 0 });
 		const playsBefore = audio.playCalls;
 
-		await expect(player.next()).resolves.toBe(true);
+		await expect(player.next()).resolves.toBe(false);
 		expect(state.currentIndex).toBe(1);
+		expect(audio.src).toBe('blob:b.mp3');
 		expect(state.tracks[1].url).toBe('blob:b.mp3');
-		expect(audio.playCalls).toBeGreaterThan(playsBefore);
+		expect(audio.playCalls).toBe(playsBefore);
+		expect(state.isPlaying).toBe(false);
+		expect(state.isBuffering).toBe(false);
 	});
 
 	it('prev resolves false on the rewind-in-place branch', async () => {
