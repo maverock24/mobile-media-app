@@ -13,22 +13,21 @@
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	import { formatDuration } from '$lib/models/music';
-	import {
-		fetchRss, buildEpisodeId, describePodcastRequestError,
-		parseDuration, formatDate, readPodcastJson, clearRssCache,
-	} from '$lib/podcast/rss';
-	import { runConcurrently } from '$lib/podcast/refresh';
+	import { formatDate } from '$lib/podcast/rss';
 	import {
 		isActiveEpisode, getEpisodeProgressPercent, getEpisodeProgressLabel,
 		isNewEpisode, artworkFallback,
 	} from '$lib/podcast/episodeDisplay';
 	import {
-		resolvePodcastApiUrl, searchITunes, type ItunesResult,
+		searchITunes, type ItunesResult,
 	} from '$lib/podcast/itunes';
 	import {
-		syncPersistedEpisodeState, markEpisodeFullyPlayed, mergeEpisodeHistory,
+		syncPersistedEpisodeState, markEpisodeFullyPlayed,
 		getEpisodeResumePosition, shouldPersistProgress, type PodcastProgressView,
 	} from '$lib/podcast/progress';
+	import {
+		createPodcastLibrary, type PodcastLibrary,
+	} from '$lib/podcast/podcastLibrary';
 	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
@@ -89,10 +88,6 @@
 	})();
 	const useHostedPodcastProxy = podcastApiBaseUrl.length > 0;
 
-	// AbortController for in-flight loadEpisodes (TASK-2.1: prevents race conditions)
-	let episodeLoadController: AbortController | null = null;
-	let episodeLoadPodcastId: number | null = null;
-
 	// ── Playback state ───────────────────────────────────────────
 	let currentEpisode = $state<{ podcast: Podcast; episode: Episode } | null>(null);
 	let isPlaying      = $state(false);
@@ -110,6 +105,35 @@
 		get currentEpisode() { return currentEpisode; },
 		set currentEpisode(v) { currentEpisode = v; },
 	};
+
+	// The subscribe/refresh/episode-load logic lives in the per-view
+	// `createPodcastLibrary` factory (PR 6 group 4). It is a rune-free `.ts` that
+	// imports the shared `podcastData` store directly; the component keeps
+	// `selectedPodcast`, the episode-list flags/counters and `isRefreshingAll`
+	// reactive and passes an accessor, plus the release/proxy config. The
+	// in-flight load's controller/id are private to the factory.
+	const podcastLibrary: PodcastLibrary = createPodcastLibrary({
+		view: {
+			get selectedPodcast() { return selectedPodcast; },
+			set selectedPodcast(v) { selectedPodcast = v; },
+			get episodesLoading() { return episodesLoading; },
+			set episodesLoading(v) { episodesLoading = v; },
+			get episodesLoadingMore() { return episodesLoadingMore; },
+			set episodesLoadingMore(v) { episodesLoadingMore = v; },
+			get episodesRefreshing() { return episodesRefreshing; },
+			set episodesRefreshing(v) { episodesRefreshing = v; },
+			get episodesPage() { return episodesPage; },
+			set episodesPage(v) { episodesPage = v; },
+			get hasMoreEpisodes() { return hasMoreEpisodes; },
+			set hasMoreEpisodes(v) { hasMoreEpisodes = v; },
+			get episodesError() { return episodesError; },
+			set episodesError(v) { episodesError = v; },
+			get isRefreshingAll() { return isRefreshingAll; },
+			set isRefreshingAll(v) { isRefreshingAll = v; },
+			get subscribedPodcasts() { return subscribedPodcasts; },
+		},
+		config: { baseUrl: podcastApiBaseUrl, useHostedProxy: useHostedPodcastProxy },
+	});
 
 	// ── Register stop-callback ───────────────────────────────────
 	$effect(() => {
@@ -370,7 +394,7 @@
 		const observer = new IntersectionObserver(
 			(entries) => {
 				if (entries[0]?.isIntersecting && hasMoreEpisodes && !episodesLoadingMore && selectedPodcast) {
-					void loadMoreEpisodes(selectedPodcast);
+					void podcastLibrary.loadMoreEpisodes(selectedPodcast);
 				}
 			},
 			{ rootMargin: '200px' }
@@ -398,11 +422,6 @@
 	);
 
 	/** RssFetchConfig bound to this view's release/proxy resolution. */
-	const rssFetchConfig = $derived.by(() => ({
-		resolveUrl: (path: string) => resolvePodcastApiUrl(path, podcastApiBaseUrl),
-		useHostedProxy: useHostedPodcastProxy,
-	}));
-
 
 	// ── iTunes Search ────────────────────────────────────────────
 	// Wrapper keeps the view's own state updates; the search itself is pure.
@@ -427,259 +446,6 @@
 			runITunesSearch('technology science');
 		}
 	});
-
-	// ── Subscribe/unsubscribe ────────────────────────────────────
-	function subscribeFromItunes(item: ItunesResult) {
-		let pod: Podcast;
-		if (podcastData.podcasts.some(p => p.itunesId === item.trackId)) {
-			// Already in list — just make sure it's subscribed
-			podcastData.podcasts = podcastData.podcasts.map(p =>
-				p.itunesId === item.trackId ? { ...p, subscribed: true } : p
-			);
-			pod = podcastData.podcasts.find(p => p.itunesId === item.trackId)!;
-		} else {
-			pod = {
-				id:         ++podcastData.nextId,
-				itunesId:   item.trackId,
-				title:      item.trackName,
-				author:     item.artistName,
-				category:   item.primaryGenreName ?? 'Podcast',
-				artworkUrl: item.artworkUrl600 ?? '',
-				feedUrl:    item.feedUrl ?? '',
-				subscribed: true,
-				episodes:   [],
-				episodesLoaded: false,
-			};
-			podcastData.podcasts = [...podcastData.podcasts, pod];
-		}
-		// Auto-open the episode view after subscribing
-		openPodcast(pod);
-	}
-
-	function unsubscribe(podcast: Podcast) {
-		// TASK-2.5: Abort any in-flight episode load for this podcast
-		if (episodeLoadPodcastId === podcast.id) {
-			episodeLoadController?.abort();
-			episodeLoadController = null;
-			episodeLoadPodcastId = null;
-			episodesLoading = false;
-			episodesRefreshing = false;
-		}
-		podcastData.podcasts = podcastData.podcasts.map(p => p.id === podcast.id ? { ...p, subscribed: false } : p);
-		// Re-sync selectedPodcast so the subscribe toggle reflects the new state immediately
-		if (selectedPodcast?.id === podcast.id) {
-			selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
-		}
-	}
-
-	function deletePodcast(id: number) {
-		podcastData.podcasts = podcastData.podcasts.filter(p => p.id !== id);
-		if (selectedPodcast?.id === id) selectedPodcast = null;
-	}
-
-	// ── Background refresh for all subscribed podcasts (pull-to-refresh) ──────
-	async function refreshPodcastSilent(podcast: Podcast): Promise<void> {
-		const controller = new AbortController();
-		const signal = controller.signal;
-		try {
-			let p = podcast;
-			if (!p.feedUrl) {
-				const lookupUrl = useHostedPodcastProxy
-					? resolvePodcastApiUrl(`/api/podcast/lookup?id=${p.itunesId}`, podcastApiBaseUrl)
-					: `https://itunes.apple.com/lookup?id=${p.itunesId}`;
-				const luData = await readPodcastJson<{ results?: Array<Record<string, unknown>> }>(lookupUrl, signal);
-				const r = luData.results?.[0];
-				const resolvedFeedUrl = typeof r?.feedUrl === 'string' ? r.feedUrl : '';
-				if (!resolvedFeedUrl) return;
-				p = { ...p, feedUrl: resolvedFeedUrl };
-				podcastData.podcasts = podcastData.podcasts.map(pd => pd.id === p.id ? p : pd);
-			}
-			clearRssCache(p.feedUrl);
-			const data = await fetchRss(p.feedUrl, rssFetchConfig, signal);
-			if (data.status !== 'ok') return;
-			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map(
-				(item: Record<string, unknown>, i: number) => {
-					const enc = item.enclosure as { link?: string } | null;
-					const rawDur = item.itunes_duration ?? item.duration ?? 0;
-					return {
-						id:          buildEpisodeId(p, item, i, enc),
-						title:       String(item.title ?? 'Untitled'),
-						description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
-						duration:    parseDuration(rawDur as string | number),
-						positionSec: 0,
-						publishedAt: String(item.pubDate ?? ''),
-						played:      false,
-						progress:    0,
-						audioUrl:    enc?.link ?? (String(item.link ?? '').match(/\.(mp3|m4a|ogg|aac|wav|flac)(\?|$)/i) ? String(item.link) : ''),
-					};
-				}
-			);
-			const mergedEps = mergeEpisodeHistory(p.id, eps);
-			podcastData.podcasts = podcastData.podcasts.map(pd =>
-				pd.id === p.id ? { ...pd, episodes: mergedEps, episodesLoaded: true } : pd
-			);
-			if (selectedPodcast?.id === p.id) {
-				selectedPodcast = podcastData.podcasts.find(pd => pd.id === p.id) ?? selectedPodcast;
-			}
-		} catch {
-			// Silent — individual podcast failures don't block the rest
-		}
-	}
-
-	async function refreshAllSubscribed(): Promise<void> {
-		if (isRefreshingAll) return;
-		const toRefresh = subscribedPodcasts.slice(); // snapshot before async work
-		if (toRefresh.length === 0) return;
-		isRefreshingAll = true;
-		try {
-			// Fetch feeds in parallel (bounded concurrency) — the sequential
-			// per-feed loop made refreshing N subscriptions take N× network latency.
-			await runConcurrently(toRefresh, (p) => refreshPodcastSilent(p));
-		} finally {
-			isRefreshingAll = false;
-		}
-	}
-
-	// ── Load episodes (lazy loading with pagination) ──────────────
-	async function loadEpisodes(podcast: Podcast, force = false) {
-		if (!force && podcast.episodesLoaded) return;
-		// Abort any previous in-flight load
-		episodeLoadController?.abort();
-		const controller = new AbortController();
-		episodeLoadController = controller;
-		episodeLoadPodcastId = podcast.id;
-		const signal = controller.signal;
-		// Clear all cached pages for this feed
-		if (force && podcast.feedUrl) clearRssCache(podcast.feedUrl);
-		if (force && podcast.episodesLoaded) {
-			episodesRefreshing = true;
-		} else {
-			episodesLoading = true;
-			episodesPage = 1;
-		}
-		episodesError = null;
-		try {
-			if (!podcast.feedUrl) {
-				// Resolve feedUrl via iTunes lookup
-				const lookupUrl = useHostedPodcastProxy
-					? resolvePodcastApiUrl(`/api/podcast/lookup?id=${podcast.itunesId}`, podcastApiBaseUrl)
-					: `https://itunes.apple.com/lookup?id=${podcast.itunesId}`;
-				const luData = await readPodcastJson<{ results?: Array<Record<string, unknown>> }>(lookupUrl, signal);
-				const r = luData.results?.[0];
-				const resolvedFeedUrl = typeof r?.feedUrl === 'string' ? r.feedUrl : '';
-				const resolvedArtworkUrl = typeof r?.artworkUrl600 === 'string' ? r.artworkUrl600 : '';
-				if (!resolvedFeedUrl) {
-					episodesError = 'No RSS feed available for this podcast.';
-					return;
-				}
-				podcast = { ...podcast, feedUrl: resolvedFeedUrl, artworkUrl: podcast.artworkUrl || resolvedArtworkUrl };
-				podcastData.podcasts = podcastData.podcasts.map(p => p.id === podcast.id ? podcast : p);
-				if (selectedPodcast?.id === podcast.id) {
-					selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
-				}
-			}
-			const data = await fetchRss(podcast.feedUrl, rssFetchConfig, signal, force ? undefined : 1) as Record<string, unknown>;
-			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
-			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
-				const enc = item.enclosure as { link?: string; length?: number } | null;
-				const rawDur = item.itunes_duration ?? item.duration ?? 0;
-				return {
-					id:          buildEpisodeId(podcast, item, i, enc),
-					title:       String(item.title ?? 'Untitled'),
-					description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
-					duration:    parseDuration(rawDur as string | number),
-					positionSec: 0,
-					publishedAt: String(item.pubDate ?? ''),
-					played:      false,
-					progress:    0,
-					audioUrl:    enc?.link ?? (String(item.link ?? '').match(/\.(mp3|m4a|ogg|aac|wav|flac)(\?|$)/i) ? String(item.link) : ''),
-				};
-			});
-			const feedImage = typeof (data.feed as Record<string, unknown> | undefined)?.image === 'string'
-				? (data.feed as Record<string, unknown>).image as string
-				: '';
-			const mergedEps = mergeEpisodeHistory(podcast.id, eps);
-			podcastData.podcasts = podcastData.podcasts.map(p =>
-				p.id === podcast.id
-					? { ...p, episodes: force ? mergedEps : mergedEps, episodesLoaded: true, artworkUrl: p.artworkUrl || feedImage }
-					: p
-			);
-			if (selectedPodcast?.id === podcast.id) {
-				selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
-			}
-			hasMoreEpisodes = (data.hasMore as boolean) ?? false;
-		} catch (e: unknown) {
-			if (signal.aborted) return;
-			const msg = describePodcastRequestError(e, 'Unable to load this podcast right now. Please try again.');
-			if (!force || !podcast.episodesLoaded) {
-				episodesError = msg;
-			}
-			addToast({
-				message: msg,
-				type: 'error',
-				action: { label: 'Retry', handler: () => loadEpisodes(podcast, true) },
-				autoDismissMs: 8000
-			});
-		} finally {
-			if (episodeLoadController === controller) {
-				episodeLoadController = null;
-				episodeLoadPodcastId = null;
-				episodesLoading = false;
-				episodesRefreshing = false;
-			}
-		}
-	}
-
-	async function loadMoreEpisodes(podcast: Podcast) {
-		if (episodesLoadingMore || !hasMoreEpisodes) return;
-		episodesLoadingMore = true;
-		const nextPage = episodesPage + 1;
-		try {
-			const data = await fetchRss(podcast.feedUrl, rssFetchConfig, undefined, nextPage) as Record<string, unknown>;
-			if (data.status !== 'ok') throw new Error(data.message as string ?? 'RSS error');
-			const eps: Episode[] = ((data.items as Record<string, unknown>[]) ?? []).map((item: Record<string, unknown>, i: number) => {
-				const enc = item.enclosure as { link?: string; length?: number } | null;
-				const rawDur = item.itunes_duration ?? item.duration ?? 0;
-				return {
-					id:          buildEpisodeId(podcast, item, (nextPage - 1) * 50 + i, enc),
-					title:       String(item.title ?? 'Untitled'),
-					description: String(item.description ?? item.content ?? '').replace(/<[^>]+>/g, '').trim().slice(0, 200),
-					duration:    parseDuration(rawDur as string | number),
-					positionSec: 0,
-					publishedAt: String(item.pubDate ?? ''),
-					played:      false,
-					progress:    0,
-					audioUrl:    enc?.link ?? (String(item.link ?? '').match(/\.(mp3|m4a|ogg|aac|wav|flac)(\?|$)/i) ? String(item.link) : ''),
-				};
-			});
-			const mergedEps = mergeEpisodeHistory(podcast.id, eps);
-			podcastData.podcasts = podcastData.podcasts.map(p =>
-				p.id === podcast.id
-					? { ...p, episodes: [...p.episodes, ...mergedEps], episodesLoaded: true }
-					: p
-			);
-			if (selectedPodcast?.id === podcast.id) {
-				selectedPodcast = podcastData.podcasts.find(p => p.id === podcast.id) ?? selectedPodcast;
-			}
-			episodesPage = nextPage;
-			hasMoreEpisodes = (data.hasMore as boolean) ?? false;
-		} catch (e: unknown) {
-			console.error('Failed to load more episodes:', e);
-		} finally {
-			episodesLoadingMore = false;
-		}
-	}
-
-	function openPodcast(podcast: Podcast) {
-		selectedPodcast = podcast;
-		episodesError = null;
-		if (!podcast.episodesLoaded) {
-			loadEpisodes(podcast);
-		} else {
-			// Episodes cached — check for newer ones in the background
-			loadEpisodes(podcast, true);
-		}
-	}
 
 	// ── Playback ─────────────────────────────────────────────────
 	function syncEpisodeAudioSource(podcast: Podcast, episode: Episode, resumeAt: number) {
@@ -856,7 +622,7 @@
 		const pod = podcastData.podcasts.find(p => p.id === podcastData.lastPodcastId);
 		if (!pod) return;
 		hasRestoredSelectedPodcast = true;
-		openPodcast(pod);
+		podcastLibrary.openPodcast(pod);
 	});
 
 	$effect(() => {
@@ -921,7 +687,7 @@
 		<div
 			class="flex-1 overflow-y-auto"
 			use:pullToRefresh={{
-				onRefresh: () => { if (selectedPodcast) void loadEpisodes(selectedPodcast, true); },
+				onRefresh: () => { if (selectedPodcast) void podcastLibrary.loadEpisodes(selectedPodcast, true); },
 				onUpdate: (d) => episodePullDist = d,
 				threshold: PULL_THRESHOLD,
 			}}
@@ -961,7 +727,7 @@
 				<div class="flex flex-col items-center justify-center h-40 gap-3 px-6 text-center">
 					<span class="text-3xl">📡</span>
 					<p class="text-sm text-muted-foreground">{episodesError}</p>
-					<Button variant="outline" size="sm" onclick={() => { if (selectedPodcast) { selectedPodcast.episodesLoaded = false; loadEpisodes(selectedPodcast); } }}>
+					<Button variant="outline" size="sm" onclick={() => { if (selectedPodcast) { selectedPodcast.episodesLoaded = false; podcastLibrary.loadEpisodes(selectedPodcast); } }}>
 						<RefreshCw class="w-3.5 h-3.5 mr-1.5" /> Retry
 					</Button>
 				</div>
@@ -1116,7 +882,7 @@
 		<div
 			class="flex-1 overflow-y-auto"
 			use:pullToRefresh={{
-				onRefresh: () => { void refreshAllSubscribed(); },
+				onRefresh: () => { void podcastLibrary.refreshAllSubscribed(); },
 				onUpdate: (d) => pullDistance = d,
 				threshold: PULL_THRESHOLD,
 			}}
@@ -1145,8 +911,8 @@
 					{@const artGradient = artworkFallback(podcast)}
 					<div class="tap-feedback list-row-surface flex items-center gap-3 p-4 border-b transition-colors cursor-pointer {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}"
 						role="button" tabindex="0"
-						onclick={() => openPodcast(podcast)}
-						onkeydown={(e) => e.key === 'Enter' && openPodcast(podcast)}
+						onclick={() => podcastLibrary.openPodcast(podcast)}
+						onkeydown={(e) => e.key === 'Enter' && podcastLibrary.openPodcast(podcast)}
 					>
 						{#if podcast.artworkUrl}
 							<img src={podcast.artworkUrl} alt={podcast.title} loading="lazy" decoding="async" width="52" height="52"
@@ -1166,7 +932,7 @@
 								<span class="text-xs text-muted-foreground">{podcast.episodes.length} eps</span>
 							{/if}
 							<Button variant="ghost" size="icon" class="w-7 h-7 text-destructive hover:text-destructive"
-								onclick={(e) => { e.stopPropagation(); deletePodcast(podcast.id); }}>
+								onclick={(e) => { e.stopPropagation(); podcastLibrary.deletePodcast(podcast.id); }}>
 								<Trash2 class="w-3.5 h-3.5" />
 							</Button>
 						</div>
@@ -1200,8 +966,8 @@
 						{@const localPodcast = podcastData.podcasts.find(p => p.itunesId === item.trackId)}
 						<div class="tap-feedback list-row-surface flex items-center gap-3 p-4 border-b transition-colors cursor-pointer {listTileToneClasses.usesTint ? listTileToneClasses.rowClass : 'hover:bg-accent/40 active:bg-accent/60'}"
 							role="button" tabindex="0"
-							onclick={() => localPodcast && openPodcast(localPodcast)}
-							onkeydown={(e) => e.key === 'Enter' && localPodcast && openPodcast(localPodcast)}
+							onclick={() => localPodcast && podcastLibrary.openPodcast(localPodcast)}
+							onkeydown={(e) => e.key === 'Enter' && localPodcast && podcastLibrary.openPodcast(localPodcast)}
 						>
 							{#if item.artworkUrl600}
 								<img src={item.artworkUrl600} alt={item.trackName} loading="lazy" decoding="async" width="52" height="52"
@@ -1223,9 +989,9 @@
 									e.stopPropagation();
 									if (subscribed) {
 										const lp = podcastData.podcasts.find(p => p.itunesId === item.trackId);
-										if (lp) openPodcast(lp);
+										if (lp) podcastLibrary.openPodcast(lp);
 									} else {
-										subscribeFromItunes(item);
+										podcastLibrary.subscribeFromItunes(item);
 									}
 								}}
 							>
