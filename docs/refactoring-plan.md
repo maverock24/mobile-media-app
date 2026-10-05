@@ -130,7 +130,7 @@ named. Line ranges are anchors from the recon snapshot (`/tmp/pr3-recon.md`),
 taken before the dead-code follow-up above; treat them as anchors, not current
 offsets.
 
-Status: 3.1 merged (PR 4). 3.2 in review (PR 5). 3.3 to 3.8 not started.
+Status: 3.1 and 3.2 merged (PR 4 and PR 5). 3.3 delivered on `refactor/pr3-3-folder-scan` (PR 6). 3.4 to 3.8 not started.
 
 **3.1 `driveSession` (`src/lib/drive/driveSession.svelte.ts`).**
 `hasValidDriveToken` (1259-1261), `ensureDriveAccessToken` (1263-1319) and the
@@ -155,10 +155,22 @@ URI that three of its four callers already passed,
 instead of calling the view's wrapper, and `resolveDirAtPath(root, path)` takes
 the root handle.
 
-**3.3 `folderScan` (`src/lib/browse/folderScan.ts`, pure).** `yieldScanToUi`
-(1072-1075), `scanNativeAudioFiles` (1077-1126), `collectAllFromPath`
-(1977-1999), `pickNativeAudioDirectory` (1826-1838). Driven by injected
-`{ nativeTreeUri, rootDirHandle, onBatch }`.
+**3.3 `folderScan` (`src/lib/browse/folderScan.ts`, pure).** Delivered on
+`refactor/pr3-3-folder-scan`, with 21 unit tests in
+`tests/unit/browse/folderScan.test.ts`. Moved: `yieldScanToUi`,
+`scanNativeAudioFiles`, `collectAllFromPath`, `pickNativeAudioDirectory`. No
+behaviour change was needed to make any of the four pure.
+
+The recon was wrong about the injection seam. It described the group as driven
+by `{ nativeTreeUri, rootDirHandle, onBatch }`, which fits none of the four
+signatures. `scanNativeAudioFiles` closes over `nativeTreeUri` alone, so it now
+takes the tree URI as its first parameter and keeps its
+`(path, batchSize, options, onBatch)` tail. `collectAllFromPath` closes over six
+values, so it takes a `deps` object of `{ librarySource, sortOrder, allFiles,
+libraryScanPromise, rootDirHandle, nativeTreeUri }`; the `librarySource` field
+is load-bearing, because the drive branch short-circuits before an in-flight
+scan promise. `yieldScanToUi` and `pickNativeAudioDirectory` closed over nothing
+but module imports and globals, so their signatures are unchanged.
 
 **3.4 `folderPicker` (`src/lib/drive/folderPicker.svelte.ts`).**
 `hasPendingDriveFolderPickerIntent` (1180-1186), `markDriveFolderPickerPending`
