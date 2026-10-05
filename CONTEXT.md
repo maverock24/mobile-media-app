@@ -34,14 +34,15 @@ and Google Drive music libraries. The live code in `src/` is authoritative.
 
 ## View composition
 
-`Mp3PlayerView` composes eight per-deck modules, one set per deck rather than a
-module singleton, because two decks mount at once. Six are factories:
+`Mp3PlayerView` composes nine per-deck modules, one set per deck rather than a
+module singleton, because two decks mount at once. Seven are factories:
 `createDriveSession` (`src/lib/drive/driveSession.svelte.ts`),
 `createFolderPicker` (`src/lib/drive/folderPicker.svelte.ts`),
 `createDriveLibrary` (`src/lib/drive/driveLibrary.ts`),
 `createDeviceLibrary` (`src/lib/device/deviceLibrary.svelte.ts`),
-`createBrowseNavigation` (`src/lib/browse/browseNavigation.svelte.ts`) and
-`createFileOps` (`src/lib/files/fileOps.ts`). The other two are pure modules the
+`createBrowseNavigation` (`src/lib/browse/browseNavigation.svelte.ts`),
+`createFileOps` (`src/lib/files/fileOps.ts`) and `createFavoriteTracks`
+(`src/lib/favorites/favoriteTracks.ts`). The other two are pure modules the
 view and the factories call directly, `src/lib/browse/libraryCache.ts` and
 `src/lib/browse/folderScan.ts`.
 
@@ -49,7 +50,9 @@ State shared by more than one module stays in the view and is injected through
 accessors: `allFiles`, `browsePath`, `showQueue`, `pendingFileOp` and the
 transfer fields (`transferFile`, `transferDirection`, `isTransferring`,
 `transferProgress`, `transferPhase`). Each factory owns only the state its own
-functions drive.
+functions drive. `createFavoriteTracks` reads `allFiles` and the live queue
+(`player.state.tracks`) and owns `isChangingTrack` through a get/set accessor;
+the shared `musicSettings.favoriteTracks` list is passed by reference.
 
 Two effects stay in the view for their timing. The mount effect wraps its restore
 preamble in `untrack()` so reads such as `driveSession.ensureDriveAccessToken`
@@ -74,5 +77,7 @@ destination picker. Drive file management was removed (ADR-0002, revised).
 - `src/lib/drive/` — the per-deck Drive session, folder picker and library.
 - `src/lib/device/` — the per-deck device library.
 - `src/lib/files/` — the per-deck file operations.
+- `src/lib/favorites/` — the per-deck track favourites and the resolve-and-play
+  machine behind them.
 - `src/lib/stores/` — rune stores (`mediaEngine`, `settings`, `library`, …).
 - `src/lib/components/views/` — feature screens.

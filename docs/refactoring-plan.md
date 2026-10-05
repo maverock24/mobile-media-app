@@ -408,9 +408,58 @@ download and the File System Access API.
 Now covered by PR 3.2 (`libraryCache`), PR 3.3 (`folderScan`) and PR 3.7
 (`browseNavigation`), so no separate PR is needed.
 
-### PR 5: favourites domain
+### PR 5: favourites domain (delivered)
 
-Six functions, plus the machine that resolves favourite tracks to files.
+The track-favourite machine moved out of `Mp3PlayerView.svelte` into
+`src/lib/favorites/favoriteTracks.ts`, behind the `createFavoriteTracks`
+factory: `createFavoriteTrack`, `resolveFavoriteTrackFile`, `isFavoriteTrack`,
+`toggleFavoriteTrack`, `removeFavoriteTrack`, `getResolvedFavoriteTrackFiles`
+and `playFavoriteTrack`. PR 4 was already absorbed into PR 3, so this is the
+only remaining favourites work.
+
+**Seam.** A per-deck factory, not a module singleton: two decks mount at once,
+so a shared instance would let deck A's `playFavoriteTrack` answer for deck B.
+The module is a rune-free `.ts`, so every closure dependency arrives as an
+injected option. The `view` accessor carries the deck's `allFiles` and its live
+queue (`player.state.tracks`, the second half of the resolve lookup) as
+read-only getters, plus `isChangingTrack` with a setter for the guard
+`playFavoriteTrack` holds across its `await`. `settings` is the shared persisted
+`musicSettings` object, so the `favoriteTracks` writes still land on the
+reactive store rather than a copy. The playback entry points arrive as
+callbacks: `initAudioContext`, `beginQueue` and `startPlayback`, plus
+`openYoutubePanel` and the `addToast` sink.
+
+**What stayed in the view, and why.** The two deriveds `filteredFavoriteTracks`
+and `currentTrackIsFavorite` read view state (`fileSearchQuery`, `currentTrack`,
+`musicSettings.lastTrackIndex`), so they stay and call the instance instead of
+local wrappers. The markup is not split into components, but every bare-name
+call site was converted to `favoriteTracks.*`: the favourites list's play and
+remove handlers, the browse-row star (class, toggle, aria-label, title and
+fill), the now-playing star toggle, and both deriveds.
+
+**Behaviour preserved.** `createFavoriteTrack`'s `parseFilename` parse and its
+per-source shape (web, native with path/mime/mtime, drive with id/size/link),
+and the per-branch `source` that keeps the discriminant narrow;
+`resolveFavoriteTrackFile`'s two-step lookup (library index, then the live
+queue) with its per-source reconstruction fallback and its `null` for an
+unloaded web favourite; `isFavoriteTrack`'s `Array.isArray` guard;
+`toggleFavoriteTrack`'s remove-when-present / append-when-absent semantics;
+`removeFavoriteTrack`'s key match; `getResolvedFavoriteTrackFiles`'s stored
+order, unresolved skips and de-duplication by key; and `playFavoriteTrack`'s
+guard order (bail while changing, hand YouTube to the panel, warn on an
+unresolvable favourite, init the context, warn on an empty batch, then start at
+the favourite's index with `preserveOrder`, releasing `isChangingTrack` in
+`finally`). The recon's line anchors were stale; every function was read in
+place before the move.
+
+**Test coverage.** 23 unit tests in
+`tests/unit/favorites/favoriteTracks.test.ts`, fully dependency-injected so no
+store or device is needed: one `createFavoriteTrack` branch per source, the
+resolve hit (index and queue) and miss, the `isFavoriteTrack` non-array guard,
+the add and remove paths of `toggleFavoriteTrack`, `removeFavoriteTrack`, the
+batch skip and de-dup, and `playFavoriteTrack` for a resolved favourite, an
+unresolvable one, an empty batch, the changing-track guard and a YouTube
+hand-off.
 
 ### After the programme
 
