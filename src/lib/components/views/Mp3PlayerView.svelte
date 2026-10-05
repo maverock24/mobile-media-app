@@ -5,7 +5,7 @@
 	import { Capacitor } from '@capacitor/core';
 	import { Filesystem } from '@capacitor/filesystem';
 	import Input from '$lib/components/ui/Input.svelte';
-	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
+	import { DirectoryReader } from '$lib/native/directory-reader';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
 	import { createPlayer, type PlayerTrack } from '$lib/audio/player.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
@@ -33,8 +33,7 @@
 	} from '$lib/models/music';
 	import {
 		idbGet, idbDelete,
-		saveHandleToIDB, loadHandleFromIDB,
-		deleteCachedLibrary,
+		loadHandleFromIDB,
 	} from '$lib/utils/idb';
 	import { triggerPlaybackHaptic, triggerSwipeBackHaptic } from '$lib/native/haptics';
 	import { marqueeTitle } from '$lib/actions/marqueeTitle';
@@ -57,19 +56,20 @@
 		type DriveLibraryView
 	} from '$lib/drive/driveLibrary';
 	import {
-		LAST_LIBRARY_CACHE_KEY,
-		getDeviceLibraryCacheKey,
+		createDeviceLibrary,
+		type DeviceLibrary,
+		type DeviceLibraryView
+	} from '$lib/device/deviceLibrary.svelte';
+	import {
 		saveCachedLibrary,
 		loadDeviceCachedLibrary,
 		restoreStoredFilesFromCache,
 		collectStoredFilesFromSnapshot,
-		pathToString,
-		collectStoredFilesFromDirHandle
+		pathToString
 	} from '$lib/browse/libraryCache';
 	import {
 		scanNativeAudioFiles,
-		collectAllFromPath,
-		pickNativeAudioDirectory
+		collectAllFromPath
 	} from '$lib/browse/folderScan';
 	import { appSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
@@ -99,7 +99,6 @@
 	const googleDriveConfigured = isGoogleDriveConfigured();
 	const googleDriveClientId = getGoogleDriveClientId();
 
-	const BACKGROUND_LIBRARY_SCAN_BATCH_SIZE = 500;
 	const FOLDER_PLAY_SCAN_BATCH_SIZE = 48;
 	const listTileToneClasses = $derived(getListTileToneClasses(appSettings.listTileTone));
 	const FOLDER_PLAY_INITIAL_BATCH_SIZE = 1;
@@ -157,24 +156,17 @@
 	let isRestoring = $state(false);  // set to true by init effect on Android native only
 
 	// Prevents background folder scans from overwriting the track list after the user has
-	// explicitly selected a song via playBrowseFile / playCurrentFolder / playFolderPath.
-	let trackListLockedByUser = false;
-	let libraryScanPromise: Promise<StoredAudioFile[]> | null = null;
-	// Progress of the background full-library index scan (null when not scanning)
-	let scanProgress = $state<{ pct: number; filesFound: number } | null>(null);
+	// explicitly selected a song. Owned by the per-deck device library (PR 3.6);
+	// `beginQueue` sets it through the instance below.
 
 	// ── folder browse state ──
-	// rootDirHandle and allFiles MUST be $state so hasFolderLoaded $derived updates
-	let rootDirHandle    = $state<FileSystemDirectoryHandle | null>(null);
-	let nativeTreeUri    = $state<string | null>(null);
-	let pendingHandle    = $state<FileSystemDirectoryHandle | null>(null); // needs permission
+	// allFiles MUST be $state so hasFolderLoaded $derived updates
 	let allFiles         = $state<StoredAudioFile[]>([]);     // web/native metadata-backed library
 	let browsePath       = $state<string[]>([]);                 // navigation stack
 	let browseEntries    = $state<BrowseEntry[]>([]);
 	let fileSearchQuery  = $state('');
 	let browseLoading    = $state(false);
 	let browseVersion    = $state(0);                          // bump to force reload
-	let deckFolderLabel  = $state('Library');                      // per-deck folder name
 	let selectedBrowseFileKeys = $state<string[]>([]);
 	// Per-deck Drive session (token, expiry, user, error). One instance per deck,
 	// created here so two mounted decks never share a token.
@@ -216,10 +208,7 @@
 	let drivePickerPath = $state<GoogleDriveFolder[]>([]);
 	let drivePickerFolders = $state<GoogleDriveFolder[]>([]);
 	let drivePickerLoading = $state(false);
-	// Local folder picker state (Android)
-	let localPickerPath = $state<string[]>([]);
-	let localPickerEntries = $state<Array<NativeDirectoryFolder | NativeDirectoryFile>>([]);
-	let localPickerLoading = $state(false);
+	// Local folder picker state (Android) now lives in the per-deck device library (PR 3.6).
 	let switchingToFavId = $state<string | null>(null); // fav id currently loading
 	let browseLongPressTimer: ReturnType<typeof setTimeout> | null = null;
 	let longPressHandledFileKey = $state<string | null>(null);
@@ -349,8 +338,8 @@
 	// folder because allFiles is only populated by cache restore or manual rescan.
 	$effect(() => {
 		if (fileSearchQuery.trim().length > 0 && allFiles.length === 0
-			&& !libraryScanPromise && (nativeTreeUri || rootDirHandle)) {
-			startLibraryScan(musicSettings.lastFolderName || 'Library');
+			&& !deviceLibrary.libraryScanPromise && (deviceLibrary.nativeTreeUri || deviceLibrary.rootDirHandle)) {
+			deviceLibrary.startLibraryScan(musicSettings.lastFolderName || 'Library');
 		}
 	});
 	const filteredFavoriteTracks = $derived.by(() => {
@@ -413,19 +402,62 @@
 		isSelectionLoop: () => mediaEngine.musicSelectionLoopActive,
 	});
 
+	// ── Device library: the logic lives in the per-deck `createDeviceLibrary`
+	//    factory (PR 3.6). It owns the device-side state the moved functions drive
+	//    (`libraryScanPromise`, `rootDirHandle`, `nativeTreeUri`, `pendingHandle`,
+	//    `scanProgress`, `trackListLockedByUser`, `deckFolderLabel` and the Android
+	//    local-picker fields) and reads or writes everything else through the
+	//    injected `view` accessor below. ──
+	const deviceLibrary: DeviceLibrary = createDeviceLibrary({
+		driveSession,
+		view: {
+			get allFiles() { return allFiles; },
+			set allFiles(v) { allFiles = v; },
+			get browsePath() { return browsePath; },
+			set browsePath(v) { browsePath = v; },
+			get showQueue() { return showQueue; },
+			set showQueue(v) { showQueue = v; },
+			get isLoading() { return isLoading; },
+			set isLoading(v) { isLoading = v; },
+			get driveSearch() { return driveSearch; },
+			set driveSearch(v) { driveSearch = v; },
+			get transferFile() { return transferFile; },
+			set transferFile(v) { transferFile = v; },
+			get transferDirection() { return transferDirection; },
+			set transferDirection(v) { transferDirection = v; },
+			get isTransferring() { return isTransferring; },
+			set isTransferring(v) { isTransferring = v; },
+			get transferProgress() { return transferProgress; },
+			set transferProgress(v) { transferProgress = v; },
+			get transferPhase() { return transferPhase; },
+			set transferPhase(v) { transferPhase = v; },
+			get showLocalFolderPicker() { return showLocalFolderPicker; },
+			set showLocalFolderPicker(v) { showLocalFolderPicker = v; },
+			get isFileOpRunning() { return isFileOpRunning; },
+			get pendingFileOp() { return pendingFileOp; },
+		},
+		isNativeApp,
+		getFolderInputEl: () => folderInputEl,
+		getNativeFileInputEl: () => nativeFileInputEl,
+		bumpBrowseVersion: () => { browseVersion += 1; },
+		hydrateTracksFromLibrary,
+		runPendingFileOp: (destination) => runPendingFileOp(destination),
+		refreshDriveLibrary: () => driveLibrary.refreshGoogleDrive(),
+	});
+
 	// ── Drive library: the logic lives in the per-deck `createDriveLibrary`
 	//    factory (PR 3.5). The module is a rune-free `.ts`, so this view allocates
 	//    the reactive `driveBusy` bag and passes an accessor for every piece of
 	//    view state the module reads or writes. ──
 	const driveLibraryView: DriveLibraryView = {
-		get libraryScanPromise() { return libraryScanPromise; },
-		set libraryScanPromise(v) { libraryScanPromise = v; },
-		get rootDirHandle() { return rootDirHandle; },
-		set rootDirHandle(v) { rootDirHandle = v; },
-		get nativeTreeUri() { return nativeTreeUri; },
-		set nativeTreeUri(v) { nativeTreeUri = v; },
-		get pendingHandle() { return pendingHandle; },
-		set pendingHandle(v) { pendingHandle = v; },
+		get libraryScanPromise() { return deviceLibrary.libraryScanPromise; },
+		set libraryScanPromise(v) { deviceLibrary.libraryScanPromise = v; },
+		get rootDirHandle() { return deviceLibrary.rootDirHandle; },
+		set rootDirHandle(v) { deviceLibrary.rootDirHandle = v; },
+		get nativeTreeUri() { return deviceLibrary.nativeTreeUri; },
+		set nativeTreeUri(v) { deviceLibrary.nativeTreeUri = v; },
+		get pendingHandle() { return deviceLibrary.pendingHandle; },
+		set pendingHandle(v) { deviceLibrary.pendingHandle = v; },
 		get browsePath() { return browsePath; },
 		set browsePath(v) { browsePath = v; },
 		get showQueue() { return showQueue; },
@@ -459,7 +491,7 @@
 		view: driveLibraryView,
 		clearPlayer: () => player.clear(),
 		bumpBrowseVersion: () => { browseVersion += 1; },
-		activateDeviceLibrary,
+		activateDeviceLibrary: (folderName) => deviceLibrary.activateDeviceLibrary(folderName),
 		confirmDriveFolderSelection,
 		hydrateTracksFromLibrary,
 	});
@@ -476,9 +508,9 @@
 		musicSettings.lastTrackKey || (currentTrack ? getStoredFileKey(currentTrack.source) : '')
 	);
 
-	const hasFolderLoaded = $derived(rootDirHandle !== null || nativeTreeUri !== null || allFiles.length > 0);
+	const hasFolderLoaded = $derived(deviceLibrary.rootDirHandle !== null || deviceLibrary.nativeTreeUri !== null || allFiles.length > 0);
 	const currentLibraryLabel = $derived(
-		musicSettings.librarySource === 'drive' ? 'Google Drive' : deckFolderLabel
+		musicSettings.librarySource === 'drive' ? 'Google Drive' : deviceLibrary.deckFolderLabel
 	);
 
 	// ── register stop-callback for cross-view audio exclusivity ──
@@ -1040,64 +1072,6 @@
 		clearBrowseLongPressTimer();
 	}
 
-	function startLibraryScan(folderName: string, options: { resetExistingFiles?: boolean } = {}) {
-		if (options.resetExistingFiles) {
-			allFiles = [];
-			browseVersion += 1;
-		}
-		scanProgress = { pct: 0, filesFound: 0 };
-		let scanPromise: Promise<StoredAudioFile[]> | null = null;
-		scanPromise = (async (): Promise<StoredAudioFile[]> => {
-			if (rootDirHandle) {
-				// Web File System API — no batch progress available; scan runs to completion
-				const result = await collectStoredFilesFromDirHandle(rootDirHandle);
-				return result;
-			}
-
-			if (nativeTreeUri) {
-				return scanNativeAudioFiles(nativeTreeUri, [], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {}, async (mappedBatch: StoredAudioFile[], state) => {
-					if (scanPromise && libraryScanPromise === scanPromise) {
-						allFiles = [...allFiles, ...mappedBatch];
-						browseVersion += 1;
-						const total = state.foldersScanned + state.foldersQueued;
-						const pct = total > 0 ? Math.min(99, Math.round((state.foldersScanned / total) * 100)) : 1;
-						scanProgress = { pct, filesFound: allFiles.length };
-					}
-				});
-			}
-
-			return allFiles;
-		})();
-
-		libraryScanPromise = scanPromise;
-		void scanPromise
-			.then(async (scannedFiles) => {
-				if (libraryScanPromise !== scanPromise) return;
-				allFiles = scannedFiles;
-				scanProgress = null;
-				if (!trackListLockedByUser) hydrateTracksFromLibrary(scannedFiles);
-				await saveCachedLibrary(nativeTreeUri, folderName, scannedFiles);
-			})
-			.catch((error) => {
-				console.error('Failed to scan selected library.', error);
-			})
-			.finally(() => {
-				if (libraryScanPromise === scanPromise) {
-					libraryScanPromise = null;
-					scanProgress = null;
-				}
-			});
-	}
-
-	// ── Per-track resume helpers ──────────────────────────────────
-
-	function activateDeviceLibrary(folderName: string) {
-		musicSettings.librarySource = 'device';
-		musicSettings.lastFolderName = folderName;
-		deckFolderLabel = folderName;
-		driveSearch = '';
-	}
-
 	async function confirmDriveFolderSelection(folderId?: string, folderName?: string) {
 		folderPicker.showFolderPicker = false;
 		clearPendingDriveFolderPickerIntent();
@@ -1106,110 +1080,12 @@
 		// Switch to drive source immediately so the restoration $effect doesn't
 		// re-hydrate the device library during async pauses inside finishDriveLoad.
 		musicSettings.librarySource = 'drive';
-		rootDirHandle = null;
-		nativeTreeUri = null;
-		libraryScanPromise = null;
+		deviceLibrary.rootDirHandle = null;
+		deviceLibrary.nativeTreeUri = null;
+		deviceLibrary.libraryScanPromise = null;
 		const token = folderPicker.folderPickerToken;
 		folderPicker.folderPickerToken = '';
 		await driveLibrary.finishDriveLoad(token, folderId);
-	}
-
-	// ── Folder favorites ──────────────────────────────────────────
-	async function rescanCurrentLibraryIndex() {
-		if (musicSettings.librarySource === 'drive') {
-			await driveLibrary.refreshGoogleDrive();
-			return;
-		}
-
-		const folderName = musicSettings.lastFolderName || 'Library';
-		const cacheKey = getDeviceLibraryCacheKey({ treeUri: nativeTreeUri, folderName });
-		await deleteCachedLibrary(cacheKey);
-		if (cacheKey !== LAST_LIBRARY_CACHE_KEY) {
-			await deleteCachedLibrary(LAST_LIBRARY_CACHE_KEY);
-		}
-
-		if (nativeTreeUri || rootDirHandle) {
-			startLibraryScan(folderName, { resetExistingFiles: true });
-		}
-	}
-
-	// Local source: restore the last local folder when one is available, otherwise
-	// ask the user to pick a folder. "Change folder" now lives in Settings.
-	async function openLocalSourceButton() {
-		const restorable = rootDirHandle !== null || pendingHandle !== null
-			|| Boolean(musicSettings.nativeTreeUri) || Boolean(musicSettings.lastFolderName);
-		if (restorable && await restoreLocalLibrary()) {
-			return;
-		}
-		await openFolder();
-	}
-
-	async function restoreLocalLibrary(): Promise<boolean> {
-		const folderName = musicSettings.lastFolderName;
-		if (!musicSettings.nativeTreeUri && !folderName && !rootDirHandle && !pendingHandle) {
-			return false;
-		}
-
-		try {
-			// Android (SAF): the tree permission is remembered, so a re-pick is unnecessary.
-			if (isNativeApp && musicSettings.nativeTreeUri) {
-				nativeTreeUri = musicSettings.nativeTreeUri;
-				rootDirHandle = null;
-				pendingHandle = null;
-				allFiles = [];
-				browsePath = [];
-				activateDeviceLibrary(folderName || 'Library');
-				showQueue = true;
-				browseVersion++;
-				const cachedLibrary = await loadDeviceCachedLibrary(musicSettings.nativeTreeUri, folderName || 'Library');
-				if (cachedLibrary && cachedLibrary.files.length > 0) {
-					allFiles = restoreStoredFilesFromCache(cachedLibrary);
-					hydrateTracksFromLibrary(allFiles);
-					browseVersion++;
-				} else {
-					startLibraryScan(folderName || 'Library', { resetExistingFiles: true });
-				}
-				return true;
-			}
-
-			// Desktop/web: restore from a persisted directory handle + cache.
-			if (rootDirHandle) {
-				allFiles = [];
-				browsePath = [];
-				activateDeviceLibrary(rootDirHandle.name);
-				showQueue = true;
-				browseVersion++;
-				return true;
-			}
-			const [handle, cachedLibrary] = await Promise.all([
-				loadHandleFromIDB(),
-				loadDeviceCachedLibrary(null, musicSettings.lastFolderName),
-			]);
-			if (handle) {
-				const perm = await (handle as unknown as { queryPermission(o: object): Promise<string> }).queryPermission({ mode: 'read' });
-				if (perm === 'granted') {
-					rootDirHandle = handle;
-					nativeTreeUri = null;
-					allFiles = [];
-					browsePath = [];
-					activateDeviceLibrary(handle.name);
-					showQueue = true;
-					browseVersion++;
-					return true;
-				}
-			}
-			if (cachedLibrary && cachedLibrary.files.length > 0) {
-				allFiles = restoreStoredFilesFromCache(cachedLibrary);
-				activateDeviceLibrary(cachedLibrary.folderName);
-				hydrateTracksFromLibrary(allFiles);
-				showQueue = true;
-				browseVersion++;
-				return true;
-			}
-		} catch {
-			// Fall through — the caller will show the plain folder chooser.
-		}
-		return false;
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -1232,12 +1108,12 @@
 			browseEntries = files.map((file) => ({ kind: 'file', name: file.name, file }));
 		} else if (allFiles.length > 0) {
 			const snapshot = buildBrowseEntries(allFiles, path);
-			if (snapshot.length > 0 || libraryScanPromise === null) {
+			if (snapshot.length > 0 || deviceLibrary.libraryScanPromise === null) {
 				// Index is complete or partial but has entries for this path — use it instantly
 				browseEntries = snapshot;
-			} else if (nativeTreeUri) {
+			} else if (deviceLibrary.nativeTreeUri) {
 				// Scan in progress and this subfolder not yet indexed — live single-level call
-				const result = await DirectoryReader.listEntries({ treeUri: nativeTreeUri, path: pathToString(path) });
+				const result = await DirectoryReader.listEntries({ treeUri: deviceLibrary.nativeTreeUri, path: pathToString(path) });
 				if (loadId !== _browseLoadId) return;
 				const folders: BrowseEntry[] = [];
 				const files: BrowseEntry[] = [];
@@ -1254,9 +1130,9 @@
 			} else {
 				browseEntries = snapshot; // empty but nothing else we can do
 			}
-		} else if (rootDirHandle) {
+		} else if (deviceLibrary.rootDirHandle) {
 				// Navigate to the directory at `path`
-				let dir: FileSystemDirectoryHandle = rootDirHandle;
+				let dir: FileSystemDirectoryHandle = deviceLibrary.rootDirHandle;
 				for (const segment of path) {
 					let found = false;
 					for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
@@ -1284,8 +1160,8 @@
 				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 				browseEntries = [...folders, ...files];
-			} else if (nativeTreeUri) {
-				const result = await DirectoryReader.listEntries({ treeUri: nativeTreeUri, path: pathToString(path) });
+			} else if (deviceLibrary.nativeTreeUri) {
+				const result = await DirectoryReader.listEntries({ treeUri: deviceLibrary.nativeTreeUri, path: pathToString(path) });
 				if (loadId !== _browseLoadId) return;
 				const folders: BrowseEntry[] = [];
 				const files: BrowseEntry[] = [];
@@ -1375,7 +1251,7 @@
 	function beginQueue(folder: string, options: { selectionLoop?: boolean } = {}) {
 		queueSessionId += 1;
 		musicSettings.lastFolderName = folder;
-		trackListLockedByUser = true;
+			deviceLibrary.trackListLockedByUser = true;
 		mediaEngine.musicSelectionLoopActive = options.selectionLoop ?? false;
 	}
 
@@ -1425,169 +1301,11 @@
 	}
 
 	// ─────────────────────────────────────────────────────────────
-	// Folder picker
-	// ─────────────────────────────────────────────────────────────
-	async function openFolder() {
-		if (isNativeApp) {
-			const canUseNativePlugin = Capacitor.isPluginAvailable('FilePicker');
-			isLoading = true;
-
-			try {
-				const { treeUri, folderName } = canUseNativePlugin
-					? await pickNativeAudioDirectory()
-					: { treeUri: '', folderName: 'Selected Folder' };
-				if (!treeUri) {
-					if (!canUseNativePlugin) {
-						nativeFileInputEl?.click();
-						return;
-					}
-
-					alert('No MP3 files were found in the selected folder.');
-					return;
-				}
-				rootDirHandle = null;
-				nativeTreeUri = treeUri;
-				musicSettings.nativeTreeUri = treeUri;
-				pendingHandle = null;
-				allFiles = [];
-				activateDeviceLibrary(folderName);
-				browsePath = [];
-				browseVersion++;
-				showQueue = true;
-				const cachedLibrary = await loadDeviceCachedLibrary(treeUri, folderName);
-				try {
-					await DirectoryReader.rememberTreeUri({ treeUri });
-				} catch (error) {
-					console.warn('Unable to persist tree URI permission.', error);
-				}
-				if (cachedLibrary && cachedLibrary.files.length > 0) {
-					allFiles = restoreStoredFilesFromCache(cachedLibrary);
-					hydrateTracksFromLibrary(allFiles);
-					browseVersion++;
-				}
-			} catch (error) {
-				const isCancel = error instanceof Error && /cancel/i.test(error.message);
-				if (!isCancel) {
-					console.error('Failed to open native folder.', error);
-				}
-				if (nativeFileInputEl) {
-					nativeFileInputEl.click();
-					return;
-				}
-				if (!isCancel) {
-					alert('Unable to open a folder on this device. Please try again.');
-				}
-			} finally {
-				isLoading = false;
-			}
-			return;
-		}
-
-		if ('showDirectoryPicker' in window) {
-			try {
-				const dirHandle = await (window as unknown as {
-					showDirectoryPicker(o: object): Promise<FileSystemDirectoryHandle>;
-				}).showDirectoryPicker({ mode: 'read' });
-				rootDirHandle = dirHandle;
-				musicSettings.nativeTreeUri = '';
-				pendingHandle = null;
-				allFiles = [];
-				activateDeviceLibrary(dirHandle.name);
-				browsePath = [];
-				browseVersion++;  // triggers browse entry reload
-				showQueue = true;
-				void saveHandleToIDB(dirHandle);
-				const cachedLibrary = await loadDeviceCachedLibrary(null, dirHandle.name);
-				if (cachedLibrary && cachedLibrary.files.length > 0) {
-					allFiles = restoreStoredFilesFromCache(cachedLibrary);
-					hydrateTracksFromLibrary(allFiles);
-					browseVersion++;
-				}
-			} catch { /* user cancelled or API not supported */ }
-		} else {
-			folderInputEl?.click();
-		}
-	}
-
-	function handleFolderInput(e: Event) {
-		const input = e.target as HTMLInputElement;
-		const files = Array.from(input.files ?? []).filter(f => isSupportedAudioFile(f.name));
-		if (files.length === 0) { alert('No supported audio files found in selected folder.'); return; }
-		rootDirHandle = null;
-		nativeTreeUri = null;
-		musicSettings.nativeTreeUri = '';
-		libraryScanPromise = null;
-		allFiles = files.map((file) => createStoredAudioFile(file));
-		activateDeviceLibrary(files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files');
-		browsePath = [];
-		browseVersion++;  // triggers browse entry reload
-		showQueue = true;
-		hydrateTracksFromLibrary(allFiles);
-		void saveCachedLibrary(nativeTreeUri, musicSettings.lastFolderName || 'Selected Files', allFiles);
-		input.value = '';
-	}
-
-	function handleNativeFileInput(e: Event) {
-		const input = e.target as HTMLInputElement;
-		const files = Array.from(input.files ?? []).filter((file) => {
-			return isSupportedAudioFile(file.name) || file.type.startsWith('audio/');
-		});
-
-		if (files.length === 0) {
-			alert('No supported audio files were selected.');
-			input.value = '';
-			return;
-		}
-
-		rootDirHandle = null;
-		nativeTreeUri = null;
-		musicSettings.nativeTreeUri = '';
-		pendingHandle = null;
-		libraryScanPromise = null;
-		allFiles = files.map((file) => createStoredAudioFile(file));
-		activateDeviceLibrary('Selected Files');
-		browsePath = [];
-		browseVersion++;
-		showQueue = true;
-		hydrateTracksFromLibrary(allFiles, true);
-		void saveCachedLibrary(nativeTreeUri, 'Selected Files', allFiles);
-		input.value = '';
-	}
-
-	// ─────────────────────────────────────────────────────────────
-	// Reconnect a pending handle (needs user gesture for permission)
-	// ─────────────────────────────────────────────────────────────
-	async function reconnectFolder() {
-		if (!pendingHandle) return;
-		try {
-			const perm = await (pendingHandle as unknown as { requestPermission(o: object): Promise<string> })
-				.requestPermission({ mode: 'read' });
-			if (perm === 'granted') {
-				rootDirHandle = pendingHandle;
-				nativeTreeUri = null;
-				musicSettings.nativeTreeUri = '';
-				pendingHandle = null;
-				allFiles = [];
-				activateDeviceLibrary(rootDirHandle.name);
-				browseVersion++;
-				showQueue = true;
-				void saveHandleToIDB(rootDirHandle);
-				const cachedLibrary = await loadDeviceCachedLibrary(null, rootDirHandle.name);
-				if (cachedLibrary && cachedLibrary.files.length > 0) {
-					allFiles = restoreStoredFilesFromCache(cachedLibrary);
-					hydrateTracksFromLibrary(allFiles);
-					browseVersion++;
-				}
-			}
-		} catch { /* user denied */ }
-	}
-
-	// ─────────────────────────────────────────────────────────────
 	// Browse interactions
 	// ─────────────────────────────────────────────────────────────
 
 	async function playNativeFolderFromScan(path: string[], folderLabel: string): Promise<boolean> {
-		if (!nativeTreeUri) return false;
+		if (!deviceLibrary.nativeTreeUri) return false;
 
 		let playbackStarted = false;
 		let hasResolvedStart = false;
@@ -1600,7 +1318,7 @@
 
 		const collectedFiles: StoredAudioFile[] = [];
 		void scanNativeAudioFiles(
-			nativeTreeUri,
+			deviceLibrary.nativeTreeUri,
 			path,
 			FOLDER_PLAY_SCAN_BATCH_SIZE,
 			{ initialBatchSize: FOLDER_PLAY_INITIAL_BATCH_SIZE },
@@ -1651,7 +1369,7 @@
 			if (path.length === 0 && collectedFiles.length > 0) {
 				allFiles = collectedFiles;
 				browseVersion += 1;
-				await saveCachedLibrary(nativeTreeUri, folderLabel, collectedFiles);
+				await saveCachedLibrary(deviceLibrary.nativeTreeUri, folderLabel, collectedFiles);
 			}
 			if (!hasResolvedStart) {
 				hasResolvedStart = true;
@@ -1730,7 +1448,7 @@
 				return;
 			}
 
-			if (nativeTreeUri) {
+			if (deviceLibrary.nativeTreeUri) {
 				if (!(await playNativeFolderFromScan(path, folderLabel))) {
 					alert('No audio files found in this folder.');
 				}
@@ -1741,9 +1459,9 @@
 				librarySource: musicSettings.librarySource,
 				sortOrder: musicSettings.sortOrder,
 				allFiles,
-				libraryScanPromise,
-				rootDirHandle,
-				nativeTreeUri,
+				libraryScanPromise: deviceLibrary.libraryScanPromise,
+				rootDirHandle: deviceLibrary.rootDirHandle,
+				nativeTreeUri: deviceLibrary.nativeTreeUri,
 			});
 			if (files.length === 0) { alert('No audio files found in this folder.'); return; }
 			beginQueue(folderLabel);
@@ -1793,133 +1511,6 @@
 		}
 	}
 
-	// ── Google Drive ↔ Local file transfer ─────────────────────
-
-	async function openLocalDownloadFolderPicker(file: StoredAudioFile) {
-		transferFile = file;
-		transferDirection = 'download';
-		if (isNativeApp) {
-			if (!nativeTreeUri) {
-				// First download: the selected root folder is the destination —
-				// start immediately instead of opening a second picker.
-				localPickerPath = [];
-				await openFolder();
-				if (nativeTreeUri && transferFile) {
-					await selectLocalFolderAndDownload();
-				} else {
-					transferFile = null;
-				}
-				return;
-			}
-			showLocalFolderPicker = true;
-			await loadLocalFolderPicker('');
-		} else {
-			await downloadToLocalFolder(file);
-		}
-	}
-
-	async function loadLocalFolderPicker(path: string) {
-		if (!nativeTreeUri) return;
-		localPickerLoading = true;
-		try {
-			const result = await DirectoryReader.listEntries({ treeUri: nativeTreeUri, path });
-			localPickerEntries = result.entries;
-		} catch (e) {
-			addToast({ message: 'Failed to list folders.', type: 'error' });
-		} finally {
-			localPickerLoading = false;
-		}
-	}
-
-	function navigateLocalPickerInto(folder: NativeDirectoryFolder) {
-		localPickerPath = [...localPickerPath, folder.name];
-		void loadLocalFolderPicker(localPickerPath.join('/'));
-	}
-
-
-	async function selectLocalFolderAndDownload() {
-		if (!nativeTreeUri || isTransferring || isFileOpRunning) return;
-		// A pending move/copy uses the local picker's current path as destination.
-		if (pendingFileOp) {
-			showLocalFolderPicker = false;
-			await runPendingFileOp({ localPath: localPickerPath.join('/') });
-			return;
-		}
-		if (!transferFile) return;
-		const token = await driveSession.ensureDriveAccessToken(true);
-		if (!token) {
-			addToast({ message: 'Drive session expired. Please reconnect.', type: 'warning' });
-			return;
-		}
-		isTransferring = true;
-		showLocalFolderPicker = false;
-		transferPhase = 'downloading';
-		transferProgress = { loaded: 0, total: 0 };
-		try {
-			const driveFile = await downloadGoogleDriveFile({
-				accessToken: token,
-				fileId: (transferFile as any).fileId ?? '',
-				fileName: transferFile.name,
-				mimeType: (transferFile as any).mimeType,
-				modifiedAt: (transferFile as any).modifiedAt,
-				onProgress: (loaded, total) => {
-					transferProgress = { loaded, total };
-				}
-			});
-			transferPhase = 'saving';
-			transferProgress = null;
-			// Use FileReader for safe base64 encoding (avoids call-stack
-			// overflow from String.fromCharCode(...spread) on large files)
-			const base64 = await new Promise<string>((resolve, reject) => {
-				const reader = new FileReader();
-				reader.onload = () => {
-					const result = reader.result as string;
-					resolve(result.split(',')[1] ?? result);
-				};
-				reader.onerror = reject;
-				reader.readAsDataURL(driveFile);
-			});
-			const result = await DirectoryReader.writeFile({
-				treeUri: nativeTreeUri,
-				path: localPickerPath.join('/'),
-				fileName: transferFile.name,
-				mimeType: (transferFile as any).mimeType ?? 'audio/mpeg',
-				data: base64,
-			});
-			// Add the new file to the device library so it appears immediately
-			// when browsing local files. In Drive view the source file is already
-			// listed (and must keep its "Download" action), so injecting a native
-			// copy here would show an "Upload" button instead of the download one.
-			if (musicSettings.librarySource !== 'drive') {
-				const newFile: StoredAudioFile = {
-					source: 'native',
-					name: transferFile.name,
-					relativePath: localPickerPath.length > 0 ? localPickerPath.join('/') + '/' + transferFile.name : transferFile.name,
-					path: result.path,
-					mimeType: (transferFile as any).mimeType ?? 'audio/mpeg',
-					modifiedAt: Date.now(),
-				};
-				allFiles = [...allFiles, newFile];
-				browseVersion++;
-			}
-			addToast({ message: `Downloaded "${transferFile.name}" to phone.`, type: 'info' });
-		} catch (e: any) {
-			const msg = e?.message || '';
-			if (/security|permission/i.test(msg)) {
-				addToast({ message: 'Please re-select your music folder to grant write permission.', type: 'warning', autoDismissMs: 6000 });
-			} else if (/401|unauthorised|token|auth/i.test(msg)) {
-				addToast({ message: 'Google Drive session expired. Reconnect in Settings.', type: 'warning', autoDismissMs: 5000 });
-			} else {
-				addToast({ message: 'Download failed.', type: 'error' });
-			}
-		} finally {
-			isTransferring = false;
-			transferFile = null;
-			transferProgress = null;
-			transferPhase = 'downloading';
-		}
-	}
-
 	// ── File management handlers (T6) — ADR-0002 ─────────────────────────────
 	type OpTarget = { name: string; isDrive: boolean; fileId: string | null; source: StoredAudioFile | null };
 
@@ -1933,12 +1524,12 @@
 			addToast({ message: 'Local destination requires the Android app.', type: 'warning' });
 			return;
 		}
-		if (!nativeTreeUri) {
-			await openFolder();
+		if (!deviceLibrary.nativeTreeUri) {
+			await deviceLibrary.openFolder();
 		}
-		if (!nativeTreeUri) { addToast({ message: 'No local folder selected.', type: 'warning' }); return; }
+		if (!deviceLibrary.nativeTreeUri) { addToast({ message: 'No local folder selected.', type: 'warning' }); return; }
 		showLocalFolderPicker = true;
-		await loadLocalFolderPicker('');
+		await deviceLibrary.loadLocalFolderPicker('');
 	}
 
 	function confirmAndDelete(target: OpTarget) {
@@ -1972,18 +1563,18 @@
 	}
 
 	async function deleteFileOp(op: PendingFileOp) {
-		if (!nativeTreeUri) throw new Error('no tree');
-		await DirectoryReader.deleteEntry({ treeUri: nativeTreeUri, path: '', name: op.name });
+		if (!deviceLibrary.nativeTreeUri) throw new Error('no tree');
+		await DirectoryReader.deleteEntry({ treeUri: deviceLibrary.nativeTreeUri, path: '', name: op.name });
 		addToast({ message: `Deleted "${op.name}".`, type: 'info' });
 	}
 
 	async function moveOrCopyFileOp(op: PendingFileOp, destination: { localPath?: string }) {
-		if (!nativeTreeUri) throw new Error('no tree');
+		if (!deviceLibrary.nativeTreeUri) throw new Error('no tree');
 		const destPath = destination.localPath ?? '';
 		if (op.op === 'copy') {
-			await DirectoryReader.copyEntry({ srcTreeUri: nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: nativeTreeUri, destPath, destName: op.name });
+			await DirectoryReader.copyEntry({ srcTreeUri: deviceLibrary.nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: deviceLibrary.nativeTreeUri, destPath, destName: op.name });
 		} else {
-			await DirectoryReader.moveEntry({ srcTreeUri: nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: nativeTreeUri, destPath, destName: op.name });
+			await DirectoryReader.moveEntry({ srcTreeUri: deviceLibrary.nativeTreeUri, srcPath: '', srcName: op.name, destTreeUri: deviceLibrary.nativeTreeUri, destPath, destName: op.name });
 		}
 		addToast({ message: `${op.op === 'copy' ? 'Copied' : 'Moved'} "${op.name}".`, type: 'info' });
 	}
@@ -1998,59 +1589,6 @@
 
 	async function reloadCurrentBrowse() {
 		void loadBrowseEntries(browsePath, musicSettings.librarySource === 'drive' ? 'drive' : undefined);
-	}
-
-	async function downloadToLocalFolder(file: StoredAudioFile) {
-		if (isTransferring) return;
-		const token = await driveSession.ensureDriveAccessToken(true);
-		if (!token) {
-			addToast({ message: 'Connect to Google Drive first.', type: 'warning' });
-			return;
-		}
-		isTransferring = true;
-		transferPhase = 'downloading';
-		transferProgress = { loaded: 0, total: 0 };
-		try {
-			if (!('showDirectoryPicker' in window)) {
-				addToast({ message: 'Folder picker not supported in this browser. Try Chrome or Edge.', type: 'warning', autoDismissMs: 5000 });
-				return;
-			}
-			addToast({ message: 'Choose a folder to save the file…', type: 'info', autoDismissMs: 2500 });
-			const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
-			const driveFile = await downloadGoogleDriveFile({
-				accessToken: token,
-				fileId: (file as any).fileId ?? '',
-				fileName: file.name,
-				mimeType: (file as any).mimeType,
-				modifiedAt: (file as any).modifiedAt,
-				onProgress: (loaded, total) => {
-					transferProgress = { loaded, total };
-				}
-			});
-			transferPhase = 'saving';
-			transferProgress = null;
-			const newHandle = await dirHandle.getFileHandle(file.name, { create: true });
-			const writable = await newHandle.createWritable();
-			await writable.write(driveFile);
-			await writable.close();
-			addToast({ message: `Downloaded "${file.name}" to phone.`, type: 'info' });
-		} catch (e: any) {
-			if (e?.name !== 'AbortError') {
-				const msg = e?.message || '';
-				if (/security|permission/i.test(msg)) {
-					addToast({ message: 'Please re-select your music folder to grant write permission.', type: 'warning', autoDismissMs: 6000 });
-				} else if (/401|unauthorised|token|auth|expired/i.test(msg)) {
-					addToast({ message: 'Google Drive session expired. Reconnect in Settings.', type: 'warning', autoDismissMs: 5000 });
-				} else {
-					addToast({ message: `Download failed: ${msg || 'Unknown error'}`, type: 'error' });
-				}
-			}
-		} finally {
-			isTransferring = false;
-			transferFile = null;
-			transferProgress = null;
-			transferPhase = 'downloading';
-		}
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -2289,15 +1827,15 @@
 				]);
 				if (cachedLibrary && cachedLibrary.files.length > 0) {
 					allFiles = restoreStoredFilesFromCache(cachedLibrary);
-					activateDeviceLibrary(cachedLibrary.folderName);
+					deviceLibrary.activateDeviceLibrary(cachedLibrary.folderName);
 					hydrateTracksFromLibrary(allFiles);
 					showQueue = true;
 					browseVersion++;
 				}
 				if (isNativeApp && musicSettings.nativeTreeUri) {
-					nativeTreeUri = musicSettings.nativeTreeUri;
-					rootDirHandle = null;
-					pendingHandle = null;
+					deviceLibrary.nativeTreeUri = musicSettings.nativeTreeUri;
+					deviceLibrary.rootDirHandle = null;
+					deviceLibrary.pendingHandle = null;
 					showQueue = true;
 					browseVersion++;
 				}
@@ -2309,14 +1847,14 @@
 				// (inside reconnectFolder) where a real user gesture exists.
 				const perm = await (handle as unknown as FSHandle).queryPermission({ mode: 'read' });
 				if (perm === 'granted') {
-					rootDirHandle = handle;
-					nativeTreeUri = null;
+					deviceLibrary.rootDirHandle = handle;
+					deviceLibrary.nativeTreeUri = null;
 					allFiles = cachedLibrary?.files.length ? allFiles : [];
 					browseVersion++;
 					showQueue = true;
 				} else {
 					// 'prompt' or 'denied' — need user gesture to re-request
-					pendingHandle = handle;
+					deviceLibrary.pendingHandle = handle;
 				}
 			} catch {
 				// IDB or permission API unavailable — show plain Open Folder
@@ -2329,7 +1867,7 @@
 
 	$effect(() => {
 		if (typeof window === 'undefined') return;
-		const onRescan = () => { void rescanCurrentLibraryIndex(); };
+		const onRescan = () => { void deviceLibrary.rescanCurrentLibraryIndex(); };
 		window.addEventListener('music-library:rescan', onRescan);
 		return () => window.removeEventListener('music-library:rescan', onRescan);
 	});
@@ -2345,7 +1883,7 @@
 	multiple
 	webkitdirectory
 	class="hidden"
-	onchange={handleFolderInput}
+	onchange={deviceLibrary.handleFolderInput}
 />
 
 <input
@@ -2354,7 +1892,7 @@
 	accept=".mp3,.m4a,audio/*"
 	multiple
 	class="hidden"
-	onchange={handleNativeFileInput}
+	onchange={deviceLibrary.handleNativeFileInput}
 />
 
 <div class="flex flex-col h-full bg-background/85">
@@ -2382,15 +1920,15 @@
 			</p>
 		</div>
 		<div class="flex flex-col items-center gap-3 w-full max-w-xs">
-			{#if pendingHandle}
-				<Button onclick={reconnectFolder} class="gap-2 px-6 h-12 text-base w-full">
+			{#if deviceLibrary.pendingHandle}
+				<Button onclick={deviceLibrary.reconnectFolder} class="gap-2 px-6 h-12 text-base w-full">
 					<FolderOpen class="w-5 h-5" /> Reconnect "{musicSettings.lastFolderName}"
 				</Button>
-				<Button variant="outline" onclick={openFolder} class="gap-2 h-10 text-sm w-full" disabled={isLoading}>
+				<Button variant="outline" onclick={deviceLibrary.openFolder} class="gap-2 h-10 text-sm w-full" disabled={isLoading}>
 					<FolderOpen class="w-4 h-4" /> Choose a different folder
 				</Button>
 			{:else}
-				<Button onclick={openFolder} class="gap-2 px-6 h-12 text-base w-full" disabled={isLoading}>
+				<Button onclick={deviceLibrary.openFolder} class="gap-2 px-6 h-12 text-base w-full" disabled={isLoading}>
 					{#if isLoading}
 						<div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
 						Loading…
@@ -2495,7 +2033,7 @@
 					>
 						<Star class="w-5 h-5" fill={musicFavorites.shown ? 'currentColor' : 'none'} />
 					</Button>
-					<Button variant="ghost" size="icon" class="h-10 w-10" onclick={openLocalSourceButton} aria-label="Local folder" title="Local folder">
+					<Button variant="ghost" size="icon" class="h-10 w-10" onclick={deviceLibrary.openLocalSourceButton} aria-label="Local folder" title="Local folder">
 						<FolderOpen class="w-5 h-5" />
 					</Button>
 					<Button variant="ghost" size="icon" class="h-10 w-10" onclick={driveLibrary.openDriveSourceButton} disabled={driveBusy.isAuthenticating} aria-label="Google Drive" title="Google Drive">
@@ -2530,14 +2068,14 @@
 		</div>
 
 		<!-- Index scan progress bar (shown while building the in-memory folder index) -->
-		{#if scanProgress !== null && musicSettings.librarySource !== 'drive'}
+		{#if deviceLibrary.scanProgress !== null && musicSettings.librarySource !== 'drive'}
 		<div class="px-4 py-2 border-b shrink-0 bg-muted/20">
 			<div class="flex items-center gap-2 text-xs text-muted-foreground mb-1.5">
 				<div class="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin shrink-0"></div>
-				<span class="flex-1 truncate">Indexing library… {scanProgress.pct}% · {scanProgress.filesFound} file{scanProgress.filesFound === 1 ? '' : 's'} found</span>
+				<span class="flex-1 truncate">Indexing library… {deviceLibrary.scanProgress.pct}% · {deviceLibrary.scanProgress.filesFound} file{deviceLibrary.scanProgress.filesFound === 1 ? '' : 's'} found</span>
 			</div>
 			<div class="h-1 rounded-full bg-muted overflow-hidden">
-				<div class="h-full bg-primary rounded-full transition-[width] duration-300" style="width: {scanProgress.pct}%"></div>
+				<div class="h-full bg-primary rounded-full transition-[width] duration-300" style="width: {deviceLibrary.scanProgress.pct}%"></div>
 			</div>
 		</div>
 		{/if}
@@ -2573,7 +2111,7 @@
 				{#each musicSettings.favoriteFolders as fav}
 					{@const isActive = fav.source === 'drive'
 						? (musicSettings.librarySource === 'drive' && (fav.id === '_all' ? !musicSettings.driveFolderId : musicSettings.driveFolderId === fav.id))
-						: (musicSettings.librarySource === 'device' && nativeTreeUri === fav.treeUri)}
+						: (musicSettings.librarySource === 'device' && deviceLibrary.nativeTreeUri === fav.treeUri)}
 					<div class="mini-player-control-surface flex items-center gap-0.5 shrink-0 rounded-full pl-2.5 pr-1 py-1 text-xs {isActive ? 'bg-primary text-primary-foreground border-primary' : 'text-foreground'}">
 						<button class="flex items-center gap-1.5 min-w-0" onclick={() => driveLibrary.switchToFavorite(fav)} title="Switch to {fav.name}" disabled={switchingToFavId !== null}>
 							{#if switchingToFavId === fav.id}
@@ -2784,7 +2322,7 @@
 								const wrapper = (e.currentTarget as HTMLElement).closest('.relative.overflow-hidden');
 								const front = wrapper?.querySelector('[data-swipe-front]') as HTMLElement | null;
 								if (front) { front.style.transition = 'transform 0.2s ease'; front.style.transform = ''; }
-								if (isDrive) openLocalDownloadFolderPicker(entry.file);
+								if (isDrive) deviceLibrary.openLocalDownloadFolderPicker(entry.file);
 								else driveLibrary.openDriveUploadFolderPicker(entry.file);
 							}}
 							>
@@ -2920,7 +2458,7 @@
 				<span class="truncate">{currentLibraryLabel}</span>
 			</div>
 			<div class="flex items-center gap-1 shrink-0">
-				<Button variant="ghost" size="icon" onclick={openFolder} title="Open local folder" class="h-10 w-10">
+				<Button variant="ghost" size="icon" onclick={deviceLibrary.openFolder} title="Open local folder" class="h-10 w-10">
 					<FolderOpen class="w-5 h-5" />
 				</Button>
 				<Button variant="ghost" size="icon" onclick={driveSession.user ? driveLibrary.changeDriveFolder : driveLibrary.connectGoogleDrive} title={driveSession.user ? 'Change Google Drive folder' : 'Connect Google Drive'} class="h-10 w-10">
@@ -3064,29 +2602,29 @@
 			<p class="text-sm font-semibold">{pendingFileOp ? (pendingFileOp.op === 'move' ? 'Move to folder' : 'Copy to folder') : 'Download to phone'}</p>
 			<p class="text-xs text-muted-foreground">{pendingFileOp?.name ?? transferFile?.name ?? ''}</p>
 		</div>
-		<Button variant="ghost" size="sm" onclick={selectLocalFolderAndDownload} disabled={isTransferring || isFileOpRunning}>
+		<Button variant="ghost" size="sm" onclick={deviceLibrary.selectLocalFolderAndDownload} disabled={isTransferring || isFileOpRunning}>
 			{pendingFileOp ? 'Move here' : 'Save here'}
 		</Button>
 	</div>
 	<!-- Breadcrumb -->
-	{#if localPickerPath.length > 0}
+	{#if deviceLibrary.localPickerPath.length > 0}
 	<div class="flex items-center gap-1 px-3 py-2 text-xs text-muted-foreground border-b shrink-0 flex-wrap">
-		<button class="hover:text-foreground" onclick={() => { localPickerPath = []; void loadLocalFolderPicker(''); }}>Root</button>
-		{#each localPickerPath as seg, i}
+		<button class="hover:text-foreground" onclick={() => { deviceLibrary.localPickerPath = []; void deviceLibrary.loadLocalFolderPicker(''); }}>Root</button>
+		{#each deviceLibrary.localPickerPath as seg, i}
 			<ChevronRight class="w-3 h-3 shrink-0" />
-			<button class="hover:text-foreground truncate max-w-[100px] {i === localPickerPath.length - 1 ? 'text-foreground font-medium' : ''}" onclick={() => { localPickerPath = localPickerPath.slice(0, i + 1); void loadLocalFolderPicker(localPickerPath.join('/')); }}>{seg}</button>
+			<button class="hover:text-foreground truncate max-w-[100px] {i === deviceLibrary.localPickerPath.length - 1 ? 'text-foreground font-medium' : ''}" onclick={() => { deviceLibrary.localPickerPath = deviceLibrary.localPickerPath.slice(0, i + 1); void deviceLibrary.loadLocalFolderPicker(deviceLibrary.localPickerPath.join('/')); }}>{seg}</button>
 		{/each}
 	</div>
 	{/if}
 	<div class="flex-1 overflow-y-auto">
-		{#if localPickerLoading}
+		{#if deviceLibrary.localPickerLoading}
 		<div class="flex items-center justify-center py-12"><div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div></div>
-		{:else if localPickerEntries.length === 0}
+		{:else if deviceLibrary.localPickerEntries.length === 0}
 		<p class="text-center text-muted-foreground text-sm py-12">No folders here</p>
 		{:else}
-		{#each localPickerEntries as entry}
+		{#each deviceLibrary.localPickerEntries as entry}
 			{#if entry.kind === 'folder'}
-			<button class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent text-left" onclick={() => navigateLocalPickerInto(entry)}>
+			<button class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent text-left" onclick={() => deviceLibrary.navigateLocalPickerInto(entry)}>
 				<Folder class="w-5 h-5 text-primary shrink-0" />
 				<span class="text-sm truncate">{entry.name}</span>
 			</button>
