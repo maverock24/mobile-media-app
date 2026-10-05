@@ -10,7 +10,7 @@
 	import { createPlayer, type PlayerTrack } from '$lib/audio/player.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import { bytesFromBase64, arrayBufferFromBytes } from '$lib/audio/fileResolver';
-	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
+	import { getRelativePath } from '$lib/models/browse';
 	import type { MediaItem } from '$lib/models/media';
 	import {
 		type StoredAudioFile,
@@ -24,12 +24,9 @@
 		getTrackKey,
 		mergeStoredFiles,
 		fmtGain,
-		isSupportedAudioFile,
 		isYoutubeFavorite,
 		parseFilename,
 		sortFiles as sortStoredFiles,
-		createStoredAudioFile,
-		createStoredNativeAudioFile,
 	} from '$lib/models/music';
 	import {
 		idbGet, idbDelete,
@@ -61,11 +58,15 @@
 		type DeviceLibraryView
 	} from '$lib/device/deviceLibrary.svelte';
 	import {
+		createBrowseNavigation,
+		type BrowseNavigation,
+		type BrowseNavigationView
+	} from '$lib/browse/browseNavigation.svelte';
+	import {
 		saveCachedLibrary,
 		loadDeviceCachedLibrary,
 		restoreStoredFilesFromCache,
-		collectStoredFilesFromSnapshot,
-		pathToString
+		collectStoredFilesFromSnapshot
 	} from '$lib/browse/libraryCache';
 	import {
 		scanNativeAudioFiles,
@@ -163,9 +164,7 @@
 	// allFiles MUST be $state so hasFolderLoaded $derived updates
 	let allFiles         = $state<StoredAudioFile[]>([]);     // web/native metadata-backed library
 	let browsePath       = $state<string[]>([]);                 // navigation stack
-	let browseEntries    = $state<BrowseEntry[]>([]);
 	let fileSearchQuery  = $state('');
-	let browseLoading    = $state(false);
 	let browseVersion    = $state(0);                          // bump to force reload
 	let selectedBrowseFileKeys = $state<string[]>([]);
 	// Per-deck Drive session (token, expiry, user, error). One instance per deck,
@@ -304,7 +303,7 @@
 	const SEARCH_RESULT_LIMIT = 300;
 	const filteredEntries = $derived.by(() => {
 		const query = debouncedSearchQuery.trim().toLowerCase();
-		if (query.length === 0) return browseEntries;
+		if (query.length === 0) return browseNavigation.browseEntries;
 
 		if (searchIndex.length > 0) {
 			const out: BrowseEntry[] = [];
@@ -316,7 +315,7 @@
 			}
 			return out;
 		}
-		return browseEntries.filter(e => e.kind === 'file' && e.name.toLowerCase().includes(query));
+		return browseNavigation.browseEntries.filter(e => e.kind === 'file' && e.name.toLowerCase().includes(query));
 	});
 
 	// When browsing without a search filter, cap the rendered DOM at the same
@@ -494,6 +493,25 @@
 		activateDeviceLibrary: (folderName) => deviceLibrary.activateDeviceLibrary(folderName),
 		confirmDriveFolderSelection,
 		hydrateTracksFromLibrary,
+	});
+
+	// ── Browse navigation: the logic lives in the per-deck
+	//    `createBrowseNavigation` factory (PR 3.7). It owns `browseEntries`, the
+	//    `browseLoading` flag and the per-instance load-id counter; `browsePath`,
+	//    `fileSearchQuery` and `selectedBrowseFileKeys` stay in the view and
+	//    arrive through the accessor. It reads the device library's scan promise
+	//    and handles so the loader's live-listing branch is unchanged. ──
+	const browseNavigation: BrowseNavigation = createBrowseNavigation({
+		deviceLibrary,
+		view: {
+			get allFiles() { return allFiles; },
+			get browsePath() { return browsePath; },
+			set browsePath(v) { browsePath = v; },
+			get fileSearchQuery() { return fileSearchQuery; },
+			set fileSearchQuery(v) { fileSearchQuery = v; },
+			get selectedBrowseFileKeys() { return selectedBrowseFileKeys; },
+			set selectedBrowseFileKeys(v) { selectedBrowseFileKeys = v; },
+		},
 	});
 
 	// ── derived ──
@@ -695,7 +713,7 @@
 		const driveFilter = driveSearch.trim().toLowerCase();
 		browseVersion; // reactive dependency
 		musicSettings.librarySource;
-		void loadBrowseEntries(path, driveFilter);
+		void browseNavigation.loadBrowseEntries(path, driveFilter);
 	});
 
 	$effect(() => {
@@ -1010,7 +1028,7 @@
 	}
 
 	function getCurrentBrowseFileEntries(): (BrowseEntry & { kind: 'file' })[] {
-		return browseEntries.filter((entry): entry is BrowseEntry & { kind: 'file' } => entry.kind === 'file');
+		return browseNavigation.browseEntries.filter((entry): entry is BrowseEntry & { kind: 'file' } => entry.kind === 'file');
 	}
 
 	function getSelectedBrowseFilesInOrder(): StoredAudioFile[] {
@@ -1086,102 +1104,6 @@
 		const token = folderPicker.folderPickerToken;
 		folderPicker.folderPickerToken = '';
 		await driveLibrary.finishDriveLoad(token, folderId);
-	}
-
-	// ─────────────────────────────────────────────────────────────
-	// Browse — async entry loading
-	// ─────────────────────────────────────────────────────────────
-	let _browseLoadId = 0;
-	async function loadBrowseEntries(path: string[], driveFilter = '') {
-		const loadId = ++_browseLoadId;
-		browseLoading = true;
-		try {
-			if (musicSettings.librarySource === 'drive' && driveFilter.trim()) {
-			// Search mode: flat filtered list across all Drive files
-			const filter = driveFilter.trim();
-			const files = sortFiles(allFiles).filter((file) => {
-				if (file.source !== 'drive') return false;
-				const parsed = parseFilename(file.name);
-				const haystack = `${file.name} ${parsed.title} ${parsed.artist}`.toLowerCase();
-				return haystack.includes(filter);
-			});
-			browseEntries = files.map((file) => ({ kind: 'file', name: file.name, file }));
-		} else if (allFiles.length > 0) {
-			const snapshot = buildBrowseEntries(allFiles, path);
-			if (snapshot.length > 0 || deviceLibrary.libraryScanPromise === null) {
-				// Index is complete or partial but has entries for this path — use it instantly
-				browseEntries = snapshot;
-			} else if (deviceLibrary.nativeTreeUri) {
-				// Scan in progress and this subfolder not yet indexed — live single-level call
-				const result = await DirectoryReader.listEntries({ treeUri: deviceLibrary.nativeTreeUri, path: pathToString(path) });
-				if (loadId !== _browseLoadId) return;
-				const folders: BrowseEntry[] = [];
-				const files: BrowseEntry[] = [];
-				for (const entry of result.entries) {
-					if (entry.kind === 'folder') {
-						folders.push({ kind: 'folder', name: entry.name, count: 0 });
-					} else {
-						files.push({ kind: 'file', name: entry.name, file: createStoredNativeAudioFile(entry) });
-					}
-				}
-				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				browseEntries = [...folders, ...files];
-			} else {
-				browseEntries = snapshot; // empty but nothing else we can do
-			}
-		} else if (deviceLibrary.rootDirHandle) {
-				// Navigate to the directory at `path`
-				let dir: FileSystemDirectoryHandle = deviceLibrary.rootDirHandle;
-				for (const segment of path) {
-					let found = false;
-					for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-						if (handle.kind === 'directory' && name === segment) {
-							dir = handle as FileSystemDirectoryHandle; found = true; break;
-						}
-					}
-					if (!found) break;
-				}
-				const folders: BrowseEntry[] = [];
-				const files: BrowseEntry[] = [];
-				for await (const [name, handle] of (dir as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-					if (handle.kind === 'directory') {
-						let count = 0;
-						try {
-							for await (const [n2, h2] of (handle as unknown as AsyncIterable<[string, FileSystemHandle]>)) {
-								if (h2.kind === 'file' && isSupportedAudioFile(n2)) count++;
-							}
-						} catch { /* skip */ }
-						folders.push({ kind: 'folder', name, count });
-					} else if (handle.kind === 'file' && isSupportedAudioFile(name)) {
-						files.push({ kind: 'file', name, file: createStoredAudioFile(await (handle as FileSystemFileHandle).getFile()) });
-					}
-				}
-				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				browseEntries = [...folders, ...files];
-			} else if (deviceLibrary.nativeTreeUri) {
-				const result = await DirectoryReader.listEntries({ treeUri: deviceLibrary.nativeTreeUri, path: pathToString(path) });
-				if (loadId !== _browseLoadId) return;
-				const folders: BrowseEntry[] = [];
-				const files: BrowseEntry[] = [];
-
-				for (const entry of result.entries) {
-					if (entry.kind === 'folder') {
-						folders.push({ kind: 'folder', name: entry.name, count: 0 });
-					} else {
-						files.push({ kind: 'file', name: entry.name, file: createStoredNativeAudioFile(entry) });
-					}
-				}
-
-				folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-				browseEntries = [...folders, ...files];
-			} else {
-				if (loadId === _browseLoadId) browseEntries = [];
-			}
-		} catch { if (loadId === _browseLoadId) browseEntries = []; }
-		if (loadId === _browseLoadId) browseLoading = false;
 	}
 
 	/**
@@ -1477,40 +1399,6 @@
 		}
 	}
 
-	function navigateInto(name: string) {
-		musicFavorites.shown = false;
-		browsePath = [...browsePath, name];
-	}
-
-	/** Navigate to the folder containing a file from filtered search results. */
-	function goToFileFolder(file: StoredAudioFile) {
-		const fullPath = getRelativePath(file);
-		const segments = fullPath.split('/');
-		if (segments.length <= 1) {
-			browsePath = [];
-		} else {
-			browsePath = segments.slice(0, -1);
-		}
-		musicFavorites.shown = false;
-		fileSearchQuery = '';
-		selectedBrowseFileKeys = [];
-		mediaEngine.musicSelectionLoopActive = false;
-	}
-	function navigateToParentFolderFromSwipe() {
-		if (browsePath.length === 0) return;
-		musicFavorites.shown = false;
-		browsePath = browsePath.slice(0, -1);
-	}
-	function navigateUp() {
-		if (musicFavorites.shown) {
-			musicFavorites.shown = false;
-			return;
-		}
-		if (browsePath.length > 0) {
-			browsePath = browsePath.slice(0, -1);
-		}
-	}
-
 	// ── File management handlers (T6) — ADR-0002 ─────────────────────────────
 	type OpTarget = { name: string; isDrive: boolean; fileId: string | null; source: StoredAudioFile | null };
 
@@ -1588,7 +1476,7 @@
 	}
 
 	async function reloadCurrentBrowse() {
-		void loadBrowseEntries(browsePath, musicSettings.librarySource === 'drive' ? 'drive' : undefined);
+		void browseNavigation.loadBrowseEntries(browsePath, musicSettings.librarySource === 'drive' ? 'drive' : undefined);
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -1978,7 +1866,7 @@
 			onBack: () => {
 				if (browsePath.length === 0) return;
 				void triggerSwipeBackHaptic();
-				navigateToParentFolderFromSwipe();
+				browseNavigation.navigateToParentFolderFromSwipe();
 			},
 		}}
 	>
@@ -1991,7 +1879,7 @@
 					variant="ghost"
 					size="icon"
 					class="w-11 h-11 shrink-0"
-					onclick={navigateUp}
+					onclick={browseNavigation.navigateUp}
 					aria-label={musicFavorites.shown
 						? 'Back from favorite tracks'
 						: 'Back to parent folder'}
@@ -2202,7 +2090,7 @@
 						</div>
 					{/each}
 				{/if}
-			{:else if browseLoading}
+			{:else if browseNavigation.browseLoading}
 				<div class="flex items-center justify-center h-32">
 					<div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
 				</div>
@@ -2261,7 +2149,7 @@
 							<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
 								<Folder class="w-4.5 h-4.5 text-primary" />
 							</div>
-							<button class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}" onclick={() => navigateInto(entry.name)}>
+							<button class="tap-feedback flex-1 min-w-0 -my-2 -ml-2 rounded-xl px-2 py-2 text-left {listTileToneClasses.usesTint ? listTileToneClasses.actionClass : 'active:bg-accent/80'}" onclick={() => browseNavigation.navigateInto(entry.name)}>
 								<p class="font-semibold text-[0.95rem] leading-tight title-marquee"><span class="title-marquee-inner" data-text={entry.name}>{entry.name}</span></p>
 								<p class="text-xs text-muted-foreground">{entry.count > 0 ? entry.count + ' MP3 file' + (entry.count !== 1 ? 's' : '') : 'folder'}</p>
 							</button>
@@ -2279,7 +2167,7 @@
 								{/if}
 							</button>
 							<!-- Navigate into -->
-							<button class="text-muted-foreground shrink-0" onclick={() => navigateInto(entry.name)} aria-label="Browse {entry.name}">
+							<button class="text-muted-foreground shrink-0" onclick={() => browseNavigation.navigateInto(entry.name)} aria-label="Browse {entry.name}">
 								<ChevronRight class="w-5 h-5" />
 							</button>
 						</div>
@@ -2305,7 +2193,7 @@
 								const wrapper = (e.currentTarget as HTMLElement).closest('.relative.overflow-hidden');
 								const front = wrapper?.querySelector('[data-swipe-front]') as HTMLElement | null;
 								if (front) { front.style.transition = 'transform 0.2s ease'; front.style.transform = ''; }
-								goToFileFolder(entry.file);
+								browseNavigation.goToFileFolder(entry.file);
 							}}
 							>
 								<Folder class="w-5 h-5" />
