@@ -42,7 +42,6 @@
 	import { marqueeTitle } from '$lib/actions/marqueeTitle';
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
-		checkFolderHasSubfolders,
 		downloadGoogleDriveFile,
 		fetchGoogleDriveUser,
 		getGoogleDriveClientId,
@@ -56,6 +55,12 @@
 	} from '$lib/google-drive';
 	import { formatGoogleDriveAuthError } from '$lib/google-drive-auth-error';
 	import { createDriveSession } from '$lib/drive/driveSession.svelte';
+	import {
+		createFolderPicker,
+		hasPendingDriveFolderPickerIntent,
+		markDriveFolderPickerPending,
+		clearPendingDriveFolderPickerIntent
+	} from '$lib/drive/folderPicker.svelte';
 	import {
 		LAST_LIBRARY_CACHE_KEY,
 		getDeviceLibraryCacheKey,
@@ -368,18 +373,18 @@
 			return haystack.includes(query);
 		});
 	});
-	const DRIVE_FOLDER_PICKER_PENDING_KEY = 'google-drive-folder-picker-pending';
-	// ── Drive folder picker dialog state ──
-	let showFolderPicker      = $state(false);
-	let folderPickerFolders   = $state<GoogleDriveFolder[]>([]);
-	let folderPickerLoading   = $state(false);
-	let folderPickerError     = $state('');
-	let folderPickerStack     = $state<{ id: string; name: string }[]>([]);
-	let folderPickerToken     = $state('');
-	let folderHasSubFolders   = $state<Record<string, boolean>>({}); // folderId → has subfolders
+	// ── Drive folder picker dialog: the state and the behaviour live in the per-deck
+	//    `createFolderPicker` instance (PR 3.4). `hasRestoredPendingDriveFolderPicker`
+	//    stays here because it gates this component's restore effect. ──
+	const folderPicker = createFolderPicker({
+		driveSession,
+		onRestoreBusyFlagsReset: () => {
+			isDriveAuthenticating = false;
+			isDriveLoading = false;
+		},
+		confirmDriveFolderSelection
+	});
 	let hasRestoredPendingDriveFolderPicker = false;
-	let isRestoringPendingDriveFolderPicker = false;
-	let pendingDriveFolderPickerRestoreTimers: number[] = [];
 
 	// ── Web Audio API (lazy-init) ──
 	let audioCtx: AudioContext | null = null;
@@ -1040,85 +1045,6 @@
 	// ── Per-track resume helpers ──────────────────────────────────
 	const formatDriveAuthError = formatGoogleDriveAuthError;
 
-	function hasPendingDriveFolderPickerIntent(): boolean {
-		if (typeof localStorage === 'undefined') {
-			return false;
-		}
-
-		return localStorage.getItem(DRIVE_FOLDER_PICKER_PENDING_KEY) === '1';
-	}
-
-	function markDriveFolderPickerPending() {
-		if (typeof localStorage === 'undefined') {
-			return;
-		}
-
-		localStorage.setItem(DRIVE_FOLDER_PICKER_PENDING_KEY, '1');
-	}
-
-	function clearPendingDriveFolderPickerIntent() {
-		if (typeof localStorage === 'undefined') {
-			return;
-		}
-
-		localStorage.removeItem(DRIVE_FOLDER_PICKER_PENDING_KEY);
-	}
-
-	async function restorePendingDriveFolderPickerIfNeeded(): Promise<boolean> {
-		if (!hasPendingDriveFolderPickerIntent() || isRestoringPendingDriveFolderPicker) {
-			return false;
-		}
-
-		isRestoringPendingDriveFolderPicker = true;
-		try {
-			const token = await driveSession.ensureDriveAccessToken(false);
-			if (!token) {
-				// Native auth was attempted while the WebView was backgrounded; if its
-				// result never came back, don't leave the Connect control wedged in a
-				// spinner — reset so the user can simply tap Connect again.
-				isDriveAuthenticating = false;
-				isDriveLoading = false;
-				return false;
-			}
-
-			folderPickerToken = token;
-			isDriveAuthenticating = false;
-			isDriveLoading = false;
-			clearPendingDriveFolderPickerRestoreTimers();
-			if (!showFolderPicker) {
-				await openFolderPicker();
-			}
-
-			return true;
-		} finally {
-			isRestoringPendingDriveFolderPicker = false;
-		}
-	}
-
-	function schedulePendingDriveFolderPickerRestore() {
-		if (typeof window === 'undefined') {
-			return;
-		}
-
-		pendingDriveFolderPickerRestoreTimers.forEach((timer) => window.clearTimeout(timer));
-		pendingDriveFolderPickerRestoreTimers = [750, 1500, 3000, 6000].map((delay) => window.setTimeout(() => {
-			if (!hasPendingDriveFolderPickerIntent() || showFolderPicker) {
-				return;
-			}
-
-			void restorePendingDriveFolderPickerIfNeeded();
-		}, delay));
-	}
-
-	function clearPendingDriveFolderPickerRestoreTimers() {
-		if (typeof window === 'undefined') {
-			return;
-		}
-
-		pendingDriveFolderPickerRestoreTimers.forEach((timer) => window.clearTimeout(timer));
-		pendingDriveFolderPickerRestoreTimers = [];
-	}
-
 	function activateDeviceLibrary(folderName: string) {
 		musicSettings.librarySource = 'device';
 		musicSettings.lastFolderName = folderName;
@@ -1149,7 +1075,7 @@
 
 		if (interactive) {
 			markDriveFolderPickerPending();
-			schedulePendingDriveFolderPickerRestore();
+			folderPicker.schedulePendingDriveFolderPickerRestore();
 		}
 
 		isDriveAuthenticating = interactive;
@@ -1172,8 +1098,8 @@
 				});
 
 			// Show folder picker before loading files
-			folderPickerToken = token;
-			folderPickerStack = [];
+			folderPicker.folderPickerToken = token;
+			folderPicker.folderPickerStack = [];
 			isDriveLoading = false;
 			isDriveAuthenticating = false;
 
@@ -1184,7 +1110,7 @@
 				clearPendingDriveFolderPickerIntent();
 				await confirmDriveFolderSelection(musicSettings.driveFolderId || undefined, musicSettings.driveFolderName || undefined);
 			} else {
-				await openFolderPicker();
+				await folderPicker.openFolderPicker();
 			}
 		} catch (error) {
 			driveSession.error = formatDriveAuthError(error);
@@ -1194,53 +1120,8 @@
 		}
 	}
 
-	async function openFolderPicker() {
-		folderPickerStack = [];
-		folderPickerFolders = [];
-		folderPickerError = '';
-		showFolderPicker = true;
-		await loadFolderPickerLevel();
-	}
-
-	async function loadFolderPickerLevel() {
-		folderPickerLoading = true;
-		folderPickerError = '';
-		try {
-			const parentId = folderPickerStack.at(-1)?.id;
-			folderPickerFolders = await listGoogleDriveFolders(folderPickerToken, parentId);
-			// Fire parallel sub-folder existence checks for any unchecked folders
-			const unchecked = folderPickerFolders.filter(f => !(f.id in folderHasSubFolders));
-			if (unchecked.length > 0) {
-				const results = await Promise.allSettled(
-					unchecked.map(f => checkFolderHasSubfolders(folderPickerToken, f.id))
-				);
-				const updates: Record<string, boolean> = {};
-				unchecked.forEach((f, i) => {
-					const r = results[i];
-					updates[f.id] = r.status === 'fulfilled' ? r.value : false;
-				});
-				folderHasSubFolders = { ...folderHasSubFolders, ...updates };
-			}
-		} catch (error) {
-			folderPickerFolders = [];
-			folderPickerError = formatDriveAuthError(error);
-		} finally {
-			folderPickerLoading = false;
-		}
-	}
-
-	async function navigateFolderPickerInto(folder: GoogleDriveFolder) {
-		folderPickerStack = [...folderPickerStack, { id: folder.id, name: folder.name }];
-		await loadFolderPickerLevel();
-	}
-
-	async function navigateFolderPickerBack() {
-		folderPickerStack = folderPickerStack.slice(0, -1);
-		await loadFolderPickerLevel();
-	}
-
 	async function confirmDriveFolderSelection(folderId?: string, folderName?: string) {
-		showFolderPicker = false;
+		folderPicker.showFolderPicker = false;
 		clearPendingDriveFolderPickerIntent();
 		musicSettings.driveFolderId = folderId ?? '';
 		musicSettings.driveFolderName = folderName ?? '';
@@ -1250,39 +1131,12 @@
 		rootDirHandle = null;
 		nativeTreeUri = null;
 		libraryScanPromise = null;
-		const token = folderPickerToken;
-		folderPickerToken = '';
+		const token = folderPicker.folderPickerToken;
+		folderPicker.folderPickerToken = '';
 		await finishDriveLoad(token, folderId);
 	}
 
-	function cancelFolderPicker() {
-		showFolderPicker = false;
-		clearPendingDriveFolderPickerIntent();
-		folderPickerToken = '';
-		folderPickerStack = [];
-		folderPickerFolders = [];
-		folderPickerError = '';
-	}
-
 	// ── Folder favorites ──────────────────────────────────────────
-	function removeFavoriteFolder(id: string, source: string) {
-		musicSettings.favoriteFolders = musicSettings.favoriteFolders.filter(f => !(f.id === id && f.source === source));
-	}
-
-	function isDriveFolderPickerFavorited(folderId: string): boolean {
-		return musicSettings.favoriteFolders.some(f => f.id === folderId && f.source === 'drive');
-	}
-
-	function toggleDriveFolderPickerFavorite(folder: GoogleDriveFolder, e: MouseEvent) {
-		e.stopPropagation();
-		const idx = musicSettings.favoriteFolders.findIndex(f => f.id === folder.id && f.source === 'drive');
-		if (idx >= 0) {
-			musicSettings.favoriteFolders = musicSettings.favoriteFolders.filter((_, i) => i !== idx);
-		} else {
-			musicSettings.favoriteFolders = [...musicSettings.favoriteFolders, { id: folder.id, name: folder.name, source: 'drive' as const }];
-		}
-	}
-
 	async function switchToFavorite(fav: (typeof musicSettings.favoriteFolders)[0]) {
 		musicFavorites.shown = false;
 		switchingToFavId = fav.id;
@@ -1336,15 +1190,6 @@
 
 		if (nativeTreeUri || rootDirHandle) {
 			startLibraryScan(folderName, { resetExistingFiles: true });
-		}
-	}
-
-	function confirmCurrentFolder() {
-		const current = folderPickerStack.at(-1);
-		if (current) {
-			void confirmDriveFolderSelection(current.id, current.name);
-		} else {
-			void confirmDriveFolderSelection(undefined, undefined);
 		}
 	}
 
@@ -1443,8 +1288,8 @@
 		markDriveFolderPickerPending();
 		const token = await driveSession.ensureDriveAccessToken(false);
 		if (!token) { await loadDriveLibrary(true); return; }
-		folderPickerToken = token;
-		await openFolderPicker();
+		folderPicker.folderPickerToken = token;
+		await folderPicker.openFolderPicker();
 	}
 
 	// Drive source: load the last-chosen Drive folder (driveFolderId/Name) when one
@@ -1471,16 +1316,16 @@
 
 		if (musicSettings.driveFolderId || musicSettings.driveFolderName) {
 			// Reuse the saved/default Drive folder without re-asking which folder.
-			folderPickerToken = token;
+			folderPicker.folderPickerToken = token;
 			await confirmDriveFolderSelection(musicSettings.driveFolderId || undefined, musicSettings.driveFolderName || undefined);
 		} else {
 			// No folder chosen yet — ask once.
-			folderPickerToken = token;
-			folderPickerStack = [];
-			folderPickerFolders = [];
-			folderPickerError = '';
-			showFolderPicker = true;
-			await loadFolderPickerLevel();
+			folderPicker.folderPickerToken = token;
+			folderPicker.folderPickerStack = [];
+			folderPicker.folderPickerFolders = [];
+			folderPicker.folderPickerError = '';
+			folderPicker.showFolderPicker = true;
+			await folderPicker.loadFolderPickerLevel();
 		}
 	}
 
@@ -2648,7 +2493,7 @@
 		};
 
 		const restorePendingFolderPicker = async () => {
-			const restored = await restorePendingDriveFolderPickerIfNeeded();
+			const restored = await folderPicker.restorePendingDriveFolderPickerIfNeeded();
 			if (cancelled) {
 				return;
 			}
@@ -2679,7 +2524,7 @@
 			// the Connect button disabled and "do nothing" on the next tap.
 			isDriveAuthenticating = false;
 			isDriveLoading = false;
-			void restorePendingDriveFolderPickerIfNeeded();
+			void folderPicker.restorePendingDriveFolderPickerIfNeeded();
 		};
 
 		const handleVisibilityRestore = () => {
@@ -2694,7 +2539,7 @@
 		return () => {
 			window.removeEventListener('focus', handleFocusRestore);
 			document.removeEventListener('visibilitychange', handleVisibilityRestore);
-			clearPendingDriveFolderPickerRestoreTimers();
+			folderPicker.clearPendingDriveFolderPickerRestoreTimers();
 		};
 	});
 
@@ -3030,7 +2875,7 @@
 						</button>
 						<button
 							class="w-5 h-5 flex items-center justify-center rounded-full ml-0.5 hover:bg-black/10 opacity-60 hover:opacity-100 transition-opacity"
-							onclick={() => removeFavoriteFolder(fav.id, fav.source)}
+							onclick={() => folderPicker.removeFavoriteFolder(fav.id, fav.source)}
 							aria-label="Remove {fav.name} from favorites"
 						>×</button>
 					</div>
@@ -3582,7 +3427,7 @@
 {/if}
 
 <!-- ═══════════════════ DRIVE FOLDER PICKER DIALOG ═══════════════════ -->
-{#if showFolderPicker}
+{#if folderPicker.showFolderPicker}
 <div
 	class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
 	role="dialog"
@@ -3592,7 +3437,7 @@
 	<!-- Backdrop -->
 	<button
 		class="absolute inset-0 bg-black/60 backdrop-blur-sm"
-		onclick={cancelFolderPicker}
+		onclick={folderPicker.cancelFolderPicker}
 		aria-label="Close"
 		tabindex="-1"
 	></button>
@@ -3607,10 +3452,10 @@
 		<!-- Header -->
 		<div class="px-4 pt-3 pb-3 border-b shrink-0">
 			<div class="flex items-center gap-2">
-				{#if folderPickerStack.length > 0}
+				{#if folderPicker.folderPickerStack.length > 0}
 					<button
 						class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground"
-						onclick={navigateFolderPickerBack}
+						onclick={folderPicker.navigateFolderPickerBack}
 						aria-label="Back"
 					>
 						<ChevronLeft class="w-4 h-4" />
@@ -3618,9 +3463,9 @@
 				{/if}
 				<div class="flex-1 min-w-0">
 					<h2 class="text-base font-semibold leading-tight">Choose a folder</h2>
-					{#if folderPickerStack.length > 0}
+					{#if folderPicker.folderPickerStack.length > 0}
 						<p class="text-xs text-muted-foreground truncate">
-							{folderPickerStack.map(f => f.name).join(' › ')}
+							{folderPicker.folderPickerStack.map(f => f.name).join(' › ')}
 						</p>
 					{:else}
 						<p class="text-xs text-muted-foreground">Select which folder to load MP3s from</p>
@@ -3628,7 +3473,7 @@
 				</div>
 				<button
 					class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent transition-colors text-muted-foreground"
-					onclick={cancelFolderPicker}
+					onclick={folderPicker.cancelFolderPicker}
 					aria-label="Cancel"
 				>
 					<ChevronLeft class="w-4 h-4 rotate-180" />
@@ -3638,18 +3483,18 @@
 
 		<!-- Folder list -->
 		<div class="flex-1 overflow-y-auto min-h-0">
-			{#if folderPickerLoading}
+			{#if folderPicker.folderPickerLoading}
 				<div class="flex items-center justify-center py-12">
 					<div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
 				</div>
-			{:else if folderPickerError}
+			{:else if folderPicker.folderPickerError}
 				<div class="px-4 py-8 text-center space-y-3">
-					<p class="text-sm text-destructive">{folderPickerError}</p>
-					<Button variant="outline" size="sm" onclick={loadFolderPickerLevel}>Retry</Button>
+					<p class="text-sm text-destructive">{folderPicker.folderPickerError}</p>
+					<Button variant="outline" size="sm" onclick={folderPicker.loadFolderPickerLevel}>Retry</Button>
 				</div>
 			{:else}
 				<!-- "All files" option (only at root level) -->
-				{#if folderPickerStack.length === 0}
+				{#if folderPicker.folderPickerStack.length === 0}
 					<button
 						class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors text-left"
 						onclick={() => confirmDriveFolderSelection(undefined, undefined)}
@@ -3667,14 +3512,14 @@
 					</button>
 				{/if}
 
-				{#if folderPickerFolders.length === 0}
+				{#if folderPicker.folderPickerFolders.length === 0}
 					<p class="text-center text-muted-foreground text-sm py-8 px-4">No sub-folders found here</p>
 				{:else}
-					{#each folderPickerFolders as folder}
+					{#each folderPicker.folderPickerFolders as folder}
 						{@const isSelected = musicSettings.driveFolderId === folder.id}
-						{@const isFaved = isDriveFolderPickerFavorited(folder.id)}
+						{@const isFaved = folderPicker.isDriveFolderPickerFavorited(folder.id)}
 						<div class="w-full flex items-center gap-3 px-4 py-3 border-b hover:bg-accent transition-colors">
-							<button class="flex items-center gap-3 flex-1 min-w-0 text-left" onclick={() => navigateFolderPickerInto(folder)}>
+							<button class="flex items-center gap-3 flex-1 min-w-0 text-left" onclick={() => folderPicker.navigateFolderPickerInto(folder)}>
 								<div class="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
 									<Folder class="w-4 h-4 text-primary" />
 								</div>
@@ -3685,12 +3530,12 @@
 							</button>
 							<button
 								class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-accent transition-colors shrink-0 {isFaved ? 'text-yellow-400' : 'text-muted-foreground'}"
-								onclick={(e) => toggleDriveFolderPickerFavorite(folder, e)}
+								onclick={(e) => folderPicker.toggleDriveFolderPickerFavorite(folder, e)}
 								aria-label="{isFaved ? 'Remove from' : 'Add to'} favorites"
 							>
 								<Star class="w-4 h-4" fill={isFaved ? 'currentColor' : 'none'} />
 							</button>
-							<button class="shrink-0 text-muted-foreground" onclick={() => navigateFolderPickerInto(folder)} aria-label="Browse {folder.name}">
+							<button class="shrink-0 text-muted-foreground" onclick={() => folderPicker.navigateFolderPickerInto(folder)} aria-label="Browse {folder.name}">
 								<ChevronRight class="w-4 h-4" />
 							</button>
 						</div>
@@ -3701,9 +3546,9 @@
 
 		<!-- Footer -->
 		<div class="px-4 py-3 border-t shrink-0 flex gap-2">
-			<Button variant="outline" class="flex-1" onclick={cancelFolderPicker}>Cancel</Button>
-			<Button class="flex-1" onclick={confirmCurrentFolder}>
-				Select{folderPickerStack.length > 0 ? ` "${folderPickerStack.at(-1)!.name}"` : ' all'}
+			<Button variant="outline" class="flex-1" onclick={folderPicker.cancelFolderPicker}>Cancel</Button>
+			<Button class="flex-1" onclick={folderPicker.confirmCurrentFolder}>
+				Select{folderPicker.folderPickerStack.length > 0 ? ` "${folderPicker.folderPickerStack.at(-1)!.name}"` : ' all'}
 			</Button>
 		</div>
 	</div>
