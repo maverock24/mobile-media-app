@@ -26,6 +26,10 @@
 		resolvePodcastApiUrl, searchITunes, type ItunesResult,
 	} from '$lib/podcast/itunes';
 	import {
+		syncPersistedEpisodeState, markEpisodeFullyPlayed, mergeEpisodeHistory,
+		getEpisodeResumePosition, shouldPersistProgress, type PodcastProgressView,
+	} from '$lib/podcast/progress';
+	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
 		RefreshCw, X
@@ -98,6 +102,15 @@
 	let audioEl: HTMLAudioElement;
 	let _userPaused = false;
 
+	// The progress module is a plain `.ts`; it reads and replaces the two
+	// component-owned objects through this accessor (the shape fileOps uses).
+	const progressView: PodcastProgressView = {
+		get selectedPodcast() { return selectedPodcast; },
+		set selectedPodcast(v) { selectedPodcast = v; },
+		get currentEpisode() { return currentEpisode; },
+		set currentEpisode(v) { currentEpisode = v; },
+	};
+
 	// ── Register stop-callback ───────────────────────────────────
 	$effect(() => {
 		registerAudioSource('podcast', () => {
@@ -160,51 +173,6 @@
 		}
 	}
 
-	function syncPersistedEpisodeState(podcastId: number, episode: Episode) {
-		const podcastIndex = podcastData.podcasts.findIndex((entry) => entry.id === podcastId);
-		if (podcastIndex < 0) return;
-
-		const podcast = podcastData.podcasts[podcastIndex];
-		const episodeIndex = podcast.episodes.findIndex((entry) => entry.id === episode.id);
-		if (episodeIndex < 0) return;
-
-		const persistedEpisode = {
-			...podcast.episodes[episodeIndex],
-			played: episode.played,
-			progress: episode.progress,
-			positionSec: episode.positionSec ?? 0,
-			duration: episode.duration,
-		};
-		const episodes = [...podcast.episodes];
-		episodes[episodeIndex] = persistedEpisode;
-		const updatedPodcast = { ...podcast, episodes };
-
-		podcastData.podcasts = podcastData.podcasts.map((entry, index) =>
-			index === podcastIndex ? updatedPodcast : entry
-		);
-
-		if (selectedPodcast?.id === podcastId) {
-			selectedPodcast = updatedPodcast;
-		}
-
-		if (currentEpisode?.podcast.id === podcastId && currentEpisode.episode.id === episode.id) {
-			currentEpisode = {
-				podcast: updatedPodcast,
-				episode: persistedEpisode,
-			};
-		}
-	}
-
-	function markEpisodeFullyPlayed(podcastId: number, episode: Episode) {
-		episode.played = true;
-		episode.progress = 100;
-		episode.positionSec = 0;
-		syncPersistedEpisodeState(podcastId, episode);
-		podcastData.lastEpisodeId = episode.id;
-		podcastData.lastPodcastId = podcastId;
-		podcastData.lastPositionSec = 0;
-	}
-
 	function scheduleReconnectResume(url: string, positionSec: number) {
 		cancelNetworkRetry(); // replace any previous pending retry
 		_reconnectListener = () => {
@@ -260,9 +228,9 @@
 				// is a major source of jank and of localStorage quota pressure on
 				// Android, and a single over-quota write permanently kills that store.
 				currentEpisode = { ...currentEpisode, episode: updatedEpisode };
-				if (now - _lastProgressPersist >= PROGRESS_PERSIST_MS) {
+				if (shouldPersistProgress(_lastProgressPersist, now)) {
 					_lastProgressPersist = now;
-					syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode);
+					syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode, progressView);
 				}
 			}
 		};
@@ -272,7 +240,7 @@
 				syncPersistedEpisodeState(currentEpisode.podcast.id, {
 					...currentEpisode.episode,
 					duration,
-				});
+				}, progressView);
 			}
 			if (mediaEngine.source === 'podcast') {
 				mediaEngine.updateTime(audioEl.currentTime, audioEl.duration);
@@ -303,7 +271,7 @@
 					progress,
 					duration: playbackDuration || currentEpisode.episode.duration,
 				};
-				syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode);
+				syncPersistedEpisodeState(currentEpisode.podcast.id, updatedEpisode, progressView);
 				podcastData.lastPositionSec = positionSec;
 			}
 			// System paused us (Android Doze, audio-focus churn) — try to resume.
@@ -326,7 +294,7 @@
 			isBuffering = false;
 			mediaEngine.podcastPlaying = false;
 			if (currentEpisode) {
-				markEpisodeFullyPlayed(currentEpisode.podcast.id, currentEpisode.episode);
+				markEpisodeFullyPlayed(currentEpisode.podcast.id, currentEpisode.episode, progressView);
 			}
 			// Stop — do NOT auto-play the next episode. Clear the now-playing item
 			// so the background-resume watchdog doesn't replay the ended episode.
@@ -393,7 +361,6 @@
 	// re-runs the subscribedPodcasts sort derived. 20s balances crash/background
 	// resume granularity (~last 20s) against that full-blob main-thread cost on
 	// Android. Pause/end/background still flush exactly.
-	const PROGRESS_PERSIST_MS = 20000;
 
 
 	// ── Lazy loading: IntersectionObserver on sentinel element ──
@@ -436,29 +403,6 @@
 		useHostedProxy: useHostedPodcastProxy,
 	}));
 
-
-	function mergeEpisodeHistory(podcastId: number, episodes: Episode[]): Episode[] {
-		const existingEpisodes = podcastData.podcasts.find(p => p.id === podcastId)?.episodes ?? [];
-		const byId = new Map(existingEpisodes.map(episode => [episode.id, episode]));
-		const byAudioUrl = new Map(existingEpisodes.filter(episode => episode.audioUrl).map(episode => [episode.audioUrl, episode]));
-		const byTitleDate = new Map(existingEpisodes.map(episode => [`${episode.title}|${episode.publishedAt}`, episode]));
-
-		return episodes.map(episode => {
-			const existing = byId.get(episode.id)
-				?? byAudioUrl.get(episode.audioUrl)
-				?? byTitleDate.get(`${episode.title}|${episode.publishedAt}`);
-			if (!existing) return episode;
-			if (podcastData.lastPodcastId === podcastId && podcastData.lastEpisodeId === existing.id) {
-				podcastData.lastEpisodeId = episode.id;
-			}
-			return {
-				...episode,
-				played: existing.played,
-				progress: existing.progress,
-				positionSec: existing.positionSec
-			};
-		});
-	}
 
 	// ── iTunes Search ────────────────────────────────────────────
 	// Wrapper keeps the view's own state updates; the search itself is pure.
@@ -738,15 +682,6 @@
 	}
 
 	// ── Playback ─────────────────────────────────────────────────
-	function getEpisodeResumePosition(episode: Episode): number {
-		const savedPosition = episode.positionSec ?? 0;
-		if (episode.id !== podcastData.lastEpisodeId) {
-			return savedPosition;
-		}
-
-		return Math.max(savedPosition, podcastData.lastPositionSec);
-	}
-
 	function syncEpisodeAudioSource(podcast: Podcast, episode: Episode, resumeAt: number) {
 		audioEl.playbackRate = podcastSettings.playbackSpeed;
 		if (audioEl.src !== episode.audioUrl) {
@@ -897,7 +832,7 @@
 			podcastData.lastEpisodeId   = currentEpisode.episode.id;
 			podcastData.lastPodcastId   = currentEpisode.podcast.id;
 			podcastData.lastPositionSec = currentEpisode.episode.played ? 0 : audioEl.currentTime;
-			syncPersistedEpisodeState(currentEpisode.podcast.id, currentEpisode.episode);
+			syncPersistedEpisodeState(currentEpisode.podcast.id, currentEpisode.episode, progressView);
 		};
 		audioEl.addEventListener('pause', onPause);
 		audioEl.addEventListener('ended', onPause);
