@@ -19,6 +19,10 @@ This file captures the repo's current implementation boundaries. If it ever disa
 - Views live in `src/lib/components/views/`.
 - Reusable UI primitives live in `src/lib/components/ui/`.
 - Rune-based stores live in `src/lib/stores/*.svelte.ts`.
+- Playback modules live in `src/lib/audio/` (the per-deck player, the file resolver,
+  the equalizer).
+- Per-deck Drive session factories live in `src/lib/drive/` (`createDriveSession`
+  is rune state but one instance per deck, so it is not a store singleton).
 - Pure data models live in `src/lib/models/`.
 - Capacitor wrappers live in `src/lib/native/`.
 
@@ -85,6 +89,14 @@ ui/*
 
 stores/*
   ├── can import: other stores, models/*, native/*, utils/*
+  └── must NOT import: components
+
+audio/*
+  ├── can import: models/*, utils/*, stores/*, google-drive.ts, google-drive-auth-error.ts
+  └── must NOT import: components
+
+drive/*
+  ├── can import: models/*, utils/*, stores/*, google-drive.ts, google-drive-auth-error.ts
   └── must NOT import: components
 
 models/*

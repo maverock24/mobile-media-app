@@ -1,74 +1,122 @@
-# Google Drive Auth + Config Sync — State Spec v1
-> **Sources:** `src/lib/stores/googleDriveSession.svelte.ts` (183L), `src/lib/stores/driveConfigSync.svelte.ts` (370L)
-> **Authority:** code — two cooperating stores with independent token lifecycles; `driveConfigSync` reuses `googleDriveSession` token when possible.
+# Google Drive Auth – State Spec v1
+> **Sources:** `src/lib/stores/googleDriveSession.svelte.ts` (183L), `src/lib/drive/driveSession.svelte.ts` (134L)
+> **Authority:** code – one store owns persistence, one factory owns a token per deck; a deck's own token shadows the store while it is valid.
 > **Initial:** `UNAUTHENTICATED`
-> **Last reconciled:** 2026-07-18
+> **Last reconciled:** 2026-10-05
 
-## States (7)
+> **Scope:** this spec covers the OAuth access-token lifecycle only. The appdata
+> config sync described by the previous revision (`driveConfigSync.svelte.ts`,
+> the `CONNECTED_*` states, conflict resolution, the offline save queue) was
+> deleted in `cb2b5ae` ("feat: remove the Google Drive settings/podcast sync").
+> Nothing in `src/` implements it and nothing replaced it: settings and podcasts
+> now persist on-device only (see `docs/adr/0002-file-move-copy-delete.md`).
+> The file name is unchanged because `src/lib/stores/googleDriveSession.svelte.ts:1`
+> and `docs/state/_index.md` link to it.
+
+Two layers cooperate, and only one of them persists:
+
+- `googleDriveSession` (`src/lib/stores/googleDriveSession.svelte.ts`) is the single
+  shared store and the persistence owner (`localStorage` key `google-drive-session`).
+  It also holds `user`, `error`, `isAuthenticating`, `configured` and `clientId`.
+- `driveSession` (`src/lib/drive/driveSession.svelte.ts`) is one instance per deck,
+  built by `createDriveSession({ addToast, clientId })`. It holds its own
+  `accessToken`, `expiresAt`, `user` and `error`, never touches `localStorage`
+  itself, and writes back through `googleDriveSession` plus
+  `googleDriveSession.persist()`.
+
+The states below are conditions on `googleDriveSession`. A deck instance mirrors
+them and can lag the store.
+
+## States (4)
 
 | # | State | Condition | Description |
 |---|-------|-----------|-------------|
-| 1 | `UNAUTHENTICATED` | `googleDriveSession.user==null && driveConfigSync.accessToken==''` | No stored session. User has never signed in, or previous token was revoked/expired and cleared. |
-| 2 | `AUTHENTICATING` | `googleDriveSession.isAuthenticating==true` or `driveConfigSync.connect(interactive=true)` in-flight | OAuth consent flow active. Browser may show Google sign-in popup (web) or native Play Services dialog (Android). |
-| 3 | `CONNECTED_IDLE` | `driveConfigSync.isConnected==true && driveConfigSync.status∈{idle, saved}` | Token valid (>60s remaining). No sync in progress. Settings can be read/written. |
-| 4 | `CONNECTED_SYNCING` | `driveConfigSync.isConnected==true && driveConfigSync.status=='syncing'` | `downloadAndApply()` or `save()` in progress — HTTP call to Drive appdata endpoint. |
-| 5 | `CONNECTED_ERROR` | `driveConfigSync.isConnected==true && driveConfigSync.status=='error'` | Last sync operation failed. `errorMessage` set. Differentiated: auth error, rate-limit (10s retry), 404, generic. Token may still be valid for future attempts. |
-| 6 | `TOKEN_EXPIRED` | `driveConfigSync.isConnected==false && driveConfigSync.hasSession==true` | Token expired naturally or was invalidated by an auth error. `silentRefresh()` may recover. `googleDriveSession` may still have a valid main-session token. |
-| 7 | `OFFLINE_QUEUED` | `driveConfigSync.pendingSave==true && driveConfigSync.isConnected==false` | A `save()` call failed because the token was invalid and `silentRefresh()` also failed. The write is queued. Will auto-flush on the next successful `silentRefresh()` (scheduled at 80% token lifetime) or on explicit `connect()`. |
+| 1 | `UNAUTHENTICATED` | `googleDriveSession.accessToken==''` | No token in memory and none stored. Nothing was ever stored, or `persist()` dropped an empty/expired entry, or `signOut()` cleared it. |
+| 2 | `AUTHENTICATING` | `googleDriveSession.isAuthenticating==true` | `ensureAccessToken(interactive=true)` passed its `configured` guard and is awaiting the GIS popup (web) or the Play Services dialog (Android). Only that call sets the flag. |
+| 3 | `TOKEN_VALID` | `hasValidToken()==true`, i.e. `accessToken!='' && Date.now() < expiresAt-60000` | Usable token with more than the 60s safety margin left. Every request path skips network work while this holds. |
+| 4 | `TOKEN_STALE` | `accessToken!='' && hasValidToken()==false` | Token present but inside the 60s margin or already past `expiresAt`. No refresh token and no timer exist, so recovery needs a stored session, the pending native authorisation, or a fresh interactive request. |
 
-**Closed world:** `pendingSave==true` while `isConnected==true` is invalid (queue only set when disconnected). `status=='syncing'` while `!isConnected` is invalid.
+**Closed world:** `accessToken=='' && hasValidToken()==true` is invalid.
+`isAuthenticating==true` with an empty `accessToken` is the normal first sign-in,
+not a contradiction. The machine has no timer-driven state: neither module
+schedules work.
 
-## Transitions (14)
+## Transitions (11)
 
-### Auth flow
-
-| # | From | Event | Guard | To | Effects |
-|---|------|-------|-------|----|---------|
-| T1 | `UNAUTHENTICATED` | user taps "Sign In" | `googleDriveSession.configured==true` | `AUTHENTICATING` | `googleDriveSession.isAuthenticating=true`. OAuth flow starts — WebView `requestGoogleDriveAccessToken({prompt:''})` or native Play Services. |
-| T2 | `AUTHENTICATING` | OAuth success | — | `CONNECTED_IDLE` | `googleDriveSession`: accessToken, expiresAt, user stored; persisted to localStorage. `isAuthenticating=false`. `driveConfigSync.connect(interactive=false)` reuses main-session token if available, else requests its own appdata-scoped token. |
-| T3 | `AUTHENTICATING` | OAuth denied / network error | — | `UNAUTHENTICATED` | `googleDriveSession.error` set. `isAuthenticating=false`. |
-| T4 | `UNAUTHENTICATED` | `googleDriveSession.ensureAccessToken(interactive=false)` succeeds | stored refresh token valid | `CONNECTED_IDLE` | Silent token refresh from stored credentials. No user prompt. |
-
-### Sync operations (within CONNECTED states)
+### Session store
 
 | # | From | Event | Guard | To | Effects |
 |---|------|-------|-------|----|---------|
-| T5 | `CONNECTED_IDLE` | `downloadAndApply()` | — | `CONNECTED_SYNCING` | `status='syncing'`. Fetches Drive appdata config file. Enters conflict check. |
-| T6 | `CONNECTED_SYNCING` | download succeeds, `driveSavedAt > localSavedAt` | downloaded config exists | `CONNECTED_IDLE` (status→saved) | All 5 setting stores updated field-by-field. `localSavedAt` set to `config.savedAt`. `lastSyncedAt` set to now. `status='saved'`. |
-| T7 | `CONNECTED_SYNCING` | download succeeds, `localSavedAt > driveSavedAt` | local is newer | `CONNECTED_SYNCING` (self-loop: calls `save()`) | Drive config discarded. `save()` called to push local state to Drive. Transitions to T8 on upload success or T9 on failure. |
-| T8 | `CONNECTED_SYNCING` | `save()` / upload succeeds | — | `CONNECTED_IDLE` (status→saved) | `uploadDriveConfig()` returns 200. `localSavedAt = now`. `pendingSave=false`. `lastSyncedAt=now`. `status='saved'`. |
-| T9 | `CONNECTED_SYNCING` | `downloadAndApply()` or `save()` fails with error | — | `CONNECTED_ERROR` | `status='error'`. `_handleError()` classifies: auth→clear token, rate-limit→10s retry, 404→"not found", generic→errorMessage. |
+| T1 | `UNAUTHENTICATED`, `TOKEN_STALE` | `ensureAccessToken(interactive=true)`, also reached through `signIn()` | `configured==true` | `AUTHENTICATING` | `refreshConfiguration()` and `hydrateFromStorage()` run first. `isAuthenticating=true`, then `requestGoogleDriveAccessToken({clientId, prompt:''})`. |
+| T2 | `AUTHENTICATING` | consent granted | — | `TOKEN_VALID` | `accessToken` and `expiresAt = Date.now()+Number(expires_in ?? 3600)*1000` stored, `error=''`, `persist()` writes `localStorage`. `isAuthenticating=false` in the `finally`. |
+| T3 | `AUTHENTICATING` | denied or network error | — | `TOKEN_STALE`, or `UNAUTHENTICATED` when no token was held | `error=formatGoogleDriveAuthError(error)`, returns `null`, `isAuthenticating=false`. A previously held `accessToken` is not cleared. |
+| T4 | `TOKEN_VALID` | `ensureAccessToken(any)` | `hasValidToken()==true` after `hydrateFromStorage()` | `TOKEN_VALID` (self-loop) | `refreshConfiguration()`, `hydrateFromStorage()`, `persist()`, returns the token. No network and no user prompt. |
+| T5 | `UNAUTHENTICATED`, `TOKEN_STALE` | `hydrateFromStorage()` finds a stored session | stored `expiresAt > Date.now()` | `TOKEN_VALID`, or `TOKEN_STALE` when under 60s remains | `accessToken`, `expiresAt` and `user` copied from `localStorage`. Pure read. |
+| T6 | `UNAUTHENTICATED`, `TOKEN_STALE` | `ensureAccessToken(interactive=false)` | no usable stored session | unchanged | Returns `null` without setting `error`. Callers read `null` as "no token available". |
+| T7 | `TOKEN_VALID` | `ensureUser(force=true)` succeeds | `hasValidToken()==true` | `TOKEN_VALID` (self-loop) | `fetchGoogleDriveUser(accessToken)`, `user` set, `error=''`, `persist()`. Without `force` an existing `user` short-circuits the fetch. |
+| T8 | `TOKEN_VALID` | `ensureUser()` request fails | — | `TOKEN_VALID` | `error=formatGoogleDriveAuthError(error)`, returns `null`. `user` and the token are untouched. |
+| T9 | `TOKEN_VALID` | the 60s margin is crossed | — | `TOKEN_STALE` | `hasValidToken()` flips to false as the clock passes `expiresAt-60000`. Nothing runs: no timer, no retry, no request. |
+| T10 | any | `signOut()` | — | `UNAUTHENTICATED` | `revokeGoogleDriveAccess(accessToken)` with failures swallowed, then `accessToken=''`, `expiresAt=0`, `user=null`, `error=''`, `persist()`. The zero expiry makes `persist()` remove the `localStorage` entry. |
+| T11 | any | `setError(message)` | — | unchanged | `error=message`. Token, expiry and user are untouched. |
 
-### Authed settings mutations
+### Deck session (`driveSession.ensureDriveAccessToken`)
 
-| # | From | Event | Guard | To | Effects |
-|---|------|-------|-------|----|---------|
-| T10 | `CONNECTED_IDLE` | `scheduleSave()` called | any settings store mutated, 3s debounce | `CONNECTED_SYNCING` | After 3s debounce: `save()` executes. Same path as T8/T9. |
+The order below is behaviour, not style: it is the order the view used before the
+extraction, and each step only runs when the one before it did not answer.
 
-### Token lifecycle
+| # | Step | Guard | Effects |
+|---|------|-------|---------|
+| D1 | deck token shortcut | `hasValidDriveToken()==true`, checked before any hydration | Returns the deck's own token. No store read, no network. |
+| D2 | hydrate | `googleDriveSession.hydrateFromStorage()` then `googleDriveSession.hasValidToken()` | `accessToken`, `expiresAt` and `user` copied into the deck, token returned. The store is not written to. |
+| D3 | one-shot pending native authorisation | `consumePendingGoogleDriveAccessToken()` returns an `access_token` | Deck gets the token, `expiresAt = Date.now()+Number(expires_in ?? 3600)*1000`, `user` taken from the store, `error=''`. The store is written and `persist()`ed. |
+| D4 | non-interactive stop | `interactive==false` | Returns `null`. `error` is left as it was. |
+| D5 | interactive request | `requestGoogleDriveAccessToken({clientId, prompt: state.accessToken ? '' : 'consent'})` | Success: deck state set, store written, `persist()`ed, token returned. Failure: `error=formatGoogleDriveAuthError(error)`, `addToast({message, type:'error'})`, returns `null`. |
 
-| # | From | Event | Guard | To | Effects |
-|---|------|-------|-------|----|---------|
-| T11 | `CONNECTED_IDLE` or `CONNECTED_ERROR` or `CONNECTED_SYNCING` | token expires or auth error clears token | — | `TOKEN_EXPIRED` | `isConnected→false`. `expiresAt` may be stale. Token refresh timer (80% lifetime) already fired; if silent refresh failed, no retry until user action. |
-| T12 | `TOKEN_EXPIRED` | `silentRefresh()` succeeds | scheduled timer or `save()` trigger | `CONNECTED_IDLE` | New token stored via `_storeToken()`. If `pendingSave==true`: auto-flushes by calling `save()` → enters `CONNECTED_SYNCING`. |
-| T13 | `TOKEN_EXPIRED` | `save()` called | `hasSession==true` | `OFFLINE_QUEUED` | `silentRefresh()` attempted but failed (offline / revoked). `pendingSave=true`. |
+Notes on D3 and D5:
 
-### Disconnect
-
-| # | From | Event | Guard | To | Effects |
-|---|------|-------|-------|----|---------|
-| T14 | any state | `disconnect()` / `signOut()` | — | `UNAUTHENTICATED` | All tokens cleared (`accessToken=''`, `expiresAt=0`). `pendingSave=false`. Timers cleared. `status='idle'`. `googleDriveSession` signOut revokes token, clears user. localStorage cleared. |
+- D3 is Android-only. `consumePendingGoogleDriveAccessToken()` returns `null` off
+  Android, and `consumePendingNativeGoogleDriveAccessToken` delegates to the
+  plugin's `consumePendingAuthorizationResult`, which clears the stored result
+  after reading it (`android/.../GoogleDriveNativePlugin.java:82`). A pending
+  authorisation is therefore picked up once. A throw in this step is swallowed
+  and the flow continues at D4.
+- D5 uses `prompt:'consent'` only when the deck holds no token at all; otherwise
+  it passes `''`, the same default the store uses, which per the comment in
+  `googleDriveSession.svelte.ts` shows sign-in UI only when it is needed rather
+  than on every request.
+- `driveSession` never reads `configured` and never sets `isAuthenticating`. The
+  view guards on `googleDriveConfigured` and writes `driveSession.error` itself
+  (`src/lib/components/views/Mp3PlayerView.svelte:247`, `:1276`). A successful
+  D3 or D5 clears `error`; D2 leaves it as it was.
 
 ## Invariants & forbidden transitions
 
-- `CONNECTED_SYNCING` MUST NOT enqueue a second concurrent sync. The `status='syncing'` guard prevents overlapping `downloadAndApply()` or `save()` calls.
-- `scheduleSave()` debounces to 3s — rapid settings changes do not cause rapid uploads. Only the last value within the window is saved.
-- Conflict resolution is last-write-wins by ISO timestamp. **No clock sync assumed** — conflict is relative (local-vs-drive), not absolute. If both sides have the same `savedAt`, Drive wins.
-- Token refresh is scheduled at `80% of expires_in - 60s` — fires before the 60s `isConnected` guard trips.
-- `driveConfigSync` token is **separate** from `googleDriveSession` token, but `connect()` and `silentRefresh()` prefer reusing the main session token as an optimization. If the main token has a different scope, a separate appdata token is requested.
-- `_handleError()` for auth errors clears the token (`accessToken=''`) but does NOT clear `pendingSave` — the write is queued for post-reconnect flush.
-- Rate-limit errors schedule a 10s retry via `setTimeout(() => save(), 10000)` — not a state transition, more of a self-healing effect.
-- `disconnect()` and `signOut()` are valid from any state and always result in `UNAUTHENTICATED`.
+- No silent refresh exists. Neither module stores a refresh token, schedules a
+  timer or retries. A stale token is recovered only by `hydrateFromStorage()` on
+  an unexpired entry, by the one-shot native consume, or by an interactive request.
+- `persist()` never stores an unusable session. `writeStoredSession()` removes the
+  `google-drive-session` key when `accessToken` is empty, when `expiresAt` is 0,
+  or when `expiresAt <= Date.now()`.
+- The two validity checks disagree on purpose. `hydrateFromStorage()` accepts a
+  stored session while `expiresAt > Date.now()`, but `hasValidToken()` and
+  `hasValidDriveToken()` both require the 60s margin. A stored token with less
+  than a minute left hydrates and is still not valid.
+- `hydrateFromStorage()` keeps the in-memory `user` when the stored entry has
+  none (`stored.user ?? this.user`). The two token paths write
+  `accessToken`/`expiresAt` back to the store but never `user`: the store's `user`
+  is set by `hydrateFromStorage()`, `ensureUser()` or `signOut()` only, and a view
+  sets the deck's copy after its own `fetchGoogleDriveUser()` call.
+- Two decks must be able to hold different tokens. `createDriveSession` is a
+  factory rather than a singleton for that reason; a shared instance would let
+  deck A's token answer for deck B and is forbidden.
+- A deck's copy is authoritative for that deck while it is valid (D1). Signing in
+  or out through `googleDriveSession` does not clear a deck's already-valid token.
+  A caller that needs a fresh identity must recreate the deck session.
+- `driveSession` and the modules it stands for must not import from
+  `src/lib/components/`, and hold no UI state: an interactive failure reaches the
+  user only through the injected `addToast`.
+- `error` is per layer. `googleDriveSession.error` (shown by `LoginView`) and
+  `driveSession.error` (shown per deck) are separate fields and are not synced.
 
 ---
 
@@ -78,28 +126,32 @@
 stateDiagram-v2
     [*] --> UNAUTHENTICATED
 
-    UNAUTHENTICATED --> AUTHENTICATING: signIn / connect(interactive)
-    UNAUTHENTICATED --> CONNECTED_IDLE: silent token refresh
+    UNAUTHENTICATED --> AUTHENTICATING: ensureAccessToken(interactive=true) / signIn()
+    AUTHENTICATING --> TOKEN_VALID: consent granted, then persist()
+    AUTHENTICATING --> UNAUTHENTICATED: denied or error, no prior token
+    AUTHENTICATING --> TOKEN_STALE: denied or error, a token was already held
 
-    AUTHENTICATING --> CONNECTED_IDLE: OAuth success
-    AUTHENTICATING --> UNAUTHENTICATED: OAuth denied/error
+    TOKEN_STALE --> TOKEN_VALID: hydrateFromStorage() with over 60s left
+    TOKEN_STALE --> AUTHENTICATING: ensureAccessToken(interactive=true)
+    TOKEN_VALID --> TOKEN_STALE: the 60s margin is crossed
 
-    CONNECTED_IDLE --> CONNECTED_SYNCING: downloadAndApply() / save() / scheduleSave
-    CONNECTED_SYNCING --> CONNECTED_IDLE: sync success
-    CONNECTED_SYNCING --> CONNECTED_ERROR: sync failure
+    UNAUTHENTICATED --> UNAUTHENTICATED: signOut()
+    TOKEN_VALID --> UNAUTHENTICATED: signOut()
+    TOKEN_STALE --> UNAUTHENTICATED: signOut()
+    AUTHENTICATING --> UNAUTHENTICATED: signOut()
+```
 
-    CONNECTED_IDLE --> TOKEN_EXPIRED: token expires / auth error
-    CONNECTED_ERROR --> TOKEN_EXPIRED: auth error clears token
-    CONNECTED_SYNCING --> TOKEN_EXPIRED: token expires mid-sync
-
-    TOKEN_EXPIRED --> CONNECTED_IDLE: silentRefresh ok
-    TOKEN_EXPIRED --> OFFLINE_QUEUED: save() while expired
-
-    OFFLINE_QUEUED --> CONNECTED_IDLE: silentRefresh flush
-    OFFLINE_QUEUED --> CONNECTED_SYNCING: flush triggers save()
-
-    CONNECTED_IDLE --> UNAUTHENTICATED: signOut
-    CONNECTED_ERROR --> UNAUTHENTICATED: signOut
-    TOKEN_EXPIRED --> UNAUTHENTICATED: signOut
-    OFFLINE_QUEUED --> UNAUTHENTICATED: signOut
+```mermaid
+flowchart TD
+    A[ensureDriveAccessToken interactive] --> B{hasValidDriveToken}
+    B -- yes --> Z[return the deck token]
+    B -- no --> C[hydrateFromStorage, store has valid token]
+    C -- yes --> Z
+    C -- no --> D[consume pending native authorisation]
+    D -- token --> E[store write-back and persist] --> Z
+    D -- nothing --> F{interactive}
+    F -- no --> G[return null]
+    F -- yes --> H[requestGoogleDriveAccessToken]
+    H -- token --> E
+    H -- error --> I[set error, addToast, return null]
 ```
