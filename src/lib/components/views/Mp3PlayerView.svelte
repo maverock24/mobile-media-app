@@ -8,6 +8,7 @@
 	import Input from '$lib/components/ui/Input.svelte';
 	import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
+	import { createPlayer, type PlayerTrack } from '$lib/audio/player.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import { bytesFromBase64, arrayBufferFromBytes, blobFromNativePath } from '$lib/audio/fileResolver';
 	import { getRelativePath, buildBrowseEntries } from '$lib/models/browse';
@@ -26,7 +27,6 @@
 		getTrackKey,
 		mergeStoredFiles,
 		fmtGain,
-		getNextTrackIndex as getNextTrackIndexPure,
 		isSupportedAudioFile,
 		isYoutubeFavorite,
 		parseFilename,
@@ -78,13 +78,6 @@
 		Cloud, RefreshCw, LogOut, Search, Star, Upload, Download, X,
 		Copy, Trash2, FolderInput, Youtube
 	} from 'lucide-svelte';
-
-	interface Track {
-		id: number; title: string; artist: string;
-		filename: string; url: string; duration: number;
-		cleanup?: () => void;
-		source: StoredAudioFile;
-	}
 
 	type FavoriteTrack = (typeof musicSettings.favoriteTracks)[number];
 
@@ -183,63 +176,43 @@
 		});
 	}
 
+	/** Load the library into the deck queue without starting playback. */
 	function hydrateTracksFromLibrary(files: StoredAudioFile[], resetToStart = false) {
 		const sorted = sortFiles(files);
-		tracks = sorted.map((file, index) => {
-			const { title, artist } = parseFilename(file.name);
-			return {
-				id: index,
-				title,
-				artist,
-				filename: file.name,
-				url: '',
-				duration: 0,
-				cleanup: undefined,
-				source: file,
-			};
-		});
 		mediaEngine.musicSelectionLoopActive = false;
 
-		if (tracks.length === 0) {
+		if (sorted.length === 0) {
+			player.clear();
 			musicSettings.lastTrackIndex = 0;
 			musicSettings.lastTrackTimestamp = 0;
-			currentTime = 0;
-			duration = 0;
-			isPlaying = false;
-			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
 			return;
 		}
 
 		if (resetToStart) {
 			// New folder: stop playback, clear audio, reset to track 0
-			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
-			isPlaying = false;
-			musicSettings.lastTrackIndex = 0;
+			player.clear();
+			player.load(sorted, { startIndex: 0 });
 			musicSettings.lastTrackTimestamp = 0;
-			currentTime = 0;
-			duration = 0;
-		} else {
-			// Restore: find track by key (survives re-sort), fallback to saved index
-			if (musicSettings.lastTrackKey) {
-				const keyMatch = tracks.findIndex(t => getTrackKey(t.source) === musicSettings.lastTrackKey);
-				if (keyMatch >= 0) {
-					musicSettings.lastTrackIndex = keyMatch;
-				} else {
-					musicSettings.lastTrackIndex = Math.min(musicSettings.lastTrackIndex, tracks.length - 1);
-				}
-			} else {
-				musicSettings.lastTrackIndex = Math.min(musicSettings.lastTrackIndex, tracks.length - 1);
-			}
-			currentTime = 0;
+			return;
 		}
+
+		// Restore: find the track by key (it survives a re-sort), and fall back to
+		// the saved index. The index has to be resolved before the hand-off: the
+		// module writes musicSettings.lastTrackIndex back as it selects the track.
+		const keyMatch = musicSettings.lastTrackKey
+			? sorted.findIndex((file) => getTrackKey(file) === musicSettings.lastTrackKey)
+			: -1;
+		player.load(sorted, {
+			startIndex: keyMatch >= 0
+				? keyMatch
+				: Math.max(0, Math.min(musicSettings.lastTrackIndex, sorted.length - 1)),
+		});
 	}
 
 	// ── ephemeral playback state ──
-	let tracks      = $state<Track[]>([]);
-	let currentTime = $state(0);
-	let duration    = $state(0);
-	let isPlaying      = $state(false);
-	let isBuffering    = $state(false);
+	// The queue, the transport state and the <audio> element live in the player
+	// module (ADR-0001). The view reads them through these aliases and drives them
+	// with `player.play/load/append/clear/resume/pause/next/prev/seek`.
 	let isChangingTrack = $state(false); // prevents concurrent skip/select calls
 	let isLoading        = $state(false);
 	let loadingFolderPath = $state<string | null>(null); // per-folder spinner key
@@ -252,8 +225,6 @@
 	let showPanel   = $state<'none' | 'speed' | 'eq'>('none');
 	let isRestoring = $state(false);  // set to true by init effect on Android native only
 
-	let preloadedTrackIndex = $state<number | null>(null);
-	let preloadRequestId = 0;
 	// Prevents background folder scans from overwriting the track list after the user has
 	// explicitly selected a song via playBrowseFile / playCurrentFolder / playFolderPath.
 	let trackListLockedByUser = false;
@@ -281,7 +252,6 @@
 	let driveSearch      = $state('');
 	let isDriveAuthenticating = $state(false);
 	let isDriveLoading   = $state(false);
-	let _audioErrorRetries = 0;  // guards against infinite error→reload loops
 
 	// ── Transfer state (upload to Drive / download from Drive) ──
 	let showDriveFolderPicker = $state(false);
@@ -321,7 +291,6 @@
 	let driveLoadProgress = $state({ filesFound: 0, foldersScanned: 0, foldersQueued: 0 });
 	let driveLoadAbort   = $state<AbortController | null>(null);
 	let switchingToFavId = $state<string | null>(null); // fav id currently loading
-	let seekingValue     = $state<number | null>(null); // % while slider is dragged
 	let browseLongPressTimer: ReturnType<typeof setTimeout> | null = null;
 	let longPressHandledFileKey = $state<string | null>(null);
 
@@ -489,12 +458,35 @@
 	let filters: BiquadFilterNode[] = [];
 
 	// ── refs ──
-	let audioEl: HTMLAudioElement;
 	let folderInputEl: HTMLInputElement;
 	let nativeFileInputEl: HTMLInputElement;
 
+	// ── the playback core (ADR-0001) ──
+	// One player per deck. It owns the <audio> element, the queue and the
+	// advance/preload/retry/loop behaviour; the view supplies the URL adapter, the
+	// per-deck element controls and the equalizer hook, and keeps the mediaEngine
+	// integration (exclusivity, MediaSession, deck metadata) around it.
+	const player = createPlayer({
+		settings: musicSettings,
+		resolveUrl: resolveTrackUrl,
+		controls: {
+			// Deck A always plays at full volume; Deck B has its own volume and speed.
+			get volume() { return effectiveVolume; },
+			get muted() { return musicSettings.isMuted; },
+			get playbackRate() { return effectiveSpeed; },
+		},
+		native: isNativeApp,
+		applyEqualizer: attachEqualizer,
+		onBeforeAdvance: () => { syncLoopTracksToSelection(); },
+	});
+
 	// ── derived ──
-	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as Track | undefined);
+	const tracks       = $derived(player.state.tracks);
+	const currentTime  = $derived(player.state.currentTime);
+	const duration     = $derived(player.state.duration);
+	const isPlaying    = $derived(player.state.isPlaying);
+	const isBuffering  = $derived(player.state.isBuffering);
+	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as PlayerTrack | undefined);
 	const currentTrackIsFavorite = $derived(currentTrack ? isFavoriteTrack(currentTrack.source) : false);
 	const currentMusicTrackKey = $derived(
 		musicSettings.lastTrackKey || (currentTrack ? getStoredFileKey(currentTrack.source) : '')
@@ -515,14 +507,10 @@
 	$effect(() => {
 		const srcId = deck === 'A' ? 'musicA' as const : 'musicB' as const;
 		registerAudioSource(srcId, () => {
-			if (!audioEl) return;
-			isPlaying = false;
-			audioEl.pause();
 			// Fully reset so the browser releases the audio channel —
 			// pause() alone can leave residual decoder state that
 			// causes brief overlap when a new source starts immediately.
-			audioEl.removeAttribute('src');
-			audioEl.load();
+			player.stop();
 		});
 	});
 
@@ -560,8 +548,8 @@
 
 		if (typeof mediaEngine.setSkipHandlers === 'function') {
 			mediaEngine.setSkipHandlers(
-				() => { void advanceTrack(isPlaying || isBuffering); },
-				() => { void prevTrack(); }
+				() => { skipNext(); },
+				() => { skipPrev(); }
 			);
 		}
 	}
@@ -590,8 +578,8 @@
 				artworkUrl: undefined,
 				duration:   currentTrack.duration > 0 ? currentTrack.duration : undefined,
 			} : null;
-			mediaEngine.deckACurrentTime = audioEl?.currentTime ?? 0;
-			mediaEngine.deckADuration = isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack?.duration ?? 0);
+			mediaEngine.deckACurrentTime = untrack(() => player.state.currentTime);
+			mediaEngine.deckADuration = untrack(() => player.state.duration) || (currentTrack?.duration ?? 0);
 			mediaEngine.deckABuffering = isBuffering;
 		} else {
 			mediaEngine.deckBItem = currentTrack ? {
@@ -603,20 +591,26 @@
 				artworkUrl: undefined,
 				duration:   currentTrack.duration > 0 ? currentTrack.duration : undefined,
 			} : null;
-			mediaEngine.deckBCurrentTime = audioEl?.currentTime ?? 0;
-			mediaEngine.deckBDuration = isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack?.duration ?? 0);
+			mediaEngine.deckBCurrentTime = untrack(() => player.state.currentTime);
+			mediaEngine.deckBDuration = untrack(() => player.state.duration) || (currentTrack?.duration ?? 0);
 			mediaEngine.deckBBuffering = isBuffering;
+		}
+
+		// Mirror the deck's playing state into the engine's per-deck flag, the way
+		// the element's own play/pause events used to. Deliberately not gated on
+		// this deck owning the display: a deck that stops while another source owns
+		// the MiniPlayer (cross-source claim, track end) must still clear its flag,
+		// or the engine reports "playing" forever and holds the wakelock.
+		if (deck === 'A') {
+			mediaEngine.musicPlayingA = isPlaying;
+		} else {
+			mediaEngine.musicPlayingB = isPlaying;
 		}
 
 		// When this deck is active + music tab + music owns the display,
 		// also push to global state so that MediaSession + native controls work.
 		if (isActiveDeck && isMusicTab && musicOwnsDisplay) {
 			claimMusicControls();
-			if (deck === 'A') {
-				mediaEngine.musicPlayingA = isPlaying;
-			} else {
-				mediaEngine.musicPlayingB = isPlaying;
-			}
 			if (currentTrack) {
 				mediaEngine.setNowPlaying({
 					id:         String(currentTrack.id),
@@ -628,10 +622,30 @@
 					duration:   currentTrack.duration > 0 ? currentTrack.duration : undefined,
 				}, 'music');
 				mediaEngine.updateTime(
-					audioEl?.currentTime ?? 0,
-					isFinite(audioEl?.duration ?? 0) ? (audioEl?.duration ?? 0) : (currentTrack.duration ?? 0)
+					untrack(() => player.state.currentTime),
+					untrack(() => player.state.duration) || (currentTrack.duration ?? 0)
 				);
 			}
+		}
+	});
+
+	// ── Progress to the engine. This replaces the forwarding the view used to do
+	//     from the audio element's `timeupdate` event: the module throttles
+	//     `state.currentTime` to ~4Hz, which is what keeps the MiniPlayer seek bar,
+	//     MediaSession progress and the native notification in step. ──
+	$effect(() => {
+		const time = player.state.currentTime;
+		const total = player.state.duration;
+		if (deck === 'A') {
+			mediaEngine.deckACurrentTime = time;
+			mediaEngine.deckADuration = total;
+		} else {
+			mediaEngine.deckBCurrentTime = time;
+			mediaEngine.deckBDuration = total;
+		}
+		// Only push global progress when music owns the MiniPlayer display.
+		if (mediaEngine.activeMusicDeck === deck && mediaEngine.source === 'music') {
+			mediaEngine.updateTime(time, total);
 		}
 	});
 
@@ -692,116 +706,6 @@
 		return () => clearBrowseLongPressTimer();
 	});
 
-	// ── audio element event wiring ──
-	$effect(() => {
-		if (!audioEl) return;
-		// Throttle timeupdate to ~4Hz — smooth for seek bar, 15× less CPU than 60fps
-		let _lastTimeUpdate = 0;
-		const onTimeUpdate = () => {
-			try {
-				if (seekingValue !== null) return;
-				if (!audioEl) return;
-				const now = Date.now();
-				if (now - _lastTimeUpdate < 250) return;
-				_lastTimeUpdate = now;
-				currentTime = audioEl.currentTime;
-				// Always push per-deck time so the MiniPlayer shows accurate
-				// progress even when another source owns the global display.
-				if (deck === 'A') {
-					mediaEngine.deckACurrentTime = audioEl.currentTime;
-					mediaEngine.deckADuration = isFinite(audioEl.duration) ? audioEl.duration : 0;
-				} else {
-					mediaEngine.deckBCurrentTime = audioEl.currentTime;
-					mediaEngine.deckBDuration = isFinite(audioEl.duration) ? audioEl.duration : 0;
-				}
-				// Only push global progress when music owns the MiniPlayer display.
-				if (mediaEngine.activeMusicDeck === deck && mediaEngine.source === 'music') {
-					mediaEngine.updateTime(audioEl.currentTime, isFinite(audioEl.duration) ? audioEl.duration : 0);
-				}
-			} catch { /* audioEl.currentTime can throw if bridge is broken */ }
-		};
-		const onLoadedMetadata = () => {
-			try {
-				if (!audioEl) return;
-				duration = isFinite(audioEl.duration) ? audioEl.duration : 0;
-				tracks = tracks.map((t, i) =>
-					i === musicSettings.lastTrackIndex
-						? { ...t, duration: isFinite(audioEl.duration) ? Math.round(audioEl.duration) : 0 }
-						: t
-				);
-			} catch { /* duration may be unavailable on broken bridge */ }
-		};
-		const onPlay  = () => { try { isPlaying = true;  isBuffering = false; _audioErrorRetries = 0; mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = true;  } catch { /* state update */ } };
-		const onPause = () => { try {
-			isPlaying = false;
-			mediaEngine[deck === 'A' ? 'musicPlayingA' : 'musicPlayingB'] = false;
-			musicSettings.lastTrackTimestamp = 0;
-		} catch { /* state update */ } };
-		const onEnded = () => { try {
-			// Track finished — clear any saved resume position
-			isBuffering = false;
-			musicSettings.lastTrackTimestamp = 0;
-			if (mediaEngine.musicSelectionLoopActive) { void advanceTrack(true, false); }
-			else if (musicSettings.isRepeat) { audioEl.currentTime = 0; safePlay(); }
-			else void advanceTrack(true, false);
-		} catch { /* track ended during bridge failure */ } };
-		const onWaiting = () => { try { isBuffering = true; } catch { /* no-op */ } };
-		const onPlaying = () => { try { isBuffering = false; } catch { /* no-op */ } };
-		const onError = () => { try {
-			isBuffering = false;
-			musicSettings.lastTrackTimestamp = 0;
-			// On error, try a forced reload once before advancing to the next
-			// track.  This handles transient read failures (e.g. Capacitor bridge
-			// cold start, SAF permission race) that resolve on retry.
-			if (_audioErrorRetries < 1 && tracks.length > 0) {
-				_audioErrorRetries += 1;
-				const idx = musicSettings.lastTrackIndex;
-				const url = tracks[idx]?.url;
-				if (audioEl && url) {
-					audioEl.src = '';
-					audioEl.src = url;
-					safePlay(() => {
-						_audioErrorRetries = 0;
-						isPlaying = false;
-						void advanceTrack(true, false);
-					});
-					return;
-				}
-			}
-			_audioErrorRetries = 0;
-			void advanceTrack(true, false);
-		} catch { /* error recovery failed — best-effort, will retry on next event */ } };
-		audioEl.volume = effectiveVolume / 100;
-		audioEl.muted  = musicSettings.isMuted;
-		audioEl.playbackRate = effectiveSpeed;
-		audioEl.addEventListener('timeupdate',     onTimeUpdate);
-		audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
-		audioEl.addEventListener('play',    onPlay);
-		audioEl.addEventListener('pause',   onPause);
-		audioEl.addEventListener('ended',   onEnded);
-		audioEl.addEventListener('error',   onError);
-		audioEl.addEventListener('waiting', onWaiting);
-		audioEl.addEventListener('playing', onPlaying);
-		return () => {
-			audioEl?.removeEventListener('timeupdate',     onTimeUpdate);
-			audioEl?.removeEventListener('loadedmetadata', onLoadedMetadata);
-			audioEl?.removeEventListener('play',    onPlay);
-			audioEl?.removeEventListener('pause',   onPause);
-			audioEl?.removeEventListener('ended',   onEnded);
-			audioEl?.removeEventListener('error',   onError);
-			audioEl?.removeEventListener('waiting', onWaiting);
-			audioEl?.removeEventListener('playing', onPlaying);
-		};
-	});
-
-	// ── Sync volume / mute ──
-	$effect(() => {
-		if (audioEl) { audioEl.volume = effectiveVolume / 100; audioEl.muted = musicSettings.isMuted; }
-	});
-
-	// ── Sync playback speed ──
-	$effect(() => { if (audioEl) audioEl.playbackRate = effectiveSpeed; });
-
 	// ── Auto-save to Drive when key music settings change ──
 	$effect(() => {
 		// Access reactive fields so Svelte tracks them
@@ -825,16 +729,11 @@
 	// Web Audio API
 	// ─────────────────────────────────────────────────────────────
 	function initAudioContext() {
-		if (!audioEl || !eqAvailable) return;
+		if (!eqAvailable) return;
 		if (audioCtx) { if (audioCtx.state === 'suspended') audioCtx.resume(); return; }
 		try {
 			const ctx = new AudioContext();
 			void ctx.resume();
-			const src = ctx.createMediaElementSource(audioEl);
-			const bands = createEqFilterChain(ctx, musicSettings.eqBands);
-			src.connect(bands[0]);
-			bands[bands.length - 1].connect(ctx.destination);
-			filters = bands;
 			audioCtx = ctx;
 		} catch (e) {
 			eqAvailable = false;
@@ -843,66 +742,24 @@
 		}
 	}
 
-	/** Retry audioEl.play() on failure — Android WebView can abort or
-	 *  fail with various errors when the Capacitor bridge isn't ready yet
-	 *  (especially after pause→play on local files). Uses up to 8 retries
-	 *  on native with 300ms backoff (total ~2.4s), reloading src between
-	 *  attempts to recover from stale bridge connections. Each attempt has
-	 *  a 4s timeout to prevent hanging on a never-resolving play() promise.
-	 *  Web stays at 3×150ms for AbortError only. */
-	function safePlay(onFailure?: () => void, onSuccess?: () => void) {
-		const maxRetries = isNativeApp ? 8 : 3;
-		const retryDelayMs = isNativeApp ? 300 : 150;
-		const playTimeoutMs = isNativeApp ? 4000 : 0;
-		let _safePlayReloaded = false;
-		const tryPlay = (attempt: number) => {
-			// Guard against synchronous DOMException throws (e.g. broken
-			// Capacitor bridge after SD card removal on Android WebView).
-			let playPromise: Promise<void>;
-			try {
-				playPromise = audioEl?.play() ?? Promise.reject(new Error('No audio element'));
-			} catch (e) {
-				// play() threw synchronously — treat as immediate failure
-				if (attempt < maxRetries) {
-					setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
-				} else {
-					onFailure?.();
-				}
-				return;
-			}
-			const timeoutPromise = playTimeoutMs > 0
-				? new Promise<void>((_, reject) => setTimeout(() => reject(new Error('play() timed out')), playTimeoutMs))
-				: null;
-			const race = timeoutPromise ? Promise.race([playPromise.then(() => 'success' as const), timeoutPromise.then(() => 'timeout' as const)]) : playPromise.then(() => 'success' as const);
-			race.then((result) => {
-				if (result === 'success') {
-					onSuccess?.();
-				} else {
-					// timeout — treated as failure
-					if (attempt < maxRetries) {
-						setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
-					} else {
-						onFailure?.();
-					}
-				}
-			}).catch((err: Error) => {
-				const shouldRetry = isNativeApp
-					? attempt < maxRetries
-					: err?.name === 'AbortError' && attempt < maxRetries;
-				if (shouldRetry) {
-					if (isNativeApp && attempt === 2 && !_safePlayReloaded && audioEl?.src) {
-						_safePlayReloaded = true;
-						const currentSrc = audioEl.src;
-						audioEl.src = '';
-						audioEl.src = currentSrc;
-					}
-					setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
-				} else {
-					onFailure?.();
-				}
-			});
-		};
-		tryPlay(0);
+	/** Equalizer hook for the player module. The module owns the <audio> element and
+	 *  calls this immediately before it points the element at a new URL —
+	 *  createMediaElementSource must be connected before the element starts loading,
+	 *  or it fails on Android WebView. Runs once per deck element. */
+	function attachEqualizer(audio: HTMLAudioElement) {
+		initAudioContext();
+		if (!audioCtx || filters.length > 0) return;
+		try {
+			const source = audioCtx.createMediaElementSource(audio);
+			const bands = createEqFilterChain(audioCtx, musicSettings.eqBands);
+			source.connect(bands[0]);
+			bands[bands.length - 1].connect(audioCtx.destination);
+			filters = bands;
+		} catch (e) {
+			eqAvailable = false;
+			addToast({ message: 'Equalizer not available on this device.', type: 'warning' });
+			console.warn('Equalizer hookup failed:', e);
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -931,36 +788,6 @@
 	// ─────────────────────────────────────────────────────────────
 	// General helpers
 	// ─────────────────────────────────────────────────────────────
-	function revokeAll() {
-		preloadRequestId += 1;
-		preloadedTrackIndex = null;
-		tracks.forEach((track) => {
-			track.cleanup?.();
-			if (track.url?.startsWith('blob:')) {
-				URL.revokeObjectURL(track.url);
-			}
-		});
-	}
-
-	function releaseTrackUrl(index: number) {
-		const track = tracks[index];
-		if (!track?.url && !track?.cleanup) {
-			return;
-		}
-
-		if (preloadedTrackIndex === index) {
-			preloadedTrackIndex = null;
-		}
-
-		track.cleanup?.();
-		if (track.url?.startsWith('blob:')) {
-			URL.revokeObjectURL(track.url);
-		}
-
-		tracks = tracks.map((current, currentIndex) => {
-			return currentIndex === index ? { ...current, url: '', cleanup: undefined } : current;
-		});
-	}
 	function sortFiles(files: StoredAudioFile[]): StoredAudioFile[] {
 		return sortStoredFiles(files, musicSettings.sortOrder);
 	}
@@ -1115,15 +942,16 @@
 	}
 
 	/** Load selected tracks into the queue without starting playback.
-	 *  Updates tracks, mediaEngine item, and musicSelectionLoopActive so the
-	 *  MiniPlayer and media notification show the loaded track immediately. */
+	 *  Hands the queue to the module and updates the mediaEngine item and
+	 *  musicSelectionLoopActive so the MiniPlayer and media notification show the
+	 *  loaded track immediately. */
 	function preloadLoopSelection() {
 		const selectedFiles = getSelectedBrowseFilesInOrder();
 		if (selectedFiles.length === 0) return;
 		const label = browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName;
-		loadTracks(selectedFiles, label, { selectionLoop: true });
-		musicSettings.lastTrackIndex = 0;
-		musicSettings.lastTrackTimestamp = 0;
+		beginQueue(label, { selectionLoop: true });
+		player.clear();
+		player.load(selectedFiles, { selectionLoop: true, startIndex: 0 });
 		syncTrackToMediaEngine(0);
 	}
 
@@ -1160,12 +988,9 @@
 
 			// Load tracks in display order (not sorted), so playback follows
 			// the same order the user sees in the favorites list.
-			loadTracks(files, 'Favorite Tracks', { preserveOrder: true });
 			const nextIndex = files.findIndex((file) => getStoredFileKey(file) === favorite.key);
-			setCurrentTrack(Math.max(0, nextIndex));
-			currentTime = 0;
-			duration = 0;
-			await startAudioAt(musicSettings.lastTrackIndex);
+			beginQueue('Favorite Tracks');
+			await startPlayback(files, Math.max(0, nextIndex), { preserveOrder: true });
 		} finally {
 			isChangingTrack = false;
 		}
@@ -1347,12 +1172,6 @@
 	}
 
 	// ── Per-track resume helpers ──────────────────────────────────
-
-	/** Sync both lastTrackIndex and lastTrackKey together */
-	function setCurrentTrack(index: number) {
-		musicSettings.lastTrackIndex = index;
-		musicSettings.lastTrackKey = tracks[index] ? getTrackKey(tracks[index].source) : '';
-	}
 	const formatDriveAuthError = formatGoogleDriveAuthError;
 
 	function hasPendingDriveFolderPickerIntent(): boolean {
@@ -1763,8 +1582,7 @@
 				const cached = await loadDriveCache(cacheKey);
 				if (cached && !ctrl.signal.aborted) {
 					// Instant restore from IDB — use cached file list immediately
-					if (audioEl) { audioEl.pause(); audioEl.src = ''; }
-					isPlaying = false; currentTime = 0; duration = 0; tracks = [];
+					player.clear();
 					allFiles = cached.map(createStoredDriveAudioFile);
 					driveLoadProgress = { filesFound: cached.length, foldersScanned: 0, foldersQueued: 0 };
 					activateDriveLibrary();
@@ -1790,8 +1608,7 @@
 			}
 
 			// Fresh scan — stop playback then stream files progressively into the UI
-			if (audioEl) { audioEl.pause(); audioEl.src = ''; }
-			isPlaying = false; currentTime = 0; duration = 0; tracks = [];
+			player.clear();
 			allFiles = [];
 
 			const collectedFiles: GoogleDriveFile[] = [];
@@ -2172,44 +1989,41 @@
 		return [];
 	}
 
-	async function ensureTrackUrl(index: number, interactiveAuth = false, reportProgress = true): Promise<string | null> {
-		const track = tracks[index];
-		if (!track) {
-			return null;
-		}
-
-		if (track.url) {
-			return track.url;
-		}
+	/**
+	 * URL seam for the player module: turn a stored file into something the audio
+	 * element can play. Native files use the Capacitor bridge URL, everything else
+	 * is materialized to a File and exposed as an object URL with a cleanup path.
+	 */
+	async function resolveTrackUrl(source: StoredAudioFile, interactiveAuth = false): Promise<string | null> {
+		// Progress is only reported for the track the listener asked for. The module
+		// also materializes the *next* track in the background, and the player view
+		// shows a "Loading track…" overlay whenever progress is set.
+		const isForeground = player.state.tracks[player.state.currentIndex]?.source === source;
 
 		// Fast path for native files: Capacitor converts content:// / file:// paths to a local
 		// HTTP bridge URL (http://localhost/_capacitor_content_/... or _capacitor_file_/...).
 		// The audio element streams the file progressively via range requests — no need to read
 		// the entire file into memory before playback can start.
-		if (isNativeApp && track.source.source === 'native') {
-			const bridgeUrl = Capacitor.convertFileSrc(track.source.path);
+		if (isNativeApp && source.source === 'native') {
+			const bridgeUrl = Capacitor.convertFileSrc(source.path);
 			// convertFileSrc returns the original string unchanged if it cannot convert the scheme.
 			// Only use the bridge URL when Capacitor actually transformed it.
-			if (bridgeUrl !== track.source.path) {
-				tracks = tracks.map((current, currentIndex) =>
-					currentIndex === index ? { ...current, url: bridgeUrl } : current
-				);
+			if (bridgeUrl !== source.path) {
 				return bridgeUrl;
 			}
 		}
 
 		try {
 			const file = await materializeStoredFile(
-				track.source,
+				source,
 				interactiveAuth,
-				reportProgress
-					? (loaded, total) => { trackLoadProgress = { loaded, total }; }
-					: undefined
+				isForeground ? (loaded, total) => { trackLoadProgress = { loaded, total }; } : undefined
 			);
 			const url = URL.createObjectURL(file);
-			tracks = tracks.map((current, currentIndex) => {
-				return currentIndex === index ? { ...current, url, cleanup: undefined } : current;
-			});
+			// Hand the revocation path to the module through the queued track's
+			// `cleanup` field: the module calls it when it releases the URL.
+			const queued = player.state.tracks.find((entry) => entry.source === source);
+			if (queued) queued.cleanup = () => URL.revokeObjectURL(url);
 			return url;
 		} catch (error) {
 			console.error('Failed to prepare track for playback.', error);
@@ -2217,119 +2031,66 @@
 			addToast({ message: msg, type: 'error' });
 			return null;
 		} finally {
-			if (reportProgress) trackLoadProgress = null;
-		}
-	}
-
-	function getNextTrackIndex(currentIndex: number): number | null {
-		return getNextTrackIndexPure(currentIndex, {
-			trackCount: tracks.length,
-			isShuffle: musicSettings.isShuffle,
-			isRepeat: musicSettings.isRepeat,
-			selectionLoop: mediaEngine.musicSelectionLoopActive,
-			preloadedIndex: preloadedTrackIndex,
-		});
-	}
-
-	async function preloadNextTrack(currentIndex: number) {
-		const previousPreloadIndex = preloadedTrackIndex;
-		const nextIndex = getNextTrackIndex(currentIndex);
-		const requestId = ++preloadRequestId;
-
-		if (previousPreloadIndex !== null && previousPreloadIndex !== currentIndex && previousPreloadIndex !== nextIndex) {
-			releaseTrackUrl(previousPreloadIndex);
-		}
-
-		if (nextIndex === null || !tracks[nextIndex] || nextIndex === currentIndex) {
-			preloadedTrackIndex = null;
-			return;
-		}
-
-		preloadedTrackIndex = nextIndex;
-
-		if (tracks[nextIndex].url) {
-			return;
-		}
-
-		const url = await ensureTrackUrl(nextIndex, false, false);
-		if (requestId !== preloadRequestId) {
-			if (url && nextIndex !== musicSettings.lastTrackIndex && preloadedTrackIndex !== nextIndex) {
-				releaseTrackUrl(nextIndex);
-			}
-			return;
-		}
-
-		if (!url && preloadedTrackIndex === nextIndex) {
-			preloadedTrackIndex = null;
+			if (isForeground) trackLoadProgress = null;
 		}
 	}
 
 	// ─────────────────────────────────────────────────────────────
-	// loadTracks — internal, always called with sorted stored entries
+	// Queue hand-off to the player module (ADR-0001)
 	// ─────────────────────────────────────────────────────────────
-	function loadTracks(files: StoredAudioFile[], folder: string, options: { selectionLoop?: boolean; preserveOrder?: boolean } = {}) {
-		// Clear the audio src before revoking blob URLs to prevent a stale error event
-		// from firing advanceTrack while the new track is still loading.
-		if (audioEl) { audioEl.pause(); audioEl.src = ''; }
-		revokeAll();
+	/** Per-queue bookkeeping the module cannot know about: the session guard that
+	 *  stops a still-streaming folder scan from appending to a replaced queue, the
+	 *  folder label, the selection-loop flag and the user-picked-queue lock. */
+	function beginQueue(folder: string, options: { selectionLoop?: boolean } = {}) {
 		queueSessionId += 1;
-		// preserveOrder or selectionLoop: keep the original file order.
-		// Otherwise sort by the user's chosen sort order.
-		const sorted = (options.preserveOrder || options.selectionLoop) ? files : sortFiles(files);
-		tracks = sorted.map((f, i) => {
-			const { title, artist } = parseFilename(f.name);
-			return { id: i, title, artist, filename: f.name, url: '', duration: 0, cleanup: undefined, source: f };
-		});
 		musicSettings.lastFolderName = folder;
-		musicSettings.lastTrackIndex = 0;
-		musicSettings.lastTrackTimestamp = 0;
-		preloadedTrackIndex = null;
-		preloadRequestId += 1;
-		currentTime = 0; duration = 0; isPlaying = false; isBuffering = false;
-		_audioErrorRetries = 0;
 		trackListLockedByUser = true;
 		mediaEngine.musicSelectionLoopActive = options.selectionLoop ?? false;
 	}
 
+	/** Hand a queue to the module and start it at `index`. The queue stays loaded
+	 *  (stopped) when the track's URL cannot be materialized. */
+	async function startPlayback(
+		files: StoredAudioFile[],
+		index: number,
+		options: { selectionLoop?: boolean; preserveOrder?: boolean; suppressAlert?: boolean } = {}
+	): Promise<boolean> {
+		if (files.length === 0) return false;
+		await player.play(files, index, {
+			selectionLoop: options.selectionLoop,
+			preserveOrder: options.preserveOrder,
+		});
+		if (player.state.error) {
+			if (!options.suppressAlert) alert('Unable to load this track.');
+			return false;
+		}
+
+		syncTrackToMediaEngine(player.state.currentIndex);
+
+		// Set the playing flag BEFORE claimAudio.
+		const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
+		mediaEngine[deckFlag] = true;
+
+		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
+		return true;
+	}
+
+	/** Start the first track of the queue whose URL can be materialized, the way a
+	 *  folder play does: broken files at the head must not stop the queue. */
+	async function startFirstPlayableTrack(
+		files: StoredAudioFile[],
+		options: { selectionLoop?: boolean } = {}
+	): Promise<boolean> {
+		for (let index = 0; index < files.length; index += 1) {
+			if (await startPlayback(files, index, { ...options, suppressAlert: true })) return true;
+		}
+		return false;
+	}
+
 	function appendTracksToQueue(files: StoredAudioFile[], folder: string, expectedQueueSessionId: number) {
 		if (files.length === 0 || queueSessionId !== expectedQueueSessionId) return;
-		const previousTracks = tracks;
-		const currentTrack = previousTracks[musicSettings.lastTrackIndex];
-		const currentTrackKey = currentTrack ? getTrackKey(currentTrack.source) : '';
-		const preloadedTrackKey = preloadedTrackIndex !== null && previousTracks[preloadedTrackIndex]
-			? getTrackKey(previousTracks[preloadedTrackIndex].source)
-			: '';
-		const mergedFiles = mergeStoredFiles(previousTracks.map((track) => track.source), files);
-		if (mergedFiles.length === previousTracks.length) return;
-
-		const existingByKey = new Map(previousTracks.map((track) => [getTrackKey(track.source), track]));
-		tracks = sortFiles(mergedFiles).map((file, index) => {
-			const existing = existingByKey.get(getTrackKey(file));
-			const { title, artist } = parseFilename(file.name);
-			return {
-				id: index,
-				title,
-				artist,
-				filename: file.name,
-				url: existing?.url ?? '',
-				duration: existing?.duration ?? 0,
-				cleanup: existing?.cleanup,
-				source: file,
-			};
-		});
+		player.append(files);
 		musicSettings.lastFolderName = folder;
-
-		if (currentTrackKey) {
-			const nextIndex = tracks.findIndex((track) => getTrackKey(track.source) === currentTrackKey);
-			if (nextIndex >= 0) {
-				setCurrentTrack(nextIndex);
-			}
-		}
-
-		if (preloadedTrackKey) {
-			const nextPreloadedIndex = tracks.findIndex((track) => getTrackKey(track.source) === preloadedTrackKey);
-			preloadedTrackIndex = nextPreloadedIndex >= 0 ? nextPreloadedIndex : null;
-		}
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -2494,51 +2255,6 @@
 	// Browse interactions
 	// ─────────────────────────────────────────────────────────────
 
-	// ── Shared audio start sequence — used by all user-initiated play functions ──
-	async function startAudioAt(index: number, options: { suppressAlert?: boolean } = {}): Promise<boolean> {
-		if (!audioEl || !tracks[index]) return false;
-		const url = await ensureTrackUrl(index, true);
-		if (!url) {
-			if (!options.suppressAlert) {
-				alert('Unable to load this track.');
-			}
-			return false;
-		}
-		// initAudioContext MUST be called BEFORE setting audioEl.src —
-		// createMediaElementSource must connect to the audio element
-		// before it starts loading, or it fails on Android WebView.
-		initAudioContext();
-
-		audioEl.src = url;
-		syncTrackToMediaEngine(index);
-		void preloadNextTrack(index);
-
-		// Set playing flag BEFORE claimAudio.
-		const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
-		mediaEngine[deckFlag] = true;
-
-		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
-		isBuffering = true;
-		safePlay(() => {
-			isBuffering = false;
-			isPlaying = false;
-			mediaEngine[deckFlag] = false;
-		});
-		return true;
-	}
-
-	async function startFirstPlayableTrack(startIndex = 0): Promise<boolean> {
-		for (let index = startIndex; index < tracks.length; index += 1) {
-			setCurrentTrack(index);
-			currentTime = 0;
-			duration = 0;
-			if (await startAudioAt(index, { suppressAlert: true })) {
-				return true;
-			}
-		}
-		return false;
-	}
-
 	async function playNativeFolderFromScan(path: string[], folderLabel: string): Promise<boolean> {
 		if (!nativeTreeUri) return false;
 
@@ -2563,10 +2279,10 @@
 
 			if (!playbackStarted) {
 				if (collectedFiles.length < FOLDER_PLAY_PRIME_COUNT && !state.done) return;
-				loadTracks(collectedFiles, folderLabel);
+				beginQueue(folderLabel);
 				activePlaybackQueueSessionId = queueSessionId;
 				queuedFileCount = collectedFiles.length;
-				playbackStarted = await startFirstPlayableTrack();
+				playbackStarted = await startFirstPlayableTrack(collectedFiles);
 				if (playbackStarted && !hasResolvedStart) {
 					hasResolvedStart = true;
 					resolveStart?.(true);
@@ -2587,10 +2303,10 @@
 			queuedFileCount = collectedFiles.length;
 		}).then(async () => {
 			if (!playbackStarted && collectedFiles.length > 0) {
-				loadTracks(collectedFiles, folderLabel);
+				beginQueue(folderLabel);
 				activePlaybackQueueSessionId = queueSessionId;
 				queuedFileCount = collectedFiles.length;
-				playbackStarted = await startFirstPlayableTrack();
+				playbackStarted = await startFirstPlayableTrack(collectedFiles);
 			}
 			if (playbackStarted && collectedFiles.length > queuedFileCount) {
 				appendTracksToQueue(
@@ -2630,13 +2346,14 @@
 		isChangingTrack = true;
 		try {
 			const { files, selectionLoop } = getBrowsePlaybackFiles();
-			loadTracks(files, browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName, { selectionLoop });
+			beginQueue(
+				browsePath.length > 0 ? browsePath[browsePath.length - 1] : musicSettings.lastFolderName,
+				{ selectionLoop }
+			);
 			const sorted = sortFiles(files);
 			const entryKey = getStoredFileKey(entry.file);
 			const idx = sorted.findIndex((file) => getStoredFileKey(file) === entryKey);
-			setCurrentTrack(Math.max(0, idx));
-			currentTime = 0; duration = 0;
-			await startAudioAt(musicSettings.lastTrackIndex);
+			await startPlayback(files, Math.max(0, idx), { selectionLoop });
 		} finally {
 			isChangingTrack = false;
 		}
@@ -2651,8 +2368,8 @@
 		isLoading = true;
 		isChangingTrack = true;
 		try {
-			loadTracks(files, label, { selectionLoop });
-			if (!(await startFirstPlayableTrack())) {
+			beginQueue(label, { selectionLoop });
+			if (!(await startFirstPlayableTrack(files, { selectionLoop }))) {
 				alert('No playable audio files were found in this folder.');
 			}
 		} catch (e) {
@@ -2674,8 +2391,8 @@
 		try {
 			const indexedFiles = collectStoredFilesFromSnapshot(allFiles, path);
 			if (indexedFiles.length > 0) {
-				loadTracks(indexedFiles, folderLabel);
-				if (!(await startFirstPlayableTrack())) {
+				beginQueue(folderLabel);
+				if (!(await startFirstPlayableTrack(indexedFiles))) {
 					alert('No playable audio files were found in this folder.');
 				}
 				return;
@@ -2690,8 +2407,8 @@
 
 			const files = await collectAllFromPath(path);
 			if (files.length === 0) { alert('No audio files found in this folder.'); return; }
-			loadTracks(files, folderLabel);
-			if (!(await startFirstPlayableTrack())) {
+			beginQueue(folderLabel);
+			if (!(await startFirstPlayableTrack(files))) {
 				alert('No playable audio files were found in this folder.');
 			}
 		} catch (e) {
@@ -3060,20 +2777,24 @@
 	// Playback controls
 	// ─────────────────────────────────────────────────────────────
 
+	/** mediaEngine transport: deliberate pause. Tells the engine, so the Android
+	 *  background recovery does not restart this track when the phone is later
+	 *  locked. */
 	function pausePlayback() {
 		try {
-			if (!audioEl || !currentTrack || !isPlaying) return;
+			if (!currentTrack || !isPlaying) return;
 			void triggerPlaybackHaptic(false);
-			// Deliberate pause: tell the engine, so the Android background recovery
-			// does not restart this track when the phone is later locked.
 			markUserPaused();
-			audioEl.pause();
-		} catch { /* haptics or audio element failure */ }
+			player.pause();
+		} catch { /* haptics or player failure */ }
 	}
 
+	/** mediaEngine transport: resume this deck. The module owns the element — it
+	 *  restarts the selected track when the element has no source (queue loaded
+	 *  without playback, or unloaded by a cross-source stop) and refreshes the
+	 *  Capacitor bridge on native. */
 	async function resumePlayback() {
-		try {
-		if (!audioEl || isPlaying) return;
+		if (isPlaying) return;
 
 		// Loop selection takes priority — start or restart the loop even if no
 		// track is currently loaded (fresh app start / empty queue).
@@ -3099,57 +2820,11 @@
 		mediaEngine[deckFlag] = true;
 
 		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
-		if (!audioEl.src || audioEl.src === window.location.href) {
-			const url = await ensureTrackUrl(musicSettings.lastTrackIndex, true);
-			if (!url) {
-				mediaEngine[deckFlag] = false;
-				alert('Unable to load this track.');
-				return;
-			}
-			audioEl.src = url;
-			syncTrackToMediaEngine(musicSettings.lastTrackIndex);
-		} else if (isNativeApp && audioEl.src) {
-			// On native Android, the Capacitor localhost bridge closes its HTTP
-			// connection when audioEl.pause() is called. Calling play() on a
-			// stale connection fails silently or with network errors. Force a
-			// fresh connection by toggling the src — this re-establishes the
-			// bridge without losing the playback position.
-			const resumePos = audioEl.currentTime;
-			const currentSrc = audioEl.src;
-			audioEl.src = '';
-			audioEl.src = currentSrc;
-			// Restore position — Capacitor serves local files with range
-			// support so seeking works immediately after setting src.
-			if (resumePos > 0.5) audioEl.currentTime = resumePos;
-		}
-		void preloadNextTrack(musicSettings.lastTrackIndex);
-		safePlay(
-			() => {
-				// Playback failed after all retries — reset audio element and
-				// clear cached URL so next attempt gets a fresh Capacitor bridge.
-				isBuffering = false;
-				mediaEngine[deckFlag] = false;
-				if (audioEl) {
-					audioEl.src = '';
-					audioEl.load();
-				}
-				// Clear the cached track URL so ensureTrackUrl generates a
-				// fresh Capacitor bridge URL on the next attempt instead of
-				// reusing a potentially stale one.
-				const track = tracks[musicSettings.lastTrackIndex];
-				if (track) track.url = '';
-			},
-		);
-		} catch { /* resume failed (SD card removed, bridge broken) — stop cleanly */
-			isPlaying = false;
-			isBuffering = false;
-			const flag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
-			mediaEngine[flag] = false;
-			if (audioEl) { audioEl.src = ''; audioEl.load(); }
-		}
+		syncTrackToMediaEngine(player.state.currentIndex);
+		player.resume();
 	}
 
-	// ── Rebuild tracks from current selection when loop is active.
+	// ── Rebuild the queue from the current selection when the loop is active.
 	// Called before advancing so newly added/removed tracks take effect.
 	function syncLoopTracksToSelection() {
 		if (!mediaEngine.musicSelectionLoopActive) return;
@@ -3166,181 +2841,27 @@
 			currentKeys.some((k, i) => k !== newKeys[i]);
 		if (!selectionChanged) return;
 
-		// Preserve the currently-playing track's index across the rebuild
-		const currentTrackKey =
-			tracks[musicSettings.lastTrackIndex]
-				? getStoredFileKey(tracks[musicSettings.lastTrackIndex].source)
-				: null;
-		const sorted = sortFiles(selectedFiles);
-		tracks = sorted.map((f, i) => ({
-			id: i,
-			...parseFilename(f.name),
-			filename: f.name,
-			url: '',
-			duration: 0,
-			cleanup: undefined,
-			source: f,
-		}));
-		if (currentTrackKey) {
-			const newIdx = tracks.findIndex((t) => getStoredFileKey(t.source) === currentTrackKey);
-			if (newIdx >= 0) {
-				musicSettings.lastTrackIndex = newIdx;
-			} else {
-				// Currently playing track was removed — reset to first
-				musicSettings.lastTrackIndex = 0;
-			}
-		}
+		// The module keeps the currently-playing track selected across the rebuild
+		// by key, and falls back to the first track when it was removed.
 		queueSessionId += 1;
+		player.load(sortFiles(selectedFiles), { selectionLoop: true, keepCurrent: true });
 	}
 
-	async function advanceTrack(wasPlaying: boolean, interactiveAuth = false) {
-		if (isChangingTrack || tracks.length === 0) return;
-		isChangingTrack = true;
-		try {
-			// Sync selection so newly added/removed loop tracks take effect
-			syncLoopTracksToSelection();
-
-			const idx = musicSettings.lastTrackIndex;
-			const nextIndex = getNextTrackIndex(idx);
-			if (nextIndex === null) {
-				isPlaying = false; currentTime = 0;
-				if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
-				return;
-			}
-
-			// Same-track loop (single selected track, or repeat).
-			if (nextIndex === idx) {
-				setCurrentTrack(nextIndex);
-				currentTime = 0;
-				musicSettings.lastTrackTimestamp = 0;
-				if (audioEl) {
-					// If the audio element is in an error state, seek + play won't
-					// work — we must force a reload.  Clear src first because
-					// setting the same URL is a no-op per the HTML spec.
-					if (audioEl.error) {
-						const reloadUrl = tracks[nextIndex]?.url;
-						if (reloadUrl) {
-							audioEl.src = '';
-							audioEl.src = reloadUrl;
-						}
-					} else {
-						audioEl.currentTime = 0;
-					}
-					if (wasPlaying) {
-						isBuffering = false;
-						safePlay(() => { isPlaying = false; });
-					}
-				}
-				isChangingTrack = false;
-				return;
-			}
-
-			setCurrentTrack(nextIndex);
-			musicSettings.lastTrackTimestamp = 0;
-			currentTime = 0; duration = 0;
-			if (audioEl && tracks[nextIndex]) {
-				// Try to load the next track; if it fails, auto-advance
-				// past broken tracks until we find a playable one or
-				// exhaust the queue.
-				let attemptIndex = nextIndex;
-				let attemptCount = 0;
-				const maxAttempts = tracks.length;
-				let foundUrl: string | null = null;
-
-				while (attemptCount < maxAttempts) {
-					const url = await ensureTrackUrl(attemptIndex, interactiveAuth);
-					if (url) {
-						foundUrl = url;
-						break;
-					}
-					// Track is broken — advance to next and try again
-					const nextAttempt = getNextTrackIndex(attemptIndex);
-					if (nextAttempt === null || nextAttempt === nextIndex) break;
-					attemptIndex = nextAttempt;
-					attemptCount++;
-				}
-
-				if (!foundUrl) {
-					// No playable track found in the entire queue
-					isPlaying = false; isBuffering = false;
-					return;
-				}
-
-				// If we skipped broken tracks, update lastTrackIndex to the
-				// track that actually loaded.
-				if (attemptIndex !== nextIndex) {
-					setCurrentTrack(attemptIndex);
-				}
-				// Release old URL only after new URL is ready
-				releaseTrackUrl(idx);
-
-				// initAudioContext MUST be before setting audioEl.src.
-				initAudioContext();
-
-				audioEl.src = foundUrl;
-				syncTrackToMediaEngine(attemptIndex);
-				void preloadNextTrack(attemptIndex);
-
-				// Set playing flag BEFORE claimAudio.
-				const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
-				mediaEngine[deckFlag] = true;
-
-				claimAudio(deck === 'A' ? 'musicA' : 'musicB');
-				if (wasPlaying) {
-					isBuffering = true;
-					safePlay(() => { isPlaying = false; isBuffering = false; mediaEngine[deckFlag] = false; });
-				}
-			}
-		} finally {
-			isChangingTrack = false;
-		}
+	/** mediaEngine transport: skip. The module advances/preloads and keeps the
+	 *  queue in step; the view only has to refresh a changed selection loop first. */
+	function skipNext() {
+		if (isChangingTrack) return;
+		syncLoopTracksToSelection();
+		player.next();
 	}
 
-	async function prevTrack() {
-		if (isChangingTrack || tracks.length === 0) return;
-		isChangingTrack = true;
-		try {
-			const wasPlaying = isPlaying || isBuffering;
-			if (musicSettings.rewindOnPrev && currentTime > 3 && audioEl) { audioEl.currentTime = 0; return; }
-			const oldIndex = musicSettings.lastTrackIndex;
-			const prevIndex = (oldIndex - 1 + tracks.length) % tracks.length;
-			setCurrentTrack(prevIndex);
-			musicSettings.lastTrackTimestamp = 0;
-			currentTime = 0; duration = 0;
-			if (audioEl && tracks[prevIndex]) {
-				const url = await ensureTrackUrl(prevIndex, true);
-				if (!url) {
-					return;
-				}
-				// Release old URL only after new URL is ready
-				releaseTrackUrl(oldIndex);
-
-				// initAudioContext MUST be before setting audioEl.src.
-				initAudioContext();
-
-				audioEl.src = url;
-				syncTrackToMediaEngine(prevIndex);
-				void preloadNextTrack(prevIndex);
-
-				// Set playing flag BEFORE claimAudio.
-				const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
-				mediaEngine[deckFlag] = true;
-
-				claimAudio(deck === 'A' ? 'musicA' : 'musicB');
-				if (wasPlaying) {
-					isBuffering = true;
-					safePlay(() => { isPlaying = false; isBuffering = false; mediaEngine[deckFlag] = false; });
-				}
-			}
-		} finally {
-			isChangingTrack = false;
-		}
+	function skipPrev() {
+		if (isChangingTrack) return;
+		player.prev();
 	}
 
 	function handleSeekSeconds(seconds: number) {
-		seekingValue = null;
-		currentTime = seconds;
-		if (audioEl) audioEl.currentTime = seconds;
+		player.seek(seconds);
 	}
 	function handleVolume(e: Event) {
 		const input = e.target as HTMLInputElement;
@@ -3508,11 +3029,8 @@
 		return () => window.removeEventListener('music-library:rescan', onRescan);
 	});
 
-	$effect(() => { return () => { revokeAll(); audioCtx?.close(); }; });
+	$effect(() => { return () => { player.destroy(); audioCtx?.close(); }; });
 </script>
-
-<!-- Hidden audio element -->
-<audio bind:this={audioEl} preload="none"></audio>
 
 <!-- Hidden folder input fallback -->
 <input

@@ -10,12 +10,12 @@ and Google Drive music libraries. The live code in `src/` is authoritative.
   speed; they share the global `mediaEngine` for MediaSession, the MiniPlayer,
   and audio exclusivity (`claimAudio`).
 - **player** — the playback core behind a deck: the queue, the audio element,
-  and the advance/preload/retry/loop behaviour. The deep module decided in
-  ADR-0001 landed as `src/lib/audio/player.svelte.ts` (`createPlayer`, tested in
-  `tests/unit/models/player.test.ts`), but no view calls it yet, so the playback
-  core is still buried inside `Mp3PlayerView.svelte`. A deck is a player
-  instance + the view chrome that binds to it. `docs/refactoring-plan.md` tracks
-  the migration.
+  and the advance/preload/retry/loop behaviour. It is the deep module decided in
+  ADR-0001, `src/lib/audio/player.svelte.ts` (`createPlayer`, tested in
+  `tests/unit/models/player.test.ts`). `Mp3PlayerView` builds one per deck and
+  hands it the file list (scan, Drive, favourites, folder pickers), the URL
+  adapter, the per-deck volume/mute/speed controls and the equalizer hook. A deck
+  is a player instance + the view chrome that binds to it.
 - **mediaEngine** — the shared playback-core store: MediaSession glue, radio
   stream audio, per-deck state, audio exclusivity, wakelock, background resume.
 - **track / episode** — a playable item in a music queue (track) or a podcast

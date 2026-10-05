@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createPlayer, type PlayerState } from '$lib/audio/player.svelte';
+import { createPlayer, type Player, type PlayerState } from '$lib/audio/player.svelte';
 import type { StoredAudioFile } from '$lib/models/music';
+import { musicSettings } from '$lib/stores/settings.svelte';
 
 // ── Minimal fake HTMLAudioElement ────────────────────────────────────────────
 type Handler = (ev: { type: string }) => void;
@@ -159,5 +160,213 @@ describe('player — destroy', () => {
 		await flush();
 		player.destroy();
 		expect(audio.src).toBe('');
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Queue API the view drives (ADR-0001 PR 2). The view hands whole file lists
+// over and never touches the element itself, so these cover the seams the
+// migration relies on: queue replacement without playback, append during a
+// streaming folder scan, stopping while keeping the queue for cross-source
+// exclusivity, favourites order, the selection-loop refresh hook, the per-deck
+// element controls, and the object-URL cleanup path.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('player — load (queue without playback)', () => {
+	it('replaces the queue, selects startIndex and leaves the element running', async () => {
+		const { player, audio, state, settings } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0);
+		await flush();
+		const pauseSpy = vi.spyOn(audio, 'pause');
+		const srcBefore = audio.src;
+
+		player.load([mkSrc('c.mp3', 'c'), mkSrc('d.mp3', 'd')], { startIndex: 1 });
+
+		expect(state.tracks.map((t) => t.filename)).toEqual(['c.mp3', 'd.mp3']);
+		expect(state.currentIndex).toBe(1);
+		expect(settings.lastTrackIndex).toBe(1);
+		expect(settings.lastTrackKey).toBeTruthy();
+		expect(pauseSpy).not.toHaveBeenCalled();
+		expect(audio.src).toBe(srcBefore);
+	});
+
+	it('keepCurrent keeps the selected track selected across a rebuild', async () => {
+		const { player, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b'), mkSrc('c.mp3', 'c')], 1);
+		await flush();
+		expect(state.tracks[state.currentIndex].filename).toBe('b.mp3');
+
+		// 'b' moved to the end of the new queue: the index must follow the file.
+		player.load([mkSrc('a.mp3', 'a'), mkSrc('c.mp3', 'c'), mkSrc('b.mp3', 'b')], {
+			selectionLoop: true,
+			keepCurrent: true,
+		});
+		expect(state.currentIndex).toBe(2);
+		expect(state.tracks[2].filename).toBe('b.mp3');
+
+		// ... and when the selected track is gone, the queue falls back to the first.
+		player.load([mkSrc('x.mp3', 'x'), mkSrc('y.mp3', 'y')], { selectionLoop: true, keepCurrent: true });
+		expect(state.currentIndex).toBe(0);
+	});
+
+	it('clear drops the queue, unloads the element and releases its URLs', async () => {
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a')], 0);
+		await flush();
+
+		player.clear();
+
+		expect(state.tracks).toHaveLength(0);
+		expect(state.currentIndex).toBe(-1);
+		expect(audio.src).toBe('');
+	});
+});
+
+describe('player — append', () => {
+	it('merges new files, keeps loaded URLs and re-points the selected index', async () => {
+		const { player, state } = makePlayer();
+		await player.play([mkSrc('b.mp3', 'b'), mkSrc('c.mp3', 'c')], 0);
+		await flush();
+		const preloadedUrl = state.tracks.find((t) => t.filename === 'c.mp3')?.url;
+		expect(preloadedUrl).toBe('blob:c.mp3');
+
+		player.append([mkSrc('a.mp3', 'a')]);
+
+		expect(state.tracks.map((t) => t.filename)).toEqual(['a.mp3', 'b.mp3', 'c.mp3']);
+		expect(state.tracks.find((t) => t.filename === 'c.mp3')?.url).toBe(preloadedUrl);
+		expect(state.tracks[state.currentIndex].filename).toBe('b.mp3');
+	});
+
+	it('ignores files that are already queued', async () => {
+		const { player, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a')], 0);
+		await flush();
+
+		player.append([mkSrc('a.mp3', 'a')]);
+
+		expect(state.tracks).toHaveLength(1);
+	});
+});
+
+describe('player — stop and resume (cross-source exclusivity)', () => {
+	it('stop unloads the element but keeps the queue, so resume restarts the track', async () => {
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0);
+		await flush();
+		const playsBefore = audio.playCalls;
+
+		player.stop();
+
+		expect(audio.src).toBe('');
+		expect(state.tracks).toHaveLength(2);
+		expect(state.isPlaying).toBe(false);
+		expect(state.isBuffering).toBe(false);
+
+		await player.resume();
+		await flush();
+
+		expect(audio.src).toBe('blob:a.mp3');
+		expect(audio.playCalls).toBeGreaterThan(playsBefore);
+	});
+
+	it('resume starts the selected track of a queue that was only loaded', async () => {
+		const { player, audio, state } = makePlayer();
+		player.load([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], { startIndex: 1 });
+		expect(audio.src).toBe('');
+
+		await player.resume();
+		await flush();
+
+		expect(audio.src).toBe('blob:b.mp3');
+		expect(state.currentIndex).toBe(1);
+	});
+});
+
+describe('player — queue options', () => {
+	it('preserveOrder keeps the caller order (favourites list)', async () => {
+		const { player, state } = makePlayer();
+		await player.play([mkSrc('z.mp3', 'z'), mkSrc('a.mp3', 'a')], 1, { preserveOrder: true });
+		await flush();
+
+		expect(state.tracks.map((t) => t.filename)).toEqual(['z.mp3', 'a.mp3']);
+		expect(state.currentIndex).toBe(1);
+		expect(state.tracks[1].filename).toBe('a.mp3');
+	});
+
+	it('calls onBeforeAdvance before reading the next index', async () => {
+		let playerRef: Player | null = null;
+		const onBeforeAdvance = vi.fn(() => {
+			// What the view does: rebuild the queue from a changed loop selection.
+			playerRef?.load([mkSrc('x.mp3', 'x'), mkSrc('y.mp3', 'y')], { startIndex: 0 });
+		});
+		const { player, audio, state } = makePlayer({ onBeforeAdvance });
+		playerRef = player;
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0);
+		await flush();
+
+		audio.emit('ended');
+		await flush();
+
+		expect(onBeforeAdvance).toHaveBeenCalled();
+		// The advance ran against the rebuilt queue, not the stale one.
+		expect(state.tracks.map((t) => t.filename)).toEqual(['x.mp3', 'y.mp3']);
+		expect(state.currentIndex).toBe(1);
+	});
+});
+
+describe('player — element controls', () => {
+	it('follows volume, mute and rate changes on the reactive controls', async () => {
+		const before = {
+			volume: musicSettings.deckBVolume,
+			muted: musicSettings.isMuted,
+			speed: musicSettings.deckBSpeed,
+		};
+		try {
+			musicSettings.deckBVolume = 40;
+			musicSettings.isMuted = false;
+			musicSettings.deckBSpeed = 1.25;
+			const { audio } = makePlayer({
+				controls: {
+					get volume() { return musicSettings.deckBVolume; },
+					get muted() { return musicSettings.isMuted; },
+					get playbackRate() { return musicSettings.deckBSpeed; },
+				},
+			});
+			await flush();
+
+			expect(audio.volume).toBeCloseTo(0.4);
+			expect(audio.muted).toBe(false);
+			expect(audio.playbackRate).toBeCloseTo(1.25);
+
+			// The sliders write the store, so the element must follow live.
+			musicSettings.deckBVolume = 5;
+			musicSettings.isMuted = true;
+			musicSettings.deckBSpeed = 0.5;
+			await flush();
+
+			expect(audio.volume).toBeCloseTo(0.05);
+			expect(audio.muted).toBe(true);
+			expect(audio.playbackRate).toBeCloseTo(0.5);
+		} finally {
+			musicSettings.deckBVolume = before.volume;
+			musicSettings.isMuted = before.muted;
+			musicSettings.deckBSpeed = before.speed;
+			await flush();
+		}
+	});
+});
+
+describe('player — URL cleanup', () => {
+	it('runs the queued track cleanup when the module releases its URL', async () => {
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0);
+		await flush();
+		// This is what the view's resolver sets on the queued track.
+		const cleanup = vi.fn();
+		state.tracks[0].cleanup = cleanup;
+
+		audio.emit('ended');
+		await flush();
+
+		expect(cleanup).toHaveBeenCalled();
 	});
 });
