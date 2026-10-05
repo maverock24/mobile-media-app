@@ -92,6 +92,10 @@ export interface PlayerOptions {
 	/** Called at the start of an advance, before the next index is computed. The
 	 *  view refreshes a changed selection loop here. */
 	onBeforeAdvance?: () => void;
+	/** Live selection-loop flag. The MiniPlayer toggles the loop store without
+	 *  touching the queue, so the module has to read it through this getter.
+	 *  Defaults to the `selectionLoop` option of the last `play()`/`load()`. */
+	isSelectionLoop?: () => boolean;
 }
 
 export interface Player {
@@ -135,12 +139,28 @@ export function createPlayer(opts: PlayerOptions): Player {
 	function el(): HTMLAudioElement {
 		if (!audio) {
 			audio = opts.createAudio ? opts.createAudio() : new Audio();
+			// The old view's element was `<audio preload="none">`: nothing is
+			// fetched until a src is assigned, which is what WebViews expect.
+			audio.preload = 'none';
 			wireAudioEvents(audio);
 		}
 		return audio;
 	}
 
+	/** Snapshot of the last queue's loop flag, used when no live getter is given. */
 	let selectionLoop = false;
+	/** Bumped whenever the queue is replaced wholesale (play/load/clear). A URL
+	 *  that resolves after that belongs to a queue nobody is playing, so it must
+	 *  not be written into the replacement queue. `append` deliberately does not
+	 *  bump it: a streaming folder scan must not cancel an in-flight resolve for a
+	 *  slot that is already queued. */
+	let queueGeneration = 0;
+
+	/** Live selection-loop flag: the view's getter when supplied (MiniPlayer can
+	 *  toggle the loop at any time), the queue's own option otherwise. */
+	function isSelectionLoopActive(): boolean {
+		return opts.isSelectionLoop ? opts.isSelectionLoop() : selectionLoop;
+	}
 	let preloadedIndex: number | null = null;
 	let preloadRequestId = 0;
 	let errorRetries = 0;
@@ -216,8 +236,13 @@ export function createPlayer(opts: PlayerOptions): Player {
 		const track = state.tracks[index];
 		if (!track) return null;
 		if (track.url) return track.url;
+		const generation = queueGeneration;
 		try {
 			const url = await opts.resolveUrl(track.source, interactiveAuth);
+			// The queue was replaced while the URL was being produced: the source
+			// may no longer be queued (or may have moved), so the URL is dropped.
+			// The resolver revokes its own object URL when that happens.
+			if (generation !== queueGeneration) return null;
 			if (url && !destroyed) {
 				state.tracks = state.tracks.map((t, i) => (i === index ? { ...t, url } : t));
 			}
@@ -247,6 +272,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 	 * (`keepCurrent`).
 	 */
 	function loadQueue(files: StoredAudioFile[], options: PlayerLoadOptions = {}) {
+		queueGeneration += 1;
 		const keepKey = options.keepCurrent && state.currentIndex >= 0 && state.tracks[state.currentIndex]
 			? getTrackKey(state.tracks[state.currentIndex].source)
 			: '';
@@ -299,7 +325,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 			trackCount: state.tracks.length,
 			isShuffle: settings.isShuffle,
 			isRepeat: settings.isRepeat,
-			selectionLoop,
+			selectionLoop: isSelectionLoopActive(),
 			preloadedIndex,
 		});
 	}
@@ -321,9 +347,17 @@ export function createPlayer(opts: PlayerOptions): Player {
 
 	function loadAndPlayAt(index: number, wasPlaying: boolean, interactiveAuth: boolean) {
 		if (!state.tracks[index]) return;
+		const generation = queueGeneration;
 		void (async () => {
 			const url = await ensureUrl(index, interactiveAuth);
-			if (!url) return;
+			if (!url) {
+				// No playable URL (resolution failed, or the queue was replaced): never
+				// leave the caller's "Loading track…" state stuck. Only reset it while
+				// this queue is still the current one — a replaced queue owns the state
+				// now. isPlaying stays false: nothing was handed to the element.
+				if (wasPlaying && generation === queueGeneration) state.isBuffering = false;
+				return;
+			}
 			opts.applyEqualizer?.(el());
 			el().src = url;
 			preloadNextTrack(index);
@@ -414,7 +448,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 		element.addEventListener('ended', () => {
 			state.isBuffering = false;
 			settings.lastTrackTimestamp = 0;
-			if (settings.isRepeat && !selectionLoop) {
+			if (settings.isRepeat && !isSelectionLoopActive()) {
 				// repeat-one: rewind the same track.
 				element.currentTime = 0;
 				safePlay();
@@ -510,6 +544,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 			}
 		},
 		clear() {
+			queueGeneration += 1;
 			haltPlayback();
 			unload();
 			revokeAll();
@@ -533,6 +568,8 @@ export function createPlayer(opts: PlayerOptions): Player {
 				const index = state.currentIndex >= 0 ? state.currentIndex : 0;
 				setCurrentTrack(index);
 				state.isBuffering = true;
+				// loadAndPlayAt clears isBuffering again when no URL comes back (the
+				// resolve failed, or the queue was replaced) and never sets isPlaying.
 				loadAndPlayAt(index, true, true);
 				return;
 			}
