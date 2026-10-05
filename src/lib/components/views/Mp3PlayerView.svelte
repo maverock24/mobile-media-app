@@ -2002,10 +2002,6 @@
 		// also materializes the *next* track in the background, and the player view
 		// shows a "Loading track…" overlay whenever progress is set.
 		const isForeground = player.state.tracks[player.state.currentIndex]?.source === source;
-		// The queued track this URL will belong to, captured before the await: a
-		// queue replacement (play/load/clear) can land while the file materializes,
-		// and a URL for a track that is no longer queued would never be released.
-		const queued = player.state.tracks.find((entry) => entry.source === source);
 
 		// Fast path for native files: Capacitor converts content:// / file:// paths to a local
 		// HTTP bridge URL (http://localhost/_capacitor_content_/... or _capacitor_file_/...).
@@ -2027,16 +2023,22 @@
 				isForeground ? (loaded, total) => { trackLoadProgress = { loaded, total }; } : undefined
 			);
 			const url = URL.createObjectURL(file);
-			// Verify the captured track is still the one in the queue (identity, not
-			// source lookup): if the queue was replaced during the await, drop the URL
-			// and revoke it here so the blob is not orphaned.
-			if (!queued || !player.state.tracks.includes(queued)) {
+			// Re-look-up the queued track by source identity after the await. A queue
+			// replacement (play/load/clear) can land while the file materializes, but
+			// so can a rebuild that keeps the source (append on a folder scan,
+			// syncLoopTracksToSelection re-queueing the selection): both rebuild the
+			// PlayerTrack wrappers while preserving the underlying source objects, so
+			// wrapper identity is not stable and source identity is. No live entry
+			// means the source is no longer queued, so revoke the URL rather than
+			// orphan it.
+			const live = player.state.tracks.find((entry) => entry.source === source);
+			if (!live) {
 				URL.revokeObjectURL(url);
 				return null;
 			}
-			// Hand the revocation path to the module through the queued track's
+			// Hand the revocation path to the module through the live track's
 			// `cleanup` field: the module calls it when it releases the URL.
-			queued.cleanup = () => URL.revokeObjectURL(url);
+			live.cleanup = () => URL.revokeObjectURL(url);
 			return url;
 		} catch (error) {
 			console.error('Failed to prepare track for playback.', error);
@@ -2862,29 +2864,34 @@
 
 	/** mediaEngine transport: skip. The module advances/preloads and keeps the
 	 *  queue in step; the view only has to refresh a changed selection loop first.
-	 *  A skip is a playback start, so it claims the audio channel for this deck the
-	 *  way startPlayback does (flag first, then claim) — a layer playing elsewhere,
-	 *  such as a YouTube panel, must stop when this deck takes over. */
+	 *  A skip that actually starts a different track claims the audio channel for
+	 *  this deck the way startPlayback does (flag first, then claim) — a layer
+	 *  playing elsewhere, such as a YouTube panel, must stop when this deck takes
+	 *  over. A skip that rewinds in place, stops at the end of the queue, loops the
+	 *  same track or finds every track broken does not claim, matching the
+	 *  pre-migration code that only claimed after a URL had been resolved. */
 	function claimDeckAudioForSkip() {
-		// An empty queue is the old code's early return: a skip that cannot load
-		// anything must not claim the channel or flag the deck as playing.
-		if (player.state.tracks.length === 0) return;
+		// Set the playing flag before claiming so mediaEngine.isPlaying never
+		// transiently drops to false while other sources are paused — the same
+		// ordering startPlayback uses. Only reached when playback actually begins,
+		// so a skip from a stopped deck never leaves the flag stuck true.
 		const deckFlag = deck === 'A' ? 'musicPlayingA' as const : 'musicPlayingB' as const;
 		mediaEngine[deckFlag] = true;
 		claimAudio(deck === 'A' ? 'musicA' : 'musicB');
 	}
 
-	function skipNext() {
+	async function skipNext() {
 		if (isChangingTrack) return;
 		syncLoopTracksToSelection();
-		player.next();
-		claimDeckAudioForSkip();
+		// The module resolves true only when it changed track and began playback.
+		if (await player.next()) claimDeckAudioForSkip();
 	}
 
-	function skipPrev() {
+	async function skipPrev() {
 		if (isChangingTrack) return;
-		player.prev();
-		claimDeckAudioForSkip();
+		// Resolves false on the rewind-in-place branch and when nothing playable
+		// could be started, so neither steals the channel from another source.
+		if (await player.prev()) claimDeckAudioForSkip();
 	}
 
 	function handleSeekSeconds(seconds: number) {

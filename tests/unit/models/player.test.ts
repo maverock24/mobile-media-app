@@ -229,6 +229,71 @@ describe('player — pause / resume / seek / prev', () => {
 	});
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Skip results. The view claims the audio channel (stopping a YouTube panel or
+// a podcast) only when the skip actually changes track and begins playback; the
+// module reports that through next()/prev()'s resolved value.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('player — skip results', () => {
+	it('next resolves true when it changes track and begins playback', async () => {
+		const { player, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0);
+		await flush();
+
+		await expect(player.next()).resolves.toBe(true);
+		expect(state.currentIndex).toBe(1);
+	});
+
+	it('prev resolves true when it changes track and begins playback', async () => {
+		const { player, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 1);
+		await flush();
+
+		await expect(player.prev()).resolves.toBe(true);
+		expect(state.currentIndex).toBe(0);
+	});
+
+	it('next resolves false when every track is broken', async () => {
+		const { player, resolveUrl } = makePlayer();
+		resolveUrl.mockResolvedValue(null);
+		player.load([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], { startIndex: 0 });
+
+		await expect(player.next()).resolves.toBe(false);
+	});
+
+	it('prev resolves false on the rewind-in-place branch', async () => {
+		const { player, audio, state } = makePlayer({
+			settings: {
+				lastTrackIndex: 0, lastTrackKey: '', lastTrackTimestamp: 0,
+				isRepeat: false, isShuffle: false, rewindOnPrev: true, sortOrder: 'name',
+			},
+		});
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0);
+		await flush();
+		audio.currentTime = 5;
+
+		await expect(player.prev()).resolves.toBe(false);
+		expect(state.currentIndex).toBe(0);
+		expect(audio.currentTime).toBe(0);
+	});
+
+	it('prev from a paused deck loads the src without beginning playback', async () => {
+		const { player, audio, state } = makePlayer();
+		player.load([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], { startIndex: 1 });
+		const playsBefore = audio.playCalls;
+
+		await expect(player.prev()).resolves.toBe(false);
+		expect(state.currentIndex).toBe(0);
+		expect(state.tracks[0].url).toBe('blob:a.mp3');
+		expect(audio.playCalls).toBe(playsBefore);
+	});
+
+	it('prev resolves false at the end of an empty queue', async () => {
+		const { player } = makePlayer();
+		await expect(player.prev()).resolves.toBe(false);
+	});
+});
+
 describe('player — destroy', () => {
 	it('stops audio and revokes URLs', async () => {
 		const { player, audio } = makePlayer();
@@ -365,6 +430,30 @@ describe('player — stop and resume (cross-source exclusivity)', () => {
 		await flush();
 
 		// The "Loading track…" overlay must not stick on a failed resolve.
+		expect(state.isBuffering).toBe(false);
+		expect(state.isPlaying).toBe(false);
+	});
+
+	it('clears a stale buffering flag when the queue is replaced mid-resolve', async () => {
+		const { player, state, resolveUrl } = makePlayer();
+		const pending: Array<(url: string | null) => void> = [];
+		resolveUrl.mockImplementation(() => new Promise<string | null>((resolve) => { pending.push(resolve); }));
+
+		player.load([mkSrc('a.mp3', 'a')], { startIndex: 0 });
+		const resuming = player.resume();
+		await flush();
+		// The overlay is up while the selected track materializes.
+		expect(state.isBuffering).toBe(true);
+
+		// The listener picks another folder: the replacement owns the state now, and
+		// the superseded resume must not be able to clear the flag itself.
+		player.load([mkSrc('b.mp3', 'b')], { startIndex: 0 });
+		expect(state.isBuffering).toBe(false);
+
+		// The stale URL lands after the replacement and is dropped.
+		pending[0]('blob:a.mp3');
+		await resuming;
+		await flush();
 		expect(state.isBuffering).toBe(false);
 		expect(state.isPlaying).toBe(false);
 	});
