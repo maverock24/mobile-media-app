@@ -5,13 +5,17 @@
  * element, advance/preload/retry/loop, error recovery) behind a small Design-C
  * interface. See CONTEXT.md ("player", "deck") and docs/adr/0001-player-module.md.
  *
- * The module owns the HTMLAudioElement and the reactive `state`. URL resolution
- * is injected as a seam so the module never knows about Drive auth, Capacitor,
- * or object-URL creation. Tests inject a fake element and a fake resolver.
+ * The module owns the HTMLAudioElement, the queue and the reactive `state`. URL
+ * resolution is injected as a seam so the module never knows about Drive auth,
+ * Capacitor, or object-URL creation. Tests inject a fake element and a fake
+ * resolver. The view keeps the orchestration that is not playback: it builds the
+ * file list (scan, Drive, favourites, folder pickers), hands the queue over with
+ * `play`/`load`/`append`, and co-ordinates `mediaEngine` (audio exclusivity,
+ * MediaSession, deck metadata) around it.
  */
-import { untrack } from 'svelte';
 import {
 	getNextTrackIndex,
+	mergeStoredFiles,
 	parseFilename,
 	sortFiles,
 	getTrackKey,
@@ -57,6 +61,21 @@ export interface PlayerControls {
 	playbackRate: number;
 }
 
+/** How a queue is built from a file list. */
+export interface PlayerQueueOptions {
+	/** Caller-supplied order is authoritative (favourites list, selection loop). */
+	preserveOrder?: boolean;
+	/** Wrap at the end of the queue instead of stopping (selection loop). */
+	selectionLoop?: boolean;
+}
+
+export interface PlayerLoadOptions extends PlayerQueueOptions {
+	/** Queue position to select. Defaults to 0. */
+	startIndex?: number;
+	/** Keep the currently selected track selected when the new queue still holds it. */
+	keepCurrent?: boolean;
+}
+
 export interface PlayerOptions {
 	/** Reactive musicSettings — the module reads/writes the fields it needs. */
 	settings: PlayerSettings;
@@ -70,11 +89,22 @@ export interface PlayerOptions {
 	native?: boolean;
 	/** Apply equalizer gains to a fresh AudioContext for the element. Optional. */
 	applyEqualizer?: (audio: HTMLAudioElement) => void;
+	/** Called at the start of an advance, before the next index is computed. The
+	 *  view refreshes a changed selection loop here. */
+	onBeforeAdvance?: () => void;
 }
 
 export interface Player {
 	state: PlayerState;
-	play(tracks: StoredAudioFile[], startIndex?: number, options?: { selectionLoop?: boolean }): Promise<void>;
+	play(tracks: StoredAudioFile[], startIndex?: number, options?: PlayerQueueOptions): Promise<void>;
+	/** Replace the queue without touching the element (no playback side effects). */
+	load(tracks: StoredAudioFile[], options?: PlayerLoadOptions): void;
+	/** Merge files into the queue, keeping the URLs of files already queued. */
+	append(files: StoredAudioFile[]): void;
+	/** Stop, unload the element and drop the queue. */
+	clear(): void;
+	/** Stop and unload the element, keeping the queue (cross-source exclusivity). */
+	stop(): void;
 	pause(): void;
 	resume(): void;
 	next(): void;
@@ -99,7 +129,16 @@ export function createPlayer(opts: PlayerOptions): Player {
 		error: null,
 	});
 
-	const audio: HTMLAudioElement = opts.createAudio ? opts.createAudio() : new Audio();
+	// The element is created on first use: createPlayer also runs during SSR,
+	// where `new Audio()` does not exist. Tests inject their own element.
+	let audio: HTMLAudioElement | null = null;
+	function el(): HTMLAudioElement {
+		if (!audio) {
+			audio = opts.createAudio ? opts.createAudio() : new Audio();
+			wireAudioEvents(audio);
+		}
+		return audio;
+	}
 
 	let selectionLoop = false;
 	let preloadedIndex: number | null = null;
@@ -121,7 +160,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 			if (destroyed) return;
 			let promise: Promise<void>;
 			try {
-				promise = audio.play();
+				promise = el().play();
 			} catch {
 				if (attempt < maxRetries) setTimeout(() => tryPlay(attempt + 1), retryDelayMs);
 				else onFailure?.();
@@ -156,6 +195,23 @@ export function createPlayer(opts: PlayerOptions): Player {
 		settings.lastTrackKey = state.tracks[index] ? getTrackKey(state.tracks[index].source) : '';
 	}
 
+	/** Detach the element's source without dropping the queue. */
+	function unload() {
+		const element = el();
+		element.removeAttribute('src');
+		element.load();
+	}
+
+	/** Stop the element and reset the transport state, keeping queue and src. */
+	function haltPlayback() {
+		state.isPlaying = false;
+		state.isBuffering = false;
+		state.currentTime = 0;
+		const element = el();
+		element.pause();
+		element.currentTime = 0;
+	}
+
 	async function ensureUrl(index: number, interactiveAuth: boolean): Promise<string | null> {
 		const track = state.tracks[index];
 		if (!track) return null;
@@ -182,6 +238,59 @@ export function createPlayer(opts: PlayerOptions): Player {
 
 	function revokeAll() {
 		for (let i = 0; i < state.tracks.length; i++) releaseUrl(i);
+	}
+
+	// ── queue ─────────────────────────────────────────────────────────────────
+	/**
+	 * Replace the queue. No element or transport side effects: the caller decides
+	 * whether to stop first (`clear`) or to keep the current track playing
+	 * (`keepCurrent`).
+	 */
+	function loadQueue(files: StoredAudioFile[], options: PlayerLoadOptions = {}) {
+		const keepKey = options.keepCurrent && state.currentIndex >= 0 && state.tracks[state.currentIndex]
+			? getTrackKey(state.tracks[state.currentIndex].source)
+			: '';
+		const ordered = (options.preserveOrder || options.selectionLoop) ? files : sortFiles(files, settings.sortOrder);
+
+		state.tracks = ordered.map((f, i) => {
+			const { title, artist } = parseFilename(f.name);
+			return { id: i, title, artist, filename: f.name, url: '', duration: 0, source: f };
+		});
+		selectionLoop = options.selectionLoop ?? false;
+		state.error = null;
+		errorRetries = 0;
+		preloadRequestId += 1;
+		preloadedIndex = null;
+
+		if (state.tracks.length === 0) {
+			state.currentIndex = -1;
+			return;
+		}
+
+		let index = Math.max(0, Math.min(options.startIndex ?? 0, state.tracks.length - 1));
+		if (keepKey) {
+			const match = state.tracks.findIndex((t) => getTrackKey(t.source) === keepKey);
+			index = match >= 0 ? match : 0;
+		}
+		setCurrentTrack(index);
+		settings.lastTrackTimestamp = 0;
+	}
+
+	/** Resolve the selected track's URL and start it. Returns false when no
+	 *  playable URL could be produced; the queue stays loaded either way. */
+	async function startCurrent(): Promise<boolean> {
+		if (state.tracks.length === 0) return false;
+		const index = state.currentIndex >= 0 ? state.currentIndex : 0;
+		const url = await ensureUrl(index, true);
+		if (!url) { state.error = 'Unable to load this track.'; return false; }
+		setCurrentTrack(index);
+		settings.lastTrackTimestamp = 0;
+		opts.applyEqualizer?.(el());
+		el().src = url;
+		preloadNextTrack(index);
+		state.isBuffering = true;
+		safePlay(() => { state.isBuffering = false; state.isPlaying = false; });
+		return true;
 	}
 
 	// ── queue advance ─────────────────────────────────────────────────────────
@@ -211,12 +320,12 @@ export function createPlayer(opts: PlayerOptions): Player {
 	}
 
 	function loadAndPlayAt(index: number, wasPlaying: boolean, interactiveAuth: boolean) {
-		if (!audio || !state.tracks[index]) return;
+		if (!state.tracks[index]) return;
 		void (async () => {
 			const url = await ensureUrl(index, interactiveAuth);
 			if (!url) return;
-			opts.applyEqualizer?.(audio);
-			audio.src = url;
+			opts.applyEqualizer?.(el());
+			el().src = url;
 			preloadNextTrack(index);
 			if (wasPlaying) {
 				state.isBuffering = true;
@@ -229,20 +338,24 @@ export function createPlayer(opts: PlayerOptions): Player {
 		if (changingTrack || state.tracks.length === 0 || destroyed) return;
 		changingTrack = true;
 		try {
+			// The view refreshes a changed selection loop here, before the next
+			// index is read from the queue.
+			opts.onBeforeAdvance?.();
+
 			const idx = state.currentIndex;
 			const next = nextIndex(idx);
-			if (next === null) { stop(); return; }
+			if (next === null) { haltPlayback(); return; }
 
 			// Same-track loop (single selected track).
 			if (next === idx) {
 				setCurrentTrack(next);
 				state.currentTime = 0;
 				settings.lastTrackTimestamp = 0;
-				if (audio.error) {
+				if (el().error) {
 					const url = state.tracks[next]?.url;
-					if (url) { audio.src = ''; audio.src = url; }
+					if (url) { el().src = ''; el().src = url; }
 				} else {
-					audio.currentTime = 0;
+					el().currentTime = 0;
 				}
 				if (wasPlaying) { state.isBuffering = false; safePlay(() => { state.isPlaying = false; }); }
 				return;
@@ -251,7 +364,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 			setCurrentTrack(next);
 			settings.lastTrackTimestamp = 0;
 			state.currentTime = 0; state.duration = 0;
-			if (audio && state.tracks[next]) {
+			if (state.tracks[next]) {
 				// Auto-skip broken tracks until a playable one is found.
 				let attemptIndex = next;
 				let attemptCount = 0;
@@ -265,11 +378,11 @@ export function createPlayer(opts: PlayerOptions): Player {
 					attemptIndex = nextAttempt;
 					attemptCount++;
 				}
-				if (!foundUrl) { stop(); return; }
+				if (!foundUrl) { haltPlayback(); return; }
 				if (attemptIndex !== next) setCurrentTrack(attemptIndex);
 				releaseUrl(idx);
-				opts.applyEqualizer?.(audio);
-				audio.src = foundUrl;
+				opts.applyEqualizer?.(el());
+				el().src = foundUrl;
 				preloadNextTrack(attemptIndex);
 				state.isBuffering = true;
 				safePlay(() => { state.isBuffering = false; state.isPlaying = false; });
@@ -279,75 +392,69 @@ export function createPlayer(opts: PlayerOptions): Player {
 		}
 	}
 
-	function stop() {
-		state.isPlaying = false;
-		state.isBuffering = false;
-		state.currentTime = 0;
-		audio.pause();
-		audio.currentTime = 0;
-	}
-
 	// ── audio element events ──────────────────────────────────────────────────
-	audio.addEventListener('timeupdate', () => {
-		if (seeking !== null) return;
-		const now = Date.now();
-		if (now - lastTimeUpdate < THROTTLE_MS) return;
-		lastTimeUpdate = now;
-		state.currentTime = audio.currentTime;
-	});
-	audio.addEventListener('loadedmetadata', () => {
-		const d = isFinite(audio.duration) ? audio.duration : 0;
-		state.duration = d;
-		const i = state.currentIndex;
-		if (i >= 0 && state.tracks[i]) {
-			state.tracks = state.tracks.map((t, idx) => idx === i ? { ...t, duration: Math.round(d) } : t);
-		}
-	});
-	audio.addEventListener('play', () => { state.isPlaying = true; state.isBuffering = false; errorRetries = 0; });
-	audio.addEventListener('pause', () => { state.isPlaying = false; settings.lastTrackTimestamp = 0; });
-	audio.addEventListener('ended', () => {
-		state.isBuffering = false;
-		settings.lastTrackTimestamp = 0;
-		if (settings.isRepeat && !selectionLoop) {
-			// repeat-one: rewind the same track.
-			audio.currentTime = 0;
-			safePlay();
-		} else {
-			void advanceTrack(true);
-		}
-	});
-	audio.addEventListener('waiting', () => { state.isBuffering = true; });
-	audio.addEventListener('playing', () => { state.isBuffering = false; });
-	audio.addEventListener('error', () => {
-		state.isBuffering = false;
-		settings.lastTrackTimestamp = 0;
-		if (errorRetries < 1 && state.tracks.length > 0) {
-			errorRetries += 1;
-			const idx = state.currentIndex;
-			const url = state.tracks[idx]?.url;
-			if (audio && url) {
-				audio.src = '';
-				audio.src = url;
-				safePlay(() => { errorRetries = 0; state.isPlaying = false; void advanceTrack(true); });
-				return;
+	function wireAudioEvents(element: HTMLAudioElement) {
+		element.addEventListener('timeupdate', () => {
+			if (seeking !== null) return;
+			const now = Date.now();
+			if (now - lastTimeUpdate < THROTTLE_MS) return;
+			lastTimeUpdate = now;
+			state.currentTime = element.currentTime;
+		});
+		element.addEventListener('loadedmetadata', () => {
+			const d = isFinite(element.duration) ? element.duration : 0;
+			state.duration = d;
+			const i = state.currentIndex;
+			if (i >= 0 && state.tracks[i]) {
+				state.tracks = state.tracks.map((t, idx) => idx === i ? { ...t, duration: Math.round(d) } : t);
 			}
-		}
-		errorRetries = 0;
-		void advanceTrack(true);
-	});
+		});
+		element.addEventListener('play', () => { state.isPlaying = true; state.isBuffering = false; errorRetries = 0; });
+		element.addEventListener('pause', () => { state.isPlaying = false; settings.lastTrackTimestamp = 0; });
+		element.addEventListener('ended', () => {
+			state.isBuffering = false;
+			settings.lastTrackTimestamp = 0;
+			if (settings.isRepeat && !selectionLoop) {
+				// repeat-one: rewind the same track.
+				element.currentTime = 0;
+				safePlay();
+			} else {
+				void advanceTrack(true);
+			}
+		});
+		element.addEventListener('waiting', () => { state.isBuffering = true; });
+		element.addEventListener('playing', () => { state.isBuffering = false; });
+		element.addEventListener('error', () => {
+			state.isBuffering = false;
+			settings.lastTrackTimestamp = 0;
+			if (errorRetries < 1 && state.tracks.length > 0) {
+				errorRetries += 1;
+				const idx = state.currentIndex;
+				const url = state.tracks[idx]?.url;
+				if (url) {
+					element.src = '';
+					element.src = url;
+					safePlay(() => { errorRetries = 0; state.isPlaying = false; void advanceTrack(true); });
+					return;
+				}
+			}
+			errorRetries = 0;
+			void advanceTrack(true);
+		});
+	}
 
 	// Reactive sync of per-deck element controls. Wrapped in $effect.root so it
 	// works when createPlayer is called outside a component (e.g. in tests).
+	// SSR compiles $effect.root to a no-op, so this stays server-safe.
 	let controlsRoot: (() => void) | null = null;
 	controlsRoot = $effect.root(() => {
 		$effect(() => {
 			const controls = opts.controls;
 			if (!controls) return;
-			untrack(() => {
-				audio.volume = controls.volume / 100;
-				audio.muted = controls.muted;
-				audio.playbackRate = controls.playbackRate;
-			});
+			const element = el();
+			element.volume = controls.volume / 100;
+			element.muted = controls.muted;
+			element.playbackRate = controls.playbackRate;
 		});
 	});
 
@@ -355,40 +462,106 @@ export function createPlayer(opts: PlayerOptions): Player {
 	return {
 		state,
 		async play(tracks, startIndex = 0, options = {}) {
-			audio.pause(); audio.src = '';
+			haltPlayback();
+			unload();
 			revokeAll();
-			preloadRequestId += 1;
-			const sorted = options.selectionLoop ? tracks : sortFiles(tracks, settings.sortOrder);
-			state.tracks = sorted.map((f, i) => {
-				const { title, artist } = parseFilename(f.name);
-				return { id: i, title, artist, filename: f.name, url: '', duration: 0, source: f };
-			});
-			selectionLoop = options.selectionLoop ?? false;
-			state.currentIndex = -1;
-			state.currentTime = 0; state.duration = 0; state.isPlaying = false; state.isBuffering = false;
-			state.error = null;
-			errorRetries = 0;
-			preloadedIndex = null;
-
-			if (state.tracks.length === 0) return;
-			const index = Math.max(0, Math.min(startIndex, state.tracks.length - 1));
-			const url = await ensureUrl(index, true);
-			if (!url) { state.error = 'Unable to load this track.'; return; }
-			setCurrentTrack(index);
-			settings.lastTrackTimestamp = 0;
-			opts.applyEqualizer?.(audio);
-			audio.src = url;
-			preloadNextTrack(index);
-			state.isBuffering = true;
-			safePlay(() => { state.isBuffering = false; state.isPlaying = false; });
+			state.duration = 0;
+			loadQueue(tracks, { ...options, startIndex });
+			await startCurrent();
 		},
-		pause() { audio.pause(); },
-		resume() { safePlay(); },
+		load(tracks, options = {}) {
+			loadQueue(tracks, options);
+		},
+		append(files) {
+			if (files.length === 0 || destroyed) return;
+			const previous = state.tracks;
+			const currentKey = state.currentIndex >= 0 && previous[state.currentIndex]
+				? getTrackKey(previous[state.currentIndex].source)
+				: '';
+			const preloadedKey = preloadedIndex !== null && previous[preloadedIndex]
+				? getTrackKey(previous[preloadedIndex].source)
+				: '';
+			const mergedFiles = mergeStoredFiles(previous.map((t) => t.source), files);
+			if (mergedFiles.length === previous.length) return;
+
+			const existingByKey = new Map(previous.map((t) => [getTrackKey(t.source), t]));
+			state.tracks = sortFiles(mergedFiles, settings.sortOrder).map((file, index) => {
+				const existing = existingByKey.get(getTrackKey(file));
+				const { title, artist } = parseFilename(file.name);
+				return {
+					id: index,
+					title,
+					artist,
+					filename: file.name,
+					url: existing?.url ?? '',
+					duration: existing?.duration ?? 0,
+					cleanup: existing?.cleanup,
+					source: file,
+				};
+			});
+
+			if (currentKey) {
+				const nextCurrent = state.tracks.findIndex((t) => getTrackKey(t.source) === currentKey);
+				if (nextCurrent >= 0) setCurrentTrack(nextCurrent);
+			}
+			if (preloadedKey) {
+				const nextPreloaded = state.tracks.findIndex((t) => getTrackKey(t.source) === preloadedKey);
+				preloadedIndex = nextPreloaded >= 0 ? nextPreloaded : null;
+			}
+		},
+		clear() {
+			haltPlayback();
+			unload();
+			revokeAll();
+			state.tracks = [];
+			state.currentIndex = -1;
+			state.duration = 0;
+			state.error = null;
+		},
+		stop() {
+			haltPlayback();
+			unload();
+		},
+		pause() { el().pause(); },
+		resume() {
+			if (destroyed) return;
+			const element = el();
+			// Nothing loaded (queue loaded without playback, or the element was
+			// unloaded by a cross-source stop): start the selected track.
+			if (!element.src) {
+				if (state.tracks.length === 0) return;
+				const index = state.currentIndex >= 0 ? state.currentIndex : 0;
+				setCurrentTrack(index);
+				state.isBuffering = true;
+				loadAndPlayAt(index, true, true);
+				return;
+			}
+			if (native) {
+				// Capacitor's localhost bridge drops its HTTP connection when the
+				// element pauses, and play() on the stale connection fails silently
+				// or with network errors. Re-setting src re-establishes it without
+				// losing the playback position.
+				const resumePos = element.currentTime;
+				const currentSrc = element.src;
+				element.removeAttribute('src');
+				element.src = currentSrc;
+				if (resumePos > 0.5) element.currentTime = resumePos;
+			}
+			safePlay(() => {
+				// Playback failed after all retries — reset the element and drop the
+				// cached URL so the next attempt materializes a fresh one.
+				state.isBuffering = false;
+				state.isPlaying = false;
+				unload();
+				if (state.currentIndex >= 0) releaseUrl(state.currentIndex);
+			});
+		},
 		next() { void advanceTrack(state.isPlaying || state.isBuffering); },
 		prev() {
 			if (state.tracks.length === 0) return;
-			if (settings.rewindOnPrev && audio.currentTime > 3) {
-				audio.currentTime = 0;
+			const element = el();
+			if (settings.rewindOnPrev && element.currentTime > 3) {
+				element.currentTime = 0;
 				safePlay();
 				return;
 			}
@@ -402,16 +575,15 @@ export function createPlayer(opts: PlayerOptions): Player {
 		},
 		seek(toSec) {
 			seeking = toSec;
-			audio.currentTime = toSec;
+			el().currentTime = toSec;
 			state.currentTime = toSec;
 			setTimeout(() => { seeking = null; }, 100);
 		},
 		destroy() {
 			destroyed = true;
 			controlsRoot?.();
-			audio.pause();
-			audio.removeAttribute('src');
-			audio.load();
+			el().pause();
+			unload();
 			revokeAll();
 		},
 	};

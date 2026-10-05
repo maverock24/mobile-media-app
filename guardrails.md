@@ -31,14 +31,16 @@ This file captures the repo's current implementation boundaries. If it ever disa
 
 ### Playback
 - `src/lib/stores/mediaEngine.svelte.ts` is the shared playback coordination layer.
-- ADR-0001 requires the music playback core to move into
-  `src/lib/audio/player.svelte.ts` (`createPlayer`, per deck). The module and its
-  unit tests landed in `af3f6e5` but no view calls it yet, so the bullets below
-  still describe the live code. PR 2 of `docs/refactoring-plan.md` wires it up;
-  after that the module owns the `<audio>` element for the music decks and this
-  section moves with it.
-- View components currently own their own `<audio>` elements.
-- Cross-source exclusivity currently depends on `claimAudio()` and `registerAudioSource()`.
+- The music playback core lives in `src/lib/audio/player.svelte.ts` (`createPlayer`,
+  one instance per deck — ADR-0001). It owns the deck's `<audio>` element, the
+  queue and the advance/preload/retry/loop behaviour. `Mp3PlayerView` supplies the
+  URL adapter, the per-deck volume/mute/speed controls and the equalizer hook, and
+  builds the file lists (scan, Drive, favourites, folder pickers) it hands over
+  with `play`/`load`/`append`.
+- `PodcastView`, `RadioView` and `YoutubePanel` still own their own `<audio>` elements.
+- Cross-source exclusivity depends on `claimAudio()` and `registerAudioSource()`:
+  each music deck registers `player.stop()`, which unloads that deck's element but
+  keeps its queue so a later play/resume can restart it.
 - Do not assume a shared `audioService` exists. Introducing one is an architectural refactor, not a routine maintenance change.
 
 ### Persistence And Networking
@@ -92,7 +94,8 @@ native/*
 ```
 
 ### Data Flow Rules
-- Views coordinate playback through their local audio element plus `mediaEngine`.
+- Views coordinate playback through their audio source (a `createPlayer` deck for
+  the music decks, a local `<audio>` element for podcast/radio/YouTube) plus `mediaEngine`.
 - `MiniPlayer` and lock-screen integration read shared playback state from `mediaEngine`.
 - Settings stores remain the persistence boundary; playback coordination should not invent its own persistence layer.
 - `toastStore` is fire-and-forget: modules publish toasts, `ToastContainer` renders them.
