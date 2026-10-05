@@ -23,6 +23,9 @@
 		isNewEpisode, artworkFallback,
 	} from '$lib/podcast/episodeDisplay';
 	import {
+		resolvePodcastApiUrl, searchITunes, type ItunesResult,
+	} from '$lib/podcast/itunes';
+	import {
 		Plus, Trash2, Play, Pause,
 		Rss, Clock, CheckCircle2, ChevronLeft, Search,
 		RefreshCw, X
@@ -52,16 +55,6 @@
 		episodes:    Episode[];
 		episodesLoaded: boolean;
 	}
-	interface ItunesResult {
-		trackId:          number;
-		trackName:        string;
-		artistName:       string;
-		artworkUrl600:    string;
-		feedUrl:          string;
-		primaryGenreName: string;
-		trackCount:       number;
-	}
-
 	// ── Podcast list — backed by persisted store ──
 	// podcastData.podcasts / podcastData.nextId survive refreshes via localStorage
 
@@ -437,22 +430,9 @@
 		})
 	);
 
-	// ── Release URL resolver (hosted proxy for native / configured releases) ──
-	function resolvePodcastApiUrl(path: string): string {
-		if (/^https?:\/\//i.test(path)) {
-			return path;
-		}
-
-		if (!podcastApiBaseUrl) {
-			return path;
-		}
-
-		return `${podcastApiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
-	}
-
 	/** RssFetchConfig bound to this view's release/proxy resolution. */
 	const rssFetchConfig = $derived.by(() => ({
-		resolveUrl: resolvePodcastApiUrl,
+		resolveUrl: (path: string) => resolvePodcastApiUrl(path, podcastApiBaseUrl),
 		useHostedProxy: useHostedPodcastProxy,
 	}));
 
@@ -481,16 +461,11 @@
 	}
 
 	// ── iTunes Search ────────────────────────────────────────────
-	async function searchITunes(q: string) {
+	// Wrapper keeps the view's own state updates; the search itself is pure.
+	async function runITunesSearch(q: string) {
 		if (q.length < 2) { searchResults = []; return; }
 		searchLoading = true;
-		try {
-			const requestUrl = useHostedPodcastProxy
-				? resolvePodcastApiUrl(`/api/podcast/search?q=${encodeURIComponent(q)}`)
-				: `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=podcast&entity=podcast&limit=20`;
-			const data = await readPodcastJson<{ results?: ItunesResult[] }>(requestUrl);
-			searchResults = (data.results ?? []) as ItunesResult[];
-		} catch { searchResults = []; }
+		searchResults = await searchITunes(q, { baseUrl: podcastApiBaseUrl, useHostedProxy: useHostedPodcastProxy });
 		searchLoading = false;
 	}
 
@@ -498,14 +473,14 @@
 	$effect(() => {
 		const q = searchQuery;
 		if (!q || q.length < 2) { searchResults = []; return; }
-		const t = setTimeout(() => searchITunes(q), 400);
+		const t = setTimeout(() => runITunesSearch(q), 400);
 		return () => clearTimeout(t);
 	});
 
 	// Preload discover tab popular podcasts
 	$effect(() => {
 		if (podcastSettings.defaultTab === 'discover' && searchResults.length === 0 && !searchQuery && !searchLoading) {
-			searchITunes('technology science');
+			runITunesSearch('technology science');
 		}
 	});
 
@@ -566,7 +541,7 @@
 			let p = podcast;
 			if (!p.feedUrl) {
 				const lookupUrl = useHostedPodcastProxy
-					? resolvePodcastApiUrl(`/api/podcast/lookup?id=${p.itunesId}`)
+					? resolvePodcastApiUrl(`/api/podcast/lookup?id=${p.itunesId}`, podcastApiBaseUrl)
 					: `https://itunes.apple.com/lookup?id=${p.itunesId}`;
 				const luData = await readPodcastJson<{ results?: Array<Record<string, unknown>> }>(lookupUrl, signal);
 				const r = luData.results?.[0];
@@ -643,7 +618,7 @@
 			if (!podcast.feedUrl) {
 				// Resolve feedUrl via iTunes lookup
 				const lookupUrl = useHostedPodcastProxy
-					? resolvePodcastApiUrl(`/api/podcast/lookup?id=${podcast.itunesId}`)
+					? resolvePodcastApiUrl(`/api/podcast/lookup?id=${podcast.itunesId}`, podcastApiBaseUrl)
 					: `https://itunes.apple.com/lookup?id=${podcast.itunesId}`;
 				const luData = await readPodcastJson<{ results?: Array<Record<string, unknown>> }>(lookupUrl, signal);
 				const r = luData.results?.[0];
