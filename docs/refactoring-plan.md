@@ -543,11 +543,44 @@ pause and on end; `markEpisodeFullyPlayed`'s `played = true`, `progress = 100`,
 its id → audioUrl → title+date matching and `lastEpisodeId` remap; and
 `getEpisodeResumePosition`'s `Math.max(savedPosition, lastPositionSec)` on the
 last-played episode and bare `positionSec ?? 0` for every other episode. The
-view drops from 1,317 to 1,252 lines. Groups 4 and 5 are not started.
+view drops from 1,317 to 1,252 lines. Group 5 is not started.
+
+**6.4 `podcastLibrary` (`src/lib/podcast/podcastLibrary.ts`, factory).**
+Delivered on `refactor/pr6-podcast-library`, with 22 unit tests in
+`tests/unit/podcast/podcastLibrary.test.ts` (the `$lib/podcast/rss` module is
+mocked, no network). Moved `subscribeFromItunes`, `unsubscribe`,
+`deletePodcast`, `refreshPodcastSilent`, `refreshAllSubscribed`,
+`loadEpisodes`, `loadMoreEpisodes` and `openPodcast`. `createPodcastLibrary` is
+a per-view factory, like `createFileOps` and the group-3 progress module: one
+instance per `PodcastView`. It is a plain `.ts`, so it imports the shared
+`podcastData` store directly and the view keeps the rest reactive, handing it
+over through the injected `PodcastLibraryView` accessor (`selectedPodcast`, the
+episode-list flags and counters, `episodesError`, `isRefreshingAll` and a
+read-only `subscribedPodcasts` getter), plus the constant release/proxy
+`config`. The in-flight load's `AbortController` and its podcast id never had a
+markup reader, so they are private to the factory. The episode-loading
+discipline is unchanged: `loadEpisodes` aborts the previous controller and
+records the new one/id before fetching; a superseded load whose signal aborted
+returns without touching `episodesError`, and only the load whose controller is
+still current clears `episodesLoading` / `episodesRefreshing`; a silent refresh
+of an already-loaded feed sets `episodesRefreshing` and deliberately leaves
+`episodesLoading`, `episodesLoadingMore` and `episodesPage` alone; a first load
+sets `episodesLoading` and resets `episodesPage` to 1; an append keeps the page
+and concatenates; `episodesError` is set only for a first load or a forced
+refresh of a not-yet-loaded feed. Subscribe still adds (or flips) the feed then
+opens it; unsubscribe still flips `subscribed` and re-syncs `selectedPodcast`;
+delete still removes the feed and clears the selection when it pointed there.
+The six markup call sites and the two effects (mount-time restore and the
+IntersectionObserver sentinel) now go through `podcastLibrary`; their firing
+conditions are untouched. `unsubscribe` has no call site in the view before or
+after the move (a word-boundary grep confirms it, and the analyzer's dead-code
+snapshot flags it); it is kept on the factory and covered by a test rather than
+deleted. The view drops from 1,252 to 1,018
+lines. Group 5 is not started.
 
 ### After the programme
 
-`PodcastView.svelte` (1,252 lines after group 3, complexity 242, its own
+`PodcastView.svelte` (1,018 lines after group 4, complexity 242, its own
 `safePlay`) is the next single-file target; PR 6 records the decision not to
 share `createPlayer` and the five-group order. The three duplicated handlers in
 `RadioView.svelte` fold into that pass.
