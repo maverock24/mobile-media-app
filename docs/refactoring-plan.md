@@ -680,6 +680,20 @@ Recorded here so they are not lost; none of them blocks a PR.
 - `saveCachedLibrary` silently drops files whose source is Drive, so a
   drive-only library is never cached. Behaviour unchanged and pinned by a test
   in `tests/unit/browse/libraryCache.test.ts`; fix it deliberately or not at all.
+- Fixed: the deck's player screen derived its current track from the shared
+  `musicSettings.lastTrackIndex` (`Mp3PlayerView.svelte:569`) instead of the
+  deck's own `player.state.currentIndex`. That field is one last-writer-wins
+  value, written by whichever deck loads, starts, advances or steps back last,
+  so with both decks playing one deck read an index belonging to the other
+  queue: the shorter deck showed "No track loaded" while its audio kept playing,
+  and the longer deck showed the wrong title (the progress slider stayed right
+  because it reads each deck's own transport). The derivation now reads the
+  deck's own index; the shared field keeps its single job as the
+  persistence/restore hint (`Mp3PlayerView.svelte:121`, `:143`). Pinned by
+  "each deck shows its own current track while both decks play" in
+  `tests/e2e/music-player.test.ts`. The defect predates this refactoring
+  programme: introduced in `8b36141`, moved by `af3f6e5`, relocated by
+  `4f02339`.
 
 ## Out of scope
 
