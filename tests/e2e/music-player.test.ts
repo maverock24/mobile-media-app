@@ -56,6 +56,92 @@ function playingIndicator(page: Page) {
 	return playerView(page).locator('.animate-pulse');
 }
 
+/** The player screen of whichever deck is currently shown. The other deck's copy
+ *  is `display:none`, so this resolves to exactly one region while a deck plays. */
+function visiblePlayerView(page: Page) {
+	return page.locator('[role="region"][aria-label="Music player"]:visible');
+}
+
+/** The track title rendered by the currently shown deck's player screen. */
+function visibleDeckTitle(page: Page) {
+	return visiblePlayerView(page).locator('h2');
+}
+
+interface DeckAudioProbe {
+	__deckAudios?: HTMLAudioElement[];
+	__deckAudioNames?: Map<string, string>;
+}
+
+/**
+ * The decks' audio elements do not exist in the document: the player module
+ * creates each one with `new Audio()`, so they are detached and absent from
+ * `document.querySelectorAll('audio')`. Two init-script patches make them
+ * observable instead:
+ *  - the `Audio` constructor is wrapped to collect every element it builds, and
+ *  - `URL.createObjectURL` is wrapped to remember which file name each blob URL
+ *    was built from (a local folder File is resolved with
+ *    `URL.createObjectURL(file)`).
+ * Reading a playing element's `src` back through that map names the file the deck
+ * has actually loaded, independent of any UI state.
+ */
+async function installDeckAudioProbe(page: Page) {
+	await page.addInitScript(() => {
+		const w = window as unknown as DeckAudioProbe;
+		w.__deckAudios = [];
+		w.__deckAudioNames = new Map<string, string>();
+		class ProbeAudio extends Audio {
+			constructor(...args: ConstructorParameters<typeof Audio>) {
+				super(...args);
+				w.__deckAudios!.push(this);
+			}
+		}
+		window.Audio = ProbeAudio as unknown as typeof Audio;
+		const nativeCreateObjectURL = URL.createObjectURL.bind(URL);
+		URL.createObjectURL = (obj: Blob | MediaSource) => {
+			const url = nativeCreateObjectURL(obj);
+			if (obj instanceof Blob && 'name' in obj) {
+				w.__deckAudioNames!.set(url, String((obj as File).name));
+			}
+			return url;
+		};
+	});
+}
+
+/** File names loaded into the deck elements that are currently playing. */
+async function playingDeckFiles(page: Page): Promise<string[]> {
+	return page.evaluate(() => {
+		const w = window as unknown as DeckAudioProbe;
+		return (w.__deckAudios ?? [])
+			.filter((el) => el.src !== '' && !el.paused)
+			.map((el) => w.__deckAudioNames?.get(el.src) ?? el.src);
+	});
+}
+
+/** Assert the currently shown deck renders `title`, is not mistaken for empty,
+ *  and really has `file` playing on its detached audio element. */
+async function expectDeckShows(page: Page, title: string, file: string) {
+	await expect(visibleDeckTitle(page)).toHaveText(title);
+	const mini = miniPlayer(page);
+	await expect(mini).toContainText(title);
+	await expect(mini).not.toContainText('No track loaded');
+	await expect(visiblePlayerView(page)).not.toContainText('No track loaded');
+	await expect.poll(() => playingDeckFiles(page), { timeout: 10_000 }).toContain(file);
+}
+
+/** Deck B owns the third and fourth hidden file inputs on the page (Deck A
+ *  renders the first two), so its folder picker is the third. */
+async function loadDeckBFolder(page: Page, dir: string) {
+	const [fc] = await Promise.all([
+		page.waitForEvent('filechooser'),
+		page.evaluate(() => {
+			const inputs = Array.from(document.querySelectorAll('input[type="file"][multiple]')) as HTMLInputElement[];
+			const input = inputs[2];
+			if (input) { input.style.display = 'block'; input.click(); }
+		}),
+	]);
+	await fc.setFiles(dir);
+}
+
 test.describe('Music deck playback (player module)', () => {
 	test('plays a folder through the module-owned element and keeps the transport in the engine', async ({ page }) => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-module-'));
@@ -183,6 +269,75 @@ test.describe('Music deck playback (player module)', () => {
 			await expect(playerView(page).locator('.animate-pulse')).toHaveCount(1);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test('each deck shows its own current track while both decks play', async ({ page }) => {
+		// Different queue lengths is the point: the shared index ends up out of
+		// range for the two-track deck and in range but wrong for the four-track one.
+		const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-deck-a-'));
+		const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-deck-b-'));
+		// Numeric names so the queue's alphabetical sort matches the indices below.
+		createMinimalMp3('Alpha 1.mp3', dirA);
+		createMinimalMp3('Alpha 2.mp3', dirA);
+		createMinimalMp3('Beta 1.mp3', dirB);
+		createMinimalMp3('Beta 2.mp3', dirB);
+		createMinimalMp3('Beta 3.mp3', dirB);
+		createMinimalMp3('Beta 4.mp3', dirB);
+
+		try {
+			// Repeat-one pins each 1 s fixture to its own track, so the indices this
+			// test reasons about do not drift while both decks play.
+			await page.addInitScript(() => {
+				localStorage.setItem('music-settings', JSON.stringify({ isRepeat: true }));
+			});
+			await installDeckAudioProbe(page);
+
+			await page.goto('/');
+			await waitForHydration(page);
+
+			// Deck A: two tracks, starting on the first.
+			await loadMp3Folder(page, dirA);
+			await page.getByRole('button', { name: /Play Alpha 1/ }).click();
+			await expect(miniPlayer(page)).toContainText('Alpha 1', { timeout: 10_000 });
+
+			// Deck B: four tracks, starting on the third — an index Deck A cannot hold.
+			await page.getByRole('tab', { name: 'B', exact: true }).click();
+			await loadDeckBFolder(page, dirB);
+			await page.getByRole('button', { name: /Play Beta 3/ }).click();
+			await expect(miniPlayer(page)).toContainText('Beta 3', { timeout: 10_000 });
+
+			// Bring up both decks' player screens, then look at each in turn.
+			await page.getByRole('button', { name: /Return to music player/ }).click();
+
+			// Deck B displayed (the deck that acted last): it owns the shared index.
+			await expectDeckShows(page, 'Beta 3', 'Beta 3.mp3');
+
+			// Deck A displayed: the shared index belongs to Deck B and is past the end
+			// of Deck A's two-track queue, so the old code showed "No track loaded"
+			// for a deck whose audio was still playing.
+			await page.getByRole('tab', { name: 'A', exact: true }).click();
+			await expectDeckShows(page, 'Alpha 1', 'Alpha 1.mp3');
+
+			// Advance Deck B and prove Deck A's screen does not follow it.
+			await page.getByRole('tab', { name: 'B', exact: true }).click();
+			// Wait for the deck switch to land: it is what re-points the MiniPlayer's
+			// Next button at Deck B.
+			await expect(miniPlayer(page)).toContainText('Beta 3');
+			await miniPlayer(page).getByRole('button', { name: 'Next' }).click();
+			await expectDeckShows(page, 'Beta 4', 'Beta 4.mp3');
+			await page.getByRole('tab', { name: 'A', exact: true }).click();
+			await expectDeckShows(page, 'Alpha 1', 'Alpha 1.mp3');
+
+			// Now let Deck A act: its index is in range for Deck B but names a
+			// different track, so the old code showed Deck B the wrong title.
+			await miniPlayer(page).getByRole('button', { name: 'Next' }).click();
+			await expectDeckShows(page, 'Alpha 2', 'Alpha 2.mp3');
+			await page.getByRole('tab', { name: 'B', exact: true }).click();
+			await expectDeckShows(page, 'Beta 4', 'Beta 4.mp3');
+		} finally {
+			fs.rmSync(dirA, { recursive: true, force: true });
+			fs.rmSync(dirB, { recursive: true, force: true });
 		}
 	});
 
