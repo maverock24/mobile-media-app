@@ -22,7 +22,7 @@
 	import { onDestroy, untrack } from 'svelte';
 	import { Capacitor } from '@capacitor/core';
 	import Button from '$lib/components/ui/Button.svelte';
-	import { formatClock, getYoutubeFavoriteKey, isYoutubeFavorite } from '$lib/models/music';
+	import { getYoutubeFavoriteKey, isYoutubeFavorite } from '$lib/models/music';
 	import { claimAudio, mediaEngine, markUserPaused, registerAudioSource } from '$lib/stores/mediaEngine.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
@@ -45,7 +45,7 @@
 		type YoutubeQueueItem,
 	} from '$lib/youtube/queue';
 	import { musicFavorites } from '$lib/stores/musicView.svelte';
-	import { ChevronLeft, Loader2, Pause, Play, Search, Star, X, Youtube } from 'lucide-svelte';
+	import { ChevronLeft, Loader2, Play, Search, Star, X, Youtube } from 'lucide-svelte';
 
 	const isNativeApp = Capacitor.isNativePlatform();
 
@@ -82,14 +82,7 @@
 			.map(queueItemFromFavorite)
 	);
 
-	const isCurrentFavorite = $derived.by(() => {
-		const videoId = currentItem?.videoId;
-		if (!videoId) return false;
-		return youtubeFavorites.some((item) => item.videoId === videoId);
-	});
-
 	const visibleList = $derived(mode === 'search' ? searchResults : youtubeFavorites);
-	const progressPercent = $derived(duration > 0 ? (currentTime / duration) * 100 : 0);
 
 	// ── Engine wiring ────────────────────────────────────────────
 	function stopYoutubePlayback() {
@@ -387,10 +380,6 @@
 			: [...favorites, favoriteFromQueueItem(item)];
 	}
 
-	function toggleFavorite() {
-		if (currentItem) toggleFavoriteFor(currentItem);
-	}
-
 	function isFavorite(videoId: string): boolean {
 		return youtubeFavorites.some((item) => item.videoId === videoId);
 	}
@@ -424,23 +413,6 @@
 		}
 
 		if (audioEl) safePlay();
-	}
-
-	function togglePlay() {
-		if (!audioEl || !current) return;
-		if (isPlaying) {
-			markUserPaused();
-			audioEl.pause();
-			return;
-		}
-		startOrResumePlayback();
-	}
-
-	function onSeekInput(event: Event) {
-		if (!audioEl) return;
-		const value = Number((event.target as HTMLInputElement).value);
-		audioEl.currentTime = value;
-		currentTime = value;
 	}
 
 	// ── Search ───────────────────────────────────────────────────
@@ -650,83 +622,5 @@
 		{/if}
 	</div>
 
-	<!-- Now playing -->
-	{#if current && currentItem}
-		<div class="border-t bg-card/95 px-3 py-3 shrink-0 space-y-2">
-			<div class="flex items-center gap-3">
-				{#if current.thumbnailUrl}
-					<img src={current.thumbnailUrl} alt="" class="w-11 h-11 rounded object-cover shrink-0" />
-				{/if}
-				<div class="flex-1 min-w-0">
-					<p class="text-xs font-medium truncate">{current.title || currentItem.title}</p>
-					<p class="text-[11px] text-muted-foreground truncate">{current.author || currentItem.subtitle}</p>
-				</div>
-				<button
-					class="w-9 h-9 flex items-center justify-center rounded-full transition-colors shrink-0 {isCurrentFavorite ? 'text-yellow-400' : 'text-muted-foreground'} hover:bg-accent"
-					onclick={toggleFavorite}
-					aria-label={isCurrentFavorite ? 'Remove from favorites' : 'Add to favorites'}
-					title={isCurrentFavorite ? 'Remove from favorites' : 'Add to favorites'}
-				>
-					<Star class="w-5 h-5" fill={isCurrentFavorite ? 'currentColor' : 'none'} />
-				</button>
-				<Button variant="ghost" size="icon" class="w-10 h-10 shrink-0" onclick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
-					{#if isBuffering}
-						<Loader2 class="w-5 h-5 animate-spin" />
-					{:else if isPlaying}
-						<Pause class="w-5 h-5" />
-					{:else}
-						<Play class="w-5 h-5" />
-					{/if}
-				</Button>
-			</div>
-
-			<!-- Prev / seek / next -->
-			<div class="flex items-center gap-2">
-				<span class="text-[10px] text-muted-foreground tabular-nums w-9 text-right shrink-0">
-					{formatClock(currentTime)}
-				</span>
-				<div class="relative flex-1 min-w-0 flex items-center">
-					<div class="absolute inset-x-0 h-1 rounded-full bg-secondary pointer-events-none">
-						<div class="h-full rounded-full bg-primary" style="width: {progressPercent}%"></div>
-					</div>
-					<input
-						type="range"
-						min="0"
-						max={duration || 0}
-						step="1"
-						value={currentTime}
-						oninput={onSeekInput}
-						class="relative w-full h-1 appearance-none bg-transparent cursor-pointer"
-						aria-label="Seek"
-					/>
-				</div>
-				<span class="text-[10px] text-muted-foreground tabular-nums w-9 shrink-0">
-					{formatClock(duration)}
-				</span>
-			</div>
-
-			{#if queue.length > 1}
-				<div class="flex items-center justify-center gap-6 pt-0.5">
-					<button
-						class="w-10 h-10 flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent transition-colors"
-						onclick={goPrev}
-						aria-label="Previous track"
-					>
-						<ChevronLeft class="w-5 h-5" />
-					</button>
-					<span class="text-[11px] text-muted-foreground tabular-nums">
-						{queueIndex + 1} / {queue.length}
-					</span>
-					<button
-						class="w-10 h-10 flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent transition-colors"
-						onclick={goNext}
-						aria-label="Next track"
-					>
-						<ChevronLeft class="w-5 h-5 rotate-180" />
-					</button>
-				</div>
-			{/if}
-		</div>
-	{/if}
 </div>
 {/if}
