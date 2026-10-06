@@ -79,5 +79,8 @@ destination picker. Drive file management was removed (ADR-0002, revised).
 - `src/lib/files/` — the per-deck file operations.
 - `src/lib/favorites/` — the per-deck track favourites and the resolve-and-play
   machine behind them.
+- `src/lib/podcast/` — episode display, iTunes search, resume progress, the
+  library flows and the podcast transport. Five of these came out of
+  `PodcastView.svelte` in the last phase; `rss.ts` and `refresh.ts` predate it.
 - `src/lib/stores/` — rune stores (`mediaEngine`, `settings`, `library`, …).
 - `src/lib/components/views/` — feature screens.
