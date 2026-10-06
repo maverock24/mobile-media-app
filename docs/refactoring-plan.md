@@ -694,6 +694,27 @@ Recorded here so they are not lost; none of them blocks a PR.
   `tests/e2e/music-player.test.ts`. The defect predates this refactoring
   programme: introduced in `8b36141`, moved by `af3f6e5`, relocated by
   `4f02339`.
+- Follow-up, same class: the user's original report was the *stop* path — with
+  both decks playing, switching back to a deck and trying to stop it did not
+  stop it. The deck UI offers no distinct stop; the only transport is the
+  MiniPlayer's play/pause toggle (`MiniPlayer.svelte:173` `togglePlayback`),
+  which calls `mediaEngine._onPause?.() ?? mediaEngine.pause()` (`:178`), landing
+  on the active deck's `pausePlayback` (`Mp3PlayerView.svelte:1311`). That first
+  line is `if (!currentTrack || !isPlaying) return;`, so the shared-index defect
+  above *was* the stop defect: the shorter deck's `currentTrack` resolved to
+  `undefined` through the other deck's index (its player region did not even
+  render), the guard bailed before `player.pause()`, and the element kept
+  playing. The index fix cures it; no second defect was found. `setPlaybackHandlers`
+  and `setSkipHandlers` do write single shared slots
+  (`mediaEngine.svelte.ts:249`/`:255`) and `markUserPaused` sets one shared flag
+  (`:76`), but the view only claims those handlers while its own deck is the
+  active one (`Mp3PlayerView.svelte:693`), so the active deck — the one the
+  MiniPlayer drives — always owns them. Pinned by "stopping the displayed deck
+  leaves the other deck playing, both directions" in
+  `tests/e2e/music-player.test.ts`: the case fails against the pre-fix
+  derivation (Deck A's region never renders) and when `player.pause()` is
+  removed (the stopped element stays unpaused), so it bites on exactly the two
+  failure modes named above.
 
 ## Out of scope
 
