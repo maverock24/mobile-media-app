@@ -563,7 +563,10 @@
 	const duration     = $derived(player.state.duration);
 	const isPlaying    = $derived(player.state.isPlaying);
 	const isBuffering  = $derived(player.state.isBuffering);
-	const currentTrack    = $derived(tracks[musicSettings.lastTrackIndex] as PlayerTrack | undefined);
+	// The deck's own index, not the shared `musicSettings.lastTrackIndex`: that
+	// field is last-writer-wins across decks (persistence/restore hint only), so
+	// it can point into the other deck's queue.
+	const currentTrack    = $derived(tracks[player.state.currentIndex] as PlayerTrack | undefined);
 	const currentTrackIsFavorite = $derived(currentTrack ? favoriteTracks.isFavoriteTrack(currentTrack.source) : false);
 	const currentMusicTrackKey = $derived(
 		musicSettings.lastTrackKey || (currentTrack ? getStoredFileKey(currentTrack.source) : '')
