@@ -62,6 +62,11 @@ function visiblePlayerView(page: Page) {
 	return page.locator('[role="region"][aria-label="Music player"]:visible');
 }
 
+/** The album-art pulse of whichever deck is currently shown. */
+function visiblePlayingIndicator(page: Page) {
+	return visiblePlayerView(page).locator('.animate-pulse');
+}
+
 /** The track title rendered by the currently shown deck's player screen. */
 function visibleDeckTitle(page: Page) {
 	return visiblePlayerView(page).locator('h2');
@@ -115,6 +120,16 @@ async function playingDeckFiles(page: Page): Promise<string[]> {
 			.filter((el) => el.src !== '' && !el.paused)
 			.map((el) => w.__deckAudioNames?.get(el.src) ?? el.src);
 	});
+}
+
+/** The deck-owned audio element that loaded `file`, or null if no element has it.
+ *  Identified by the file name its blob URL was built from, not by element order. */
+async function deckElementState(page: Page, file: string): Promise<{ paused: boolean; loaded: boolean } | null> {
+	return page.evaluate((wanted) => {
+		const w = window as unknown as DeckAudioProbe;
+		const el = (w.__deckAudios ?? []).find((e) => w.__deckAudioNames?.get(e.src) === wanted);
+		return el ? { paused: el.paused, loaded: el.src !== '' } : null;
+	}, file);
 }
 
 /** Assert the currently shown deck renders `title`, is not mistaken for empty,
@@ -335,6 +350,93 @@ test.describe('Music deck playback (player module)', () => {
 			await expectDeckShows(page, 'Alpha 2', 'Alpha 2.mp3');
 			await page.getByRole('tab', { name: 'B', exact: true }).click();
 			await expectDeckShows(page, 'Beta 4', 'Beta 4.mp3');
+		} finally {
+			fs.rmSync(dirA, { recursive: true, force: true });
+			fs.rmSync(dirB, { recursive: true, force: true });
+		}
+	});
+
+	test('stopping the displayed deck leaves the other deck playing, both directions', async ({ page }) => {
+		// The user report this pins: with both decks playing, switching back to a
+		// deck and pressing stop did not stop it. The only transport the UI offers
+		// is the MiniPlayer's play/pause button (there is no distinct stop), so
+		// "stop" is a deliberate pause of the displayed deck.
+		const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-deck-a-'));
+		const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-deck-b-'));
+		createMinimalMp3('Alpha 1.mp3', dirA);
+		createMinimalMp3('Alpha 2.mp3', dirA);
+		createMinimalMp3('Beta 1.mp3', dirB);
+		createMinimalMp3('Beta 2.mp3', dirB);
+		createMinimalMp3('Beta 3.mp3', dirB);
+		createMinimalMp3('Beta 4.mp3', dirB);
+
+		try {
+			// Repeat-one pins each 1 s fixture to its own track so neither deck
+			// auto-advances (or stops at the end) while the other is being stopped.
+			await page.addInitScript(() => {
+				localStorage.setItem('music-settings', JSON.stringify({ isRepeat: true }));
+			});
+			await installDeckAudioProbe(page);
+
+			await page.goto('/');
+			await waitForHydration(page);
+
+			// Deck A: two tracks, first playing. Deck B: four tracks, third playing.
+			await loadMp3Folder(page, dirA);
+			await page.getByRole('button', { name: /Play Alpha 1/ }).click();
+			await expect(miniPlayer(page)).toContainText('Alpha 1', { timeout: 10_000 });
+
+			await page.getByRole('tab', { name: 'B', exact: true }).click();
+			await loadDeckBFolder(page, dirB);
+			await page.getByRole('button', { name: /Play Beta 3/ }).click();
+			await expect(miniPlayer(page)).toContainText('Beta 3', { timeout: 10_000 });
+
+			await page.getByRole('button', { name: /Return to music player/ }).click();
+			// Both detached deck elements really are playing their own file.
+			await expect.poll(() => playingDeckFiles(page), { timeout: 10_000 })
+				.toEqual(expect.arrayContaining(['Alpha 1.mp3', 'Beta 3.mp3']));
+
+			const mini = miniPlayer(page);
+
+			// ── Direction 1: display Deck A, stop it; Deck B must keep playing. ──
+			await page.getByRole('tab', { name: 'A', exact: true }).click();
+			await expect(visibleDeckTitle(page)).toHaveText('Alpha 1');
+			await expect(mini.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+
+			await mini.getByRole('button', { name: 'Pause', exact: true }).click();
+
+			// The displayed deck's element is paused (not unloaded: this is a pause,
+			// not a cross-source stop) and its UI shows the stopped state...
+			await expect.poll(() => deckElementState(page, 'Alpha 1.mp3'), { timeout: 5_000 })
+				.toEqual({ paused: true, loaded: true });
+			await expect(mini.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+			await expect(visibleDeckTitle(page)).toHaveText('Alpha 1');
+			await expect(mini).toContainText('Alpha 1');
+			await expect(visiblePlayingIndicator(page)).toHaveCount(0);
+			// ...while the other deck's element is untouched and still on its track.
+			await expect.poll(() => deckElementState(page, 'Beta 3.mp3'), { timeout: 5_000 })
+				.toEqual({ paused: false, loaded: true });
+
+			// ── Direction 2: resume Deck A, display Deck B, stop it. ──
+			await mini.getByRole('button', { name: 'Play', exact: true }).click();
+			await expect(mini.getByRole('button', { name: 'Pause', exact: true })).toBeVisible({ timeout: 10_000 });
+			await expect.poll(() => deckElementState(page, 'Alpha 1.mp3'), { timeout: 5_000 })
+				.toEqual({ paused: false, loaded: true });
+
+			await page.getByRole('tab', { name: 'B', exact: true }).click();
+			await expect(visibleDeckTitle(page)).toHaveText('Beta 3');
+			await expect(mini.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+
+			await mini.getByRole('button', { name: 'Pause', exact: true }).click();
+
+			await expect.poll(() => deckElementState(page, 'Beta 3.mp3'), { timeout: 5_000 })
+				.toEqual({ paused: true, loaded: true });
+			await expect(mini.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+			await expect(visibleDeckTitle(page)).toHaveText('Beta 3');
+			await expect(mini).toContainText('Beta 3');
+			await expect(visiblePlayingIndicator(page)).toHaveCount(0);
+			await expect.poll(() => deckElementState(page, 'Alpha 1.mp3'), { timeout: 5_000 })
+				.toEqual({ paused: false, loaded: true });
 		} finally {
 			fs.rmSync(dirA, { recursive: true, force: true });
 			fs.rmSync(dirB, { recursive: true, force: true });
