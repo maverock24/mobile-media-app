@@ -117,6 +117,10 @@ favorites/*
   ├── can import: models/*, audio/*, stores/*
   └── must NOT import: components
 
+podcast/*
+  ├── can import: models/*, native/*, stores/*, podcast/*
+  └── must NOT import: components
+
 models/*
   └── should remain pure type or model definitions
 
