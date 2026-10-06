@@ -116,9 +116,11 @@ function panel(page: Page) {
 		.filter({ has: page.getByRole('button', { name: 'Close YouTube' }) });
 }
 
-/** The panel's audio element: rendered once at the shell level. */
+/** The panel's audio element: rendered once at the shell level (always mounted,
+ *  outside the panel's `{#if open}` block). It is a direct child of the music
+ *  content wrapper — NOT of `main` — so a descendant selector is required. */
 function youtubeAudio(page: Page) {
-	return page.locator('main > audio');
+	return page.locator('main .relative.flex-1.min-h-0 > audio');
 }
 
 test.describe('YouTube panel', () => {
@@ -203,29 +205,47 @@ test.describe('YouTube panel', () => {
 
 		expect(await audio.evaluate((el: HTMLAudioElement) => el.duration)).toBeGreaterThan(0);
 
-		// Panel transport + queue counter. exact:true because every result row is
-		// labelled `Play <title>`, which substring-matches "Play".
-		await expect(panel(page).getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
-		await expect(panel(page).getByText(/^1 \/ \d+$/)).toBeVisible();
+		// The panel renders NO transport of its own — it hands off to the shared
+		// MiniPlayer. This is the regression guard against the in-panel bar coming
+		// back: no Pause/Play button, no seek slider, no prev/next arrows and no
+		// `n / N` queue counter inside the overlay. (exact:true because every result
+		// row is labelled `Play <title>`, which substring-matches "Play".)
+		const panelEl = panel(page);
+		await expect(panelEl.getByRole('button', { name: 'Pause', exact: true })).toHaveCount(0);
+		await expect(panelEl.getByRole('button', { name: 'Previous track' })).toHaveCount(0);
+		await expect(panelEl.getByRole('button', { name: 'Next track' })).toHaveCount(0);
+		await expect(panelEl.getByRole('slider', { name: 'Seek' })).toHaveCount(0);
+		await expect(panelEl.getByText(/^\d+ \/ \d+$/)).toHaveCount(0);
 
-		// Pause/resume through the panel. Resume must re-use the existing src (it
-		// is still set), not re-resolve.
-		await panel(page).getByRole('button', { name: 'Pause', exact: true }).click();
+		// Every transport action below is driven through the shared MiniPlayer,
+		// which must stay visible and operable while the panel overlay is open —
+		// the structural claim this refactor rests on. If the overlay covered or
+		// blocked it, these clicks would hit the overlay and the audio would not
+		// change.
+		const mini = page.locator('[aria-label^="Mini player"]');
+		await expect(mini).toBeVisible();
+		await expect(mini).toHaveAttribute('aria-label', /^Mini player — .+/);
+		await expect(mini.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+
+		// Pause through the MiniPlayer while the panel is still open: the real
+		// audio element must actually pause.
+		await mini.getByRole('button', { name: 'Pause', exact: true }).click();
 		await expect
 			.poll(async () => audio.evaluate((el: HTMLAudioElement) => el.paused), { timeout: 15_000 })
 			.toBe(true);
+
+		// Resume must re-use the existing src (still set), not re-resolve.
 		const srcAtPause = await audio.evaluate((el: HTMLAudioElement) => el.src);
-		await panel(page).getByRole('button', { name: 'Play', exact: true }).click();
+		await mini.getByRole('button', { name: 'Play', exact: true }).click();
 		await expect
 			.poll(async () => audio.evaluate((el: HTMLAudioElement) => el.paused), { timeout: 30_000, message: 'resume did not restart playback' })
 			.toBe(false);
 		expect(await audio.evaluate((el: HTMLAudioElement) => el.src)).toBe(srcAtPause);
 
-		// The panel's own next control steps the queue: it must resolve a
+		// The MiniPlayer's next control steps the queue: it must resolve a
 		// different video and keep playing.
 		const firstSrc = await audio.evaluate((el: HTMLAudioElement) => el.src);
-		await panel(page).getByRole('button', { name: 'Next track' }).click();
-		await expect(panel(page).getByText(/^2 \/ \d+$/)).toBeVisible({ timeout: 45_000 });
+		await mini.getByRole('button', { name: 'Next' }).click();
 		await expect
 			.poll(async () => audio.evaluate((el: HTMLAudioElement) => el.src), {
 				timeout: 45_000,
@@ -243,13 +263,6 @@ test.describe('YouTube panel', () => {
 		await page.waitForTimeout(500);
 		expect(await audio.evaluate((el: HTMLAudioElement) => el.paused)).toBe(false);
 
-		// The engine must have received the now-playing item, so the MiniPlayer
-		// advertises the YouTube track and offers a seek bar (canSeek).
-		// Its Next button also only renders when the panel registered skip
-		// handlers (canSkipNext), so finding it proves the engine wiring.
-		const mini = page.locator('[aria-label^="Mini player"]');
-		await expect(mini).toBeVisible();
-		await expect(mini).toHaveAttribute('aria-label', /^Mini player — .+/);
 		// The MiniPlayer's seek control is gated on canSeek, which now includes the
 		// youtube source — so its presence proves the engine treats YouTube as
 		// seekable. It is a role="slider" div, not an <input> (that lives in

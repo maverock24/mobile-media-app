@@ -2,7 +2,7 @@
 > **Source:** `src/lib/components/ui/YoutubePanel.svelte`, `src/lib/stores/youtubePanel.svelte.ts`
 > **Authority:** code — the panel owns its `<audio>` element and reports to `mediaEngine` (see [audio-playback-lifecycle.md](./audio-playback-lifecycle.md), where YouTube is a *view-owned* source like podcast, not an engine-owned stream like radio).
 > **Initial:** `NO_TRACK`
-> **Last reconciled:** 2026-09-28
+> **Last reconciled:** 2026-10-06
 
 ## States (6)
 
@@ -25,9 +25,9 @@
 | T2 | `RESOLVING` | `resolveYoutubeAudio` ok | — | `PLAYING` | `startPlayback()`: sets `current`/`currentItem`/`queueIndex`/`duration`, `youtubePlaying=true`, `isPlaying=true`, `claimAudio('youtube')`, `setNowPlaying`, `claimEngineControls`, sets `src`, `load()`, `safePlay()`. |
 | T3 | `RESOLVING` | resolve fails | `currentItem==null` | `NO_TRACK` | `error=describeYoutubeError(err)`, `resolvingId=null`. Flags left alone (nothing was playing). |
 | T4 | `RESOLVING` | resolve fails | `currentItem!=null` | `PLAYING` \| `LOADED` \| `SUSPENDED` (unchanged) | `error` set, `resolvingId=null`. Engine flags deliberately untouched — a failed resolve changes nothing, so whatever was playing keeps playing. |
-| T5 | `PLAYING` \| `BUFFERING` | `pause` event, `togglePlay()`, or engine `_onPause` | — | `LOADED` | `isPlaying=false`, `youtubePlaying=false`. `src` and metadata preserved. |
-| T6 | `LOADED` | `togglePlay()` or engine `_onPlay` | `audioEl.src!=""` | `PLAYING` | `claimAudio('youtube')`, `youtubePlaying=true`, `isPlaying=true`, `claimEngineControls`, `safePlay()` — no re-resolve. |
-| T7 | `SUSPENDED` | `togglePlay()` or engine `_onPlay` | `audioEl.src==""` | `RESOLVING` | `claimAudio`, flags set, `claimEngineControls`, then `playQueueItem(currentItem, queueIndex)` to re-resolve. A bare `play()` here is **forbidden** — it rejects with `NotSupportedError`. |
+| T5 | `PLAYING` \| `BUFFERING` | `pause` event, or engine `_onPause` (MiniPlayer pause) | — | `LOADED` | `isPlaying=false`, `youtubePlaying=false`. `src` and metadata preserved. |
+| T6 | `LOADED` | engine `_onPlay` (MiniPlayer play/resume) | `audioEl.src!=""` | `PLAYING` | `claimAudio('youtube')`, `youtubePlaying=true`, `isPlaying=true`, `claimEngineControls`, `safePlay()` — no re-resolve. |
+| T7 | `SUSPENDED` | engine `_onPlay` (MiniPlayer play/resume) | `audioEl.src==""` | `RESOLVING` | `claimAudio`, flags set, `claimEngineControls`, then `playQueueItem(currentItem, queueIndex)` to re-resolve. A bare `play()` here is **forbidden** — it rejects with `NotSupportedError`. |
 | T8 | `PLAYING` | `waiting` event | — | `BUFFERING` | `isBuffering=true`. |
 | T9 | `BUFFERING` | `playing` event | — | `PLAYING` | `isBuffering=false`, `isPlaying=true`, `youtubePlaying=true`. |
 | T10 | `PLAYING` | `ended` | `musicSettings.isRepeat` | `PLAYING` | `currentTime=0`, `safePlay()`. Restart, no re-resolve, no queue move. |

@@ -73,8 +73,8 @@ Tap any result.
 
 Expected, in order:
 1. A brief spinner on the row while the stream URL is resolved (~0.2–1 s).
-2. The now-playing bar appears at the bottom with artwork, title, channel, and a
-   `1 / N` queue counter.
+2. The shared MiniPlayer appears at the bottom with the track title and channel,
+   and a seek slider. The panel itself has no transport of its own.
 3. **The time counter starts advancing past 0:00.** This is the pass/fail line.
 
 If the time never leaves 0:00, the audio element received a URL it could not
@@ -96,9 +96,8 @@ use — see the table below.
 
 Each of these is wired to existing behaviour. Confirm them on the device:
 
-- **Next / previous.** Use the panel's arrows and then the same buttons in the
-  MiniPlayer. Both should move the queue, the counter should increment, and a
-  new track should start.
+- **Next / previous.** Use the MiniPlayer's prev/next buttons — the panel has no
+  arrows of its own. They should move the queue and start a new track.
 - **Loop.** Toggle the loop button in the panel header off, play the last item,
   and let it finish — playback should stop. Turn it on and it should wrap.
 - **Shuffle.** Toggle shuffle in the panel, skip a few times, and confirm the
@@ -115,16 +114,16 @@ Each of these is wired to existing behaviour. Confirm them on the device:
   **keep going**, and the MiniPlayer must show the track with a working seek
   slider. It should say YouTube, not the music deck. Tap it — the panel should
   reopen.
-- **Seek.** Drag the slider. It should jump, not restart.
+- **Seek.** Drag the MiniPlayer's slider. It should jump, not restart.
 - **Background playback.** Lock the screen. Audio should continue, and the
   notification controls should show the track and respond to play/pause/skip.
 - **Sleep timer.** Set a short timer with YouTube playing. It should pause when
   it fires.
 - **Exclusivity, both directions.** Play a YouTube track, then start a radio
-  station or an MP3 — YouTube must stop. Then go back to the YouTube panel: its
-  now-playing bar still shows the track, but the element's `src` was released, so
-  tapping play must **re-resolve and start playing**. If you instead get a "Could
-  not start playback" toast, `SUSPENDED → RESOLVING` (T7 in
+  station or an MP3 — YouTube must stop. Then go back to the YouTube panel: the
+  MiniPlayer still shows the track, but the element's `src` was released, so
+  tapping its play button must **re-resolve and start playing**. If you instead
+  get a "Could not start playback" toast, `SUSPENDED → RESOLVING` (T7 in
   `docs/state/youtube-playback.md`) has regressed.
 
 ## 6 — Regression check
