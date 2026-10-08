@@ -34,7 +34,7 @@
 | T11 | `PLAYING` | `ended` (auto-advance), `goNext()`, `goPrev()` | — | `RESOLVING` | `advanceQueue(manual)` → `nextQueueIndex`/`previousQueueIndex` → `playQueueItem`. `goPrev` with `rewindOnPrev && currentTime>3` instead seeks to 0 and stays (`PLAYING`). |
 | T12 | `PLAYING` | `ended` + `nextQueueIndex` returns null | `queueLoop==false` | `LOADED` | `stopQueue()`: `isPlaying=false`, `isBuffering=false`, `youtubePlaying=false`, `audioEl.pause()`. Metadata kept. |
 | T13 | `PLAYING` | `goNext`/`goPrev` with every skip failing | `maxSkips` (3) exhausted | `LOADED` | `stopQueue()` as T12. Bounded so an all-unplayable queue cannot spin. |
-| T14 | any | another source calls `claimAudio(other)` | — | `SUSPENDED` | `stopYoutubePlayback()`: `isPlaying=false`, `isBuffering=false`, `youtubePlaying=false`, `pause()`, `removeAttribute('src')`, `load()`. Metadata preserved; **the channel is released for the incoming source**. |
+| T14 | any | another source calls `claimAudio(other)` | `other != 'musicB'` | `SUSPENDED` | `stopYoutubePlayback()`: `isPlaying=false`, `isBuffering=false`, `youtubePlaying=false`, `pause()`, `removeAttribute('src')`, `load()`. Metadata preserved; **the channel is released for the incoming source**. A Deck B claim does NOT suspend YouTube — B is the mixing deck and the two play together. |
 | T15 | `PLAYING` \| `BUFFERING` | `error` event | — | `LOADED` | `isPlaying=false`, `isBuffering=false`, `youtubePlaying=false`, "Playback failed. The audio link may have expired" shown. |
 | T16 | `PLAYING` | `safePlay()` rejects with `AbortError` | retries left (6 native / 3 web) | `PLAYING` | Retry after 250 ms (native) / 150 ms (web). Internal — no observable state change. |
 | T17 | `PLAYING` | `safePlay()` retries exhausted | — | `LOADED` | `isPlaying=false`, `youtubePlaying=false`, `onFailure()` toast. |
@@ -56,6 +56,7 @@ Playback state and panel visibility are independent. The `<audio>` element is re
 - Closing the panel (V2) is forbidden from mutating playback state. Verified by an assertion in `tests/e2e/youtube.test.ts` that audio keeps playing after the panel closes.
 - `isPlaying==true` implies `current!=null && currentItem!=null && audioEl.src!=""`. `youtubePlaying` mirrors `isPlaying` on every path except T4, where a failed resolve deliberately leaves both untouched.
 - Every path into `PLAYING` calls `claimEngineControls()`, so the MiniPlayer, MediaSession and Android notification controls always address the panel's transport. `canSkipNext`/`canSkipPrevious` in the MiniPlayer exist only because this happens.
+- Deck B mixes with YouTube: `musicPlayingB` may be true while `youtubePlaying` is true, in either start order. When both play, the MiniPlayer shows (and controls) whichever view is on screen — `mediaEngine.activeView`.
 - Exactly one YouTube `<audio>` element can exist: the panel is rendered once at the shell level, not per music deck. `currentItem` is never null while `current` is.
 - `queue` is always one of: `searchResults`, the favourites list, or a single resolved item. `queueIndex` indexes into it and is only assigned by `startPlayback`.
 - YouTube never reaches `STREAM_RECONNECTING` (radio-only). A dropped stream is T15, and recovery is a fresh resolve on the next tap.

@@ -2,7 +2,7 @@
 > **Source:** `src/lib/stores/mediaEngine.svelte.ts` (832L)
 > **Authority:** code — the engine is a $state object; views drive their own `<audio>` elements.
 > **Initial:** `IDLE`
-> **Last reconciled:** 2026-10-02
+> **Last reconciled:** 2026-10-06
 
 ## States (5)
 
@@ -10,7 +10,7 @@
 |---|-------|-----------|-------------|
 | 1 | `IDLE` | `item==null && source==null && isPlaying==false` | No content loaded. All per-source flags false. No transport handlers registered (or stale). |
 | 2 | `LOADED` | `item!=null && source!=null && isPlaying==false` | Content ready. Handlers registered via `setPlaybackHandlers`/`setSkipHandlers`. Audio element exists but is paused/stopped. |
-| 3 | `PLAYING` | `item!=null && source!=null && isPlaying==true` | Audio active. Exactly one per-source flag is true — or two for dual-deck mixing (musicA+musicB) / B-radio mix. WakeLock held (web). |
+| 3 | `PLAYING` | `item!=null && source!=null && isPlaying==true` | Audio active. One per-source flag is true, or two when Deck B mixes: musicA+musicB, or musicB + any one of podcast/radio/youtube/mixer. WakeLock held (web). |
 | 4 | `STREAM_RECONNECTING` | `source=='radio' && _streamShouldPlay==true && reconnect timer active` | Radio stream dropped unexpectedly. Exponential backoff reconnect in progress (1s→2s→4s→8s→16s, max 5 attempts). Transient — always resolves to PLAYING or LOADED. |
 | 5 | `BG_RECOVERY` | `backgroundResumeArmed==true` (Android only) | App backgrounded on Android while the user wanted playback. Armed from the `document` 'pause' event on `item!=null && (isPlaying \|\| userWantsPlayback)` — see `_userWantsPlayback`. Retry loop: 180ms initial + 250ms×3 retries, then 5s watchdog. Disarmed only by an explicit user pause or `clear()`. Transient — resolves on document 'resume' or recovery. |
 
@@ -42,9 +42,10 @@
 - `IDLE → PLAYING` is forbidden except via `playStream` (radio shortcut — T2). All other sources MUST go through `LOADED` and register handlers first.
 - `PLAYING → PLAYING` is forbidden (no self-transition). Source switches go PLAYING → LOADED → PLAYING.
 - `LOADED` MUST have handlers registered before `PLAY` (T3). Violation = dev-mode console warning, audio may not respond to MiniPlayer/MediaSession.
-- Dual music decks (`musicPlayingA` + `musicPlayingB`) may both be true simultaneously — `claimAudio` skips sibling decks.
-- Deck B may mix with podcast/radio (`musicPlayingB` + `podcastPlaying`/`radioPlaying`) — `claimAudio` skips those.
-- All other flag combinations are exclusive: at most one of {podcastPlaying, radioPlaying, youtubePlaying, mixerPlaying} may be true. YouTube gains nothing from simultaneous playback, so it behaves like podcast here — unlike the radio stream, `claimAudio('youtube')` tears `_streamAudio` down.
+- Both music decks (`musicPlayingA` + `musicPlayingB`) may be true simultaneously.
+- Deck B is the mixing deck: `musicPlayingB` may be true together with any one other source (`musicPlayingA`, `podcastPlaying`, `radioPlaying`, `youtubePlaying`, `mixerPlaying`). `claimAudio` neither stops another source for a `musicB` claim nor stops `musicB` for any other claim.
+- Every other combination among {musicA, podcast, radio, youtube, mixer} stays exclusive.
+- Transport follows the visible view: each source re-claims `setPlaybackHandlers`/`setSkipHandlers` when `mediaEngine.activeView` points at it (published by `+page.svelte`), and `mediaEngine.pause()`/`resume()` prefer the registered handler over the engine-owned radio stream. So the MiniPlayer controls the source on screen even when Deck B keeps playing underneath it.
 - Per-source flags that follow the view-owned `<audio>` pattern: music, podcast, **youtube**. Only radio is engine-owned (`_streamAudio`, hence `STREAM_RECONNECTING`).
 - `STREAM_RECONNECTING` only valid when `source=='radio'`.
 - `BG_RECOVERY` only valid on Android (`Capacitor.platform=='android'`). On web it is unreachable.
