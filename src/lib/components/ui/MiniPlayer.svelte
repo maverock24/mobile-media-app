@@ -27,17 +27,38 @@
 	let showSleepTimerOptions = $state(false);
 	let showMusicSpeedOptions = $state(false);
 
-	const ownerTab = $derived.by(() => {
-		switch (mediaEngine.source) {
-			case 'music':   return 'music';
+	// Which source the visible view drives. `activeView` is published by
+	// +page.svelte and kept in lockstep with the A / B / YouTube sub-tabs, so the
+	// MiniPlayer shows (and controls) exactly the source on screen — even when
+	// Deck B is mixing with another playing source.
+	const displayKind = $derived.by((): 'A' | 'B' | 'youtube' | 'podcast' | 'radio' | 'global' => {
+		switch (mediaEngine.activeView) {
+			case 'music:A':       return 'A';
+			case 'music:B':       return 'B';
+			case 'music:youtube': return 'youtube';
+			case 'podcasts':      return 'podcast';
+			case 'radio':         return 'radio';
+			default:              return 'global';
+		}
+	});
+	const isDeckDisplay = $derived(displayKind === 'A' || displayKind === 'B');
+
+	const ownerTab = $derived.by((): string | null => {
+		switch (displayKind) {
+			case 'A': case 'B': case 'youtube': return 'music';
 			case 'podcast': return 'podcasts';
 			case 'radio':   return 'radio';
-			// YouTube lives on the music tab, where its panel is opened from.
-			case 'youtube': return 'music';
 			default: {
-				// source may be null when item was cleared but a deck is still
-				// playing — determine owner from the active playing flags.
+				// Weather / settings own no source — follow the engine's source,
+				// falling back to whatever per-source flag is set.
+				switch (mediaEngine.source) {
+					case 'music':   return 'music';
+					case 'youtube': return 'music';
+					case 'podcast': return 'podcasts';
+					case 'radio':   return 'radio';
+				}
 				if (mediaEngine.musicPlayingA || mediaEngine.musicPlayingB) return 'music';
+				if (mediaEngine.youtubePlaying) return 'music';
 				if (mediaEngine.podcastPlaying) return 'podcasts';
 				if (mediaEngine.radioPlaying) return 'radio';
 				return null;
@@ -45,71 +66,60 @@
 		}
 	});
 
-	// On the music tab, always use the active deck's per-deck state — even when
-	// podcast/radio is playing simultaneously (Deck B background music). On other
-	// tabs, follow the global source.
-	//
-	// When Deck B is the active deck, show its state everywhere so its playback
-	// is not invisible outside the music tab.
-	//
-	// YouTube is the exception to both: it is foreground playback and owns the
-	// engine's global now-playing state, so it overrides the deck views. Without
-	// that the MiniPlayer would keep showing the deck YouTube just stopped,
-	// because deck metadata is deliberately retained across source switches.
-	const isYoutubeSource = $derived(mediaEngine.source === 'youtube');
-	const isMusicTab = $derived(activeTab === 'music' && !isYoutubeSource);
-	const showDeckB = $derived(!isYoutubeSource && mediaEngine.activeMusicDeck === 'B');
 	const deckItem = $derived(
-		showDeckB ? (mediaEngine.deckBItem ?? mediaEngine.item)
-			: isMusicTab ? mediaEngine.deckAItem
+		displayKind === 'A' ? mediaEngine.deckAItem
+			: displayKind === 'B' ? mediaEngine.deckBItem
 			: mediaEngine.item
 	);
 	const deckCurrentTime = $derived(
-		showDeckB ? (mediaEngine.deckBCurrentTime || mediaEngine.currentTime)
-			: isMusicTab ? mediaEngine.deckACurrentTime
+		displayKind === 'A' ? mediaEngine.deckACurrentTime
+			: displayKind === 'B' ? mediaEngine.deckBCurrentTime
 			: mediaEngine.currentTime
 	);
 	const deckDuration = $derived(
-		showDeckB ? (mediaEngine.deckBDuration || mediaEngine.duration)
-			: isMusicTab ? mediaEngine.deckADuration
+		displayKind === 'A' ? mediaEngine.deckADuration
+			: displayKind === 'B' ? mediaEngine.deckBDuration
 			: mediaEngine.duration
 	);
 
-	// Play/pause: on music tab, control the visible deck. On other tabs,
-	// control globally — unless Deck B is active, in which case control B.
+	// The play/pause state of the source that is actually on screen.
 	const isPlaying = $derived(
-		showDeckB ? mediaEngine.musicPlayingB
-			: isMusicTab ? mediaEngine.musicPlayingA
+		displayKind === 'A' ? mediaEngine.musicPlayingA
+			: displayKind === 'B' ? mediaEngine.musicPlayingB
+			: displayKind === 'youtube' ? mediaEngine.youtubePlaying
+			: displayKind === 'podcast' ? mediaEngine.podcastPlaying
+			: displayKind === 'radio' ? mediaEngine.radioPlaying
 			: mediaEngine.isPlaying
 	);
 
 	const isBuffering = $derived(
-		showDeckB ? mediaEngine.deckBBuffering
-			: isMusicTab ? mediaEngine.deckABuffering
+		displayKind === 'A' ? mediaEngine.deckABuffering
+			: displayKind === 'B' ? mediaEngine.deckBBuffering
 			: false
 	);
 
 	const displayTitle = $derived(
 		deckItem?.title ??
-		(isMusicTab ? `Deck ${mediaEngine.activeMusicDeck}` : undefined)
+		(isDeckDisplay ? `Deck ${displayKind}` : undefined)
 	);
 	const displaySubtitle = $derived(
 		deckItem
-			? (isMusicTab || showDeckB
-				? `Deck ${mediaEngine.activeMusicDeck} · ${deckItem.subtitle ?? ''}`
+			? (isDeckDisplay
+				? `Deck ${displayKind} · ${deckItem.subtitle ?? ''}`
 				: deckItem.subtitle)
-			: (isMusicTab ? 'No track loaded' : undefined)
+			: (isDeckDisplay ? 'No track loaded' : undefined)
 	);
 
-	// Always visible on the music tab (A/B toggle, play button, volume).
-	// Also visible when Deck B is active (so its playback is shown).
-	// Otherwise only when something is playing.
+	// Always visible on the music tab. Otherwise only when something is playing
+	// or a track is loaded.
 	const visible = $derived(
 		activeTab === 'music' ||
-		showDeckB ||
 		mediaEngine.item !== null ||
 		mediaEngine.podcastPlaying ||
-		mediaEngine.radioPlaying
+		mediaEngine.radioPlaying ||
+		mediaEngine.youtubePlaying ||
+		mediaEngine.musicPlayingA ||
+		mediaEngine.musicPlayingB
 	);
 
 	const progress = $derived(
@@ -152,11 +162,16 @@
 
 
 	const canSeek = $derived(
-		mediaEngine.source === 'music' || mediaEngine.source === 'podcast' || mediaEngine.source === 'youtube'
+		displayKind === 'A' || displayKind === 'B' || displayKind === 'youtube' || displayKind === 'podcast'
+		// Weather / settings follow the engine source, so keep their seek bar.
+		|| (displayKind === 'global'
+			&& (mediaEngine.source === 'music' || mediaEngine.source === 'podcast' || mediaEngine.source === 'youtube'))
 	);
 	const canSkipPrevious = $derived(mediaEngine._onPrev !== null);
 	const canSkipNext = $derived(mediaEngine._onNext !== null);
-	const showPodcastSpeedPreset = $derived(mediaEngine.source === 'podcast');
+	const showPodcastSpeedPreset = $derived(
+		displayKind === 'podcast' || (displayKind === 'global' && mediaEngine.source === 'podcast')
+	);
 	const podcastOneAndHalfActive = $derived(showPodcastSpeedPreset && podcastSettings.playbackSpeed === 1.5);
 	const sleepTimerLabel = $derived(
 		sleepTimer.isActive ? formatSleepTimerRemaining(sleepTimer.remainingMs) : 'Off'
@@ -171,10 +186,7 @@
 	}
 
 	function togglePlayback() {
-		const deckPlaying = isMusicTab
-			? (mediaEngine.activeMusicDeck === 'A' ? mediaEngine.musicPlayingA : mediaEngine.musicPlayingB)
-			: mediaEngine.isPlaying;
-		if (deckPlaying) {
+		if (isPlaying) {
 			mediaEngine._onPause?.() ?? mediaEngine.pause();
 			return;
 		}
@@ -255,7 +267,7 @@
 					if (!ownerTab) return;
 					// Returning to YouTube playback should land on the panel, not just
 					// the tab it happens to live on.
-					if (isYoutubeSource) openYoutubePanel();
+					if (displayKind === 'youtube') openYoutubePanel();
 					// Switching tabs alone did nothing while the Music tab was already
 					// active, which made this button dead exactly when it was needed:
 					// the file browser has no other way back to the now-playing screen.
@@ -453,7 +465,7 @@
 			</div>
 		{/if}
 
-		{#if mediaEngine.source === 'music' && mediaEngine.activeMusicDeck === 'B'}
+		{#if displayKind === 'B' || (displayKind === 'global' && mediaEngine.source === 'music' && mediaEngine.activeMusicDeck === 'B')}
 			<div class="px-3 pb-2 flex items-center gap-2">
 				<Volume2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
 				<input

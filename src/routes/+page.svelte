@@ -64,6 +64,12 @@
 		void triggerTabHaptic();
 	}
 
+	// Publish the visible view so each source (decks, YouTube, podcast, radio) can
+	// hand the MiniPlayer transport to whichever one is on screen.
+	$effect(() => {
+		mediaEngine.activeView = activeTab === 'music' ? `music:${musicSubTab}` : activeTab;
+	});
+
 	function isTab(value: unknown): value is Tab {
 		return value === 'music' || value === 'podcasts' || value === 'radio'
 			|| value === 'weather' || value === 'settings';

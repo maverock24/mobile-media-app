@@ -53,6 +53,21 @@ export function claimAudio(id: AudioSourceId): void {
 	if (id !== 'radio' && id !== 'musicB') stopStreamAudio();
 }
 
+/**
+ * Which feature view is on screen, so the MiniPlayer and the feature views agree
+ * on what the transport controls drive. `music:youtube` is the YouTube sub-tab.
+ * Weather/settings own no audio source; a transport claimed by the last visible
+ * source stays active there.
+ */
+export type ActiveView =
+	| 'music:A'
+	| 'music:B'
+	| 'music:youtube'
+	| 'podcasts'
+	| 'radio'
+	| 'weather'
+	| 'settings';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Android background-recovery intent
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,6 +120,10 @@ export const mediaEngine = $state<NowPlayingState & {
 	musicSelectionLoopActive: boolean;
 	musicHasSelectedTracks: boolean;
 	activeMusicDeck: 'A' | 'B';
+	/** Reactive mirror of the visible feature view (set by +page.svelte). Views
+	 *  re-claim the engine transport when this points at them, so the MiniPlayer's
+	 *  controls follow the source on screen even when two sources play at once. */
+	activeView: ActiveView;
 
 	// --- Per-deck state (for when both decks play simultaneously) ---
 	// Each deck pushes its own now-playing metadata so the MiniPlayer
@@ -157,6 +176,8 @@ export const mediaEngine = $state<NowPlayingState & {
 	_onPrev: (() => void) | null;
 	setPlaybackHandlers(play: (() => void) | null, pause: (() => void) | null, seek: ((time: number) => void) | null): void;
 	setSkipHandlers(next: (() => void) | null, prev: (() => void) | null): void;
+	/** Re-point the transport at the engine-owned radio stream (see method docs). */
+	claimStreamControls(): void;
 }>({
 	item:        null,
 	musicPlayingA:  false,
@@ -168,6 +189,7 @@ export const mediaEngine = $state<NowPlayingState & {
 	musicSelectionLoopActive: false,
 	musicHasSelectedTracks: false,
 	activeMusicDeck: 'A',
+	activeView: 'music:A',
 	deckAItem:        null,
 	deckBItem:        null,
 	deckACurrentTime: 0,
@@ -366,6 +388,20 @@ export const mediaEngine = $state<NowPlayingState & {
 	resumeStream() {
 		if (_streamAudio && this.source === 'radio') {
 			resumeStreamAudio(this);
+		}
+	},
+
+	/** Re-point the MiniPlayer / MediaSession transport at the radio stream.
+	 *  `playStream` sets these handlers once; another source that later claimed the
+	 *  transport (Deck B can mix with radio) is undone by calling this when the
+	 *  radio view becomes visible again. */
+	claimStreamControls() {
+		if (this.source === 'radio') {
+			this.setPlaybackHandlers(
+				() => this.resumeStream(),
+				() => this.pauseStream(),
+				null,
+			);
 		}
 	},
 

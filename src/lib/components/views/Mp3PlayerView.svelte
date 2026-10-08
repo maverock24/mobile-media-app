@@ -635,15 +635,19 @@
 	}
 
 	// ── Always push per-deck state to the engine so the MiniPlayer can
-	//     show the correct track/time/progress for whichever deck is active,
-	//     even when both decks play simultaneously. The global `item`/
-	//     `currentTime`/`duration` are also set when this deck is the active
-	//     one (and podcast/radio aren't playing), so MediaSession and native
+	//     show the correct track/time/progress for whichever deck's sub-tab is
+	//     visible, even when both decks play simultaneously. The global `item`/
+	//     `currentTime`/`duration` are also set when this deck is the visible one
+	//     and no other non-music source is playing, so MediaSession and native
 	//     controls still work. ──
 	$effect(() => {
-		const isActiveDeck = mediaEngine.activeMusicDeck === deck;
-		const isMusicTab = activeTab === 'music';
-		const musicOwnsDisplay = !mediaEngine.podcastPlaying && !mediaEngine.radioPlaying;
+		const isMusicView = mediaEngine.activeView === (deck === 'A' ? 'music:A' : 'music:B');
+		// A deck only owns the engine's global now-playing state while no other
+		// non-music source is playing — Deck B can mix with podcast/radio/YouTube,
+		// and those sources must keep the MiniPlayer + MediaSession on their own
+		// view. The deck's own metadata lives in deckAItem/deckBItem.
+		const musicOwnsDisplay = !mediaEngine.podcastPlaying && !mediaEngine.radioPlaying
+			&& !mediaEngine.youtubePlaying && !mediaEngine.mixerPlaying;
 
 		// Always push per-deck metadata — even when NOT the active deck —
 		// so that deck-switching in the MiniPlayer immediately shows the
@@ -687,10 +691,13 @@
 			mediaEngine.musicPlayingB = isPlaying;
 		}
 
-		// When this deck is active + music tab + music owns the display,
-		// also push to global state so that MediaSession + native controls work.
-		if (isActiveDeck && isMusicTab && musicOwnsDisplay) {
-			claimMusicControls();
+		// The transport follows the source on screen: only the deck whose sub-tab
+		// is visible claims the engine's play/pause/skip handlers.
+		if (isMusicView) claimMusicControls();
+
+		// When this deck is the visible sub-tab and music owns the display, also
+		// push to global state so that MediaSession + native controls work.
+		if (isMusicView && musicOwnsDisplay) {
 			if (currentTrack) {
 				mediaEngine.setNowPlaying({
 					id:         String(currentTrack.id),
@@ -723,8 +730,8 @@
 			mediaEngine.deckBCurrentTime = time;
 			mediaEngine.deckBDuration = total;
 		}
-		// Only push global progress when music owns the MiniPlayer display.
-		if (mediaEngine.activeMusicDeck === deck && mediaEngine.source === 'music') {
+		// Only push global progress when this deck owns the MiniPlayer display.
+		if (mediaEngine.activeView === (deck === 'A' ? 'music:A' : 'music:B') && mediaEngine.source === 'music') {
 			mediaEngine.updateTime(time, total);
 		}
 	});
@@ -749,8 +756,15 @@
 		} else {
 			mediaEngine.deckBItem = item;
 		}
-		mediaEngine.setNowPlaying(item, 'music');
-		claimMusicControls();
+		const isMusicView = mediaEngine.activeView === (deck === 'A' ? 'music:A' : 'music:B');
+		const musicOwnsDisplay = !mediaEngine.podcastPlaying && !mediaEngine.radioPlaying
+			&& !mediaEngine.youtubePlaying && !mediaEngine.mixerPlaying;
+		// Only this deck's own view may overwrite the global now-playing state; a
+		// source already playing alongside Deck B (podcast/radio/YouTube) keeps it.
+		if (isMusicView && musicOwnsDisplay) {
+			mediaEngine.setNowPlaying(item, 'music');
+		}
+		if (isMusicView) claimMusicControls();
 	}
 
 	// ── reload browse entries when path or folder version changes ──

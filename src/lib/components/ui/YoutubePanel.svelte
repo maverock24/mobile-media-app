@@ -107,6 +107,15 @@
 		stopYoutubePlayback();
 	});
 
+	// The MiniPlayer's transport follows the visible sub-tab: while the YouTube
+	// panel is on screen it owns play/pause/seek/next/prev, so switching to it
+	// from a playing Deck B hands the controls back to YouTube.
+	$effect(() => {
+		if (mediaEngine.activeView === 'music:youtube' && currentItem) {
+			claimEngineControls();
+		}
+	});
+
 	/** Retry play() on AbortError — the Android WebView aborts when a remote src
 	 *  is set and played too quickly. Mirrors PodcastView's safePlay. */
 	function safePlay(onFailure?: () => void) {

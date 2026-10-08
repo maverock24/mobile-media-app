@@ -326,6 +326,15 @@
 		mediaEngine.podcastPlaying = false;
 	});
 
+	$effect(() => {
+		// Transport follows the visible tab: while the podcast view is on screen it
+		// owns the MiniPlayer controls even if Deck B is also playing in the
+		// background.
+		if (mediaEngine.activeView === 'podcasts' && currentEpisode) {
+			podcastPlayer.claimPodcastControls();
+		}
+	});
+
 	$effect(() => { return () => { audioEl?.pause(); }; });
 
 	// iTunes result already-subscribed check
