@@ -112,6 +112,34 @@ describe('audio exclusivity (claimAudio)', () => {
 		expect(first).not.toHaveBeenCalled();
 		expect(second).toHaveBeenCalledTimes(1);
 	});
+
+	it('Deck B mixes with every source, both ways', () => {
+		const stops = {
+			musicA: vi.fn(), musicB: vi.fn(), podcast: vi.fn(),
+			radio: vi.fn(), youtube: vi.fn(), mixer: vi.fn(),
+		};
+		registerAudioSource('musicA', stops.musicA);
+		registerAudioSource('musicB', stops.musicB);
+		registerAudioSource('podcast', stops.podcast);
+		registerAudioSource('radio', stops.radio);
+		registerAudioSource('youtube', stops.youtube);
+		registerAudioSource('mixer', stops.mixer);
+
+		// Starting Deck B stops nothing.
+		claimAudio('musicB');
+		expect(stops.musicA).not.toHaveBeenCalled();
+		expect(stops.podcast).not.toHaveBeenCalled();
+		expect(stops.radio).not.toHaveBeenCalled();
+		expect(stops.youtube).not.toHaveBeenCalled();
+		expect(stops.mixer).not.toHaveBeenCalled();
+
+		// Starting any other source leaves Deck B playing.
+		for (const id of ['musicA', 'podcast', 'radio', 'youtube', 'mixer'] as const) {
+			stops.musicB.mockClear();
+			claimAudio(id);
+			expect(stops.musicB, `claimAudio(${id}) must not stop Deck B`).not.toHaveBeenCalled();
+		}
+	});
 });
 
 describe('transport fallbacks', () => {

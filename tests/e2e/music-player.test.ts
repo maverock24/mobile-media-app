@@ -112,6 +112,16 @@ async function installDeckAudioProbe(page: Page) {
 	});
 }
 
+/** True while some deck-owned (detached) audio element whose src contains
+ *  `fragment` is playing — used for the engine-owned radio stream, which has a
+ *  real URL rather than a blob name. */
+async function anyPlayingSrcIncludes(page: Page, fragment: string): Promise<boolean> {
+	return page.evaluate((wanted) => {
+		const w = window as unknown as DeckAudioProbe;
+		return (w.__deckAudios ?? []).some((el) => el.src.includes(wanted) && !el.paused);
+	}, fragment);
+}
+
 /** File names loaded into the deck elements that are currently playing. */
 async function playingDeckFiles(page: Page): Promise<string[]> {
 	return page.evaluate(() => {
@@ -486,6 +496,67 @@ test.describe('Music deck playback (player module)', () => {
 			// ... and the music deck's element is paused, even though it owns no
 			// DOM element that a test could inspect directly.
 			await expect(playingIndicator(page)).toHaveCount(0);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test('Deck B mixes with the radio, and each view shows its own source', async ({ page }) => {
+		// Deck B is the mixing deck: starting the radio must not stop it, and the
+		// MiniPlayer must show (and control) whichever source's view is on screen.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-deck-b-'));
+		createMinimalMp3('Beta 1.mp3', dir);
+		createMinimalMp3('Beta 2.mp3', dir);
+
+		await page.route('https://stream.live.vc.bbcmedia.co.uk/**', (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: 'audio/mpeg',
+				body: fs.readFileSync(SILENCE_MP3),
+			})
+		);
+
+		try {
+			// Repeat-one keeps the 1 s fixture on Beta 1 while the radio plays.
+			await page.addInitScript(() => {
+				localStorage.setItem('music-settings', JSON.stringify({ isRepeat: true }));
+			});
+			await installDeckAudioProbe(page);
+			await page.goto('/');
+			await waitForHydration(page);
+
+			// Deck B: two tracks, first playing.
+			await page.getByRole('tab', { name: 'B', exact: true }).click();
+			await loadDeckBFolder(page, dir);
+			await page.getByRole('button', { name: /Play Beta 1/ }).click();
+			const mini = miniPlayer(page);
+			await expect(mini).toContainText('Beta 1', { timeout: 10_000 });
+			await expect.poll(() => playingDeckFiles(page), { timeout: 10_000 })
+				.toContain('Beta 1.mp3');
+
+			// Start the radio: it claims audio, but Deck B must keep playing.
+			await goToTab(page, 'Radio');
+			await page.getByRole('button', { name: 'Search', exact: true }).first().click();
+			await expect(page.getByText('Featured Stations')).toBeVisible();
+			await page.locator('button').filter({ hasText: 'BBC Radio 4' }).first().click();
+
+			// The radio tab shows the radio in the MiniPlayer...
+			await expect(mini).toContainText('BBC Radio', { timeout: 10_000 });
+			// ...while Deck B's element is still playing underneath it.
+			await expect.poll(() => playingDeckFiles(page), { timeout: 10_000 })
+				.toContain('Beta 1.mp3');
+
+			// Back to the B sub-tab: the MiniPlayer shows Deck B again and its
+			// transport controls Deck B, without touching the radio.
+			await goToTab(page, 'Music');
+			await page.getByRole('tab', { name: 'B', exact: true }).click();
+			await expect(mini).toContainText('Beta 1', { timeout: 10_000 });
+			await mini.getByRole('button', { name: 'Pause', exact: true }).click();
+
+			await expect.poll(() => deckElementState(page, 'Beta 1.mp3'), { timeout: 5_000 })
+				.toEqual({ paused: true, loaded: true });
+			await expect.poll(() => anyPlayingSrcIncludes(page, 'bbcmedia'), { timeout: 5_000 })
+				.toBe(true);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
