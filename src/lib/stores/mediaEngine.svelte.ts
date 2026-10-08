@@ -23,8 +23,10 @@ import { MediaControls } from '$lib/native/media-controls';
 import { addToast } from './toastStore.svelte';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Audio exclusivity — only one source (music / podcast / radio / youtube /
-// mixer) plays at a time. Views register a stop-callback; calling claimAudio
+// Audio exclusivity — one source (music / podcast / radio / youtube / mixer)
+// plays at a time, with one exception: Deck B is a mixing deck. It layers onto
+// whatever is already playing and no source stops it, so B + any other source
+// is always two-way legal. Views register a stop-callback; calling claimAudio
 // pauses the others. Radio is special-cased: its stream lives in _streamAudio
 // (below), which claimAudio tears down directly for non-radio claims. YouTube
 // is NOT engine-owned — YoutubePanel drives its own <audio> element and reports
@@ -41,10 +43,9 @@ export function registerAudioSource(id: AudioSourceId, stopFn: () => void): void
 export function claimAudio(id: AudioSourceId): void {
 	for (const other of Object.keys(_stopFns) as AudioSourceId[]) {
 		if (other === id) continue;
-		// Both music decks can play simultaneously — don't stop the sibling deck.
-		if ((id === 'musicA' || id === 'musicB') && (other === 'musicA' || other === 'musicB')) continue;
-		// Deck B can mix with podcast/radio — don't stop them when B starts.
-		if (id === 'musicB' && (other === 'podcast' || other === 'radio')) continue;
+		// Deck B is the mixing deck: it never stops another source, and no source
+		// stops it. Every other combination stays exclusive.
+		if (id === 'musicB' || other === 'musicB') continue;
 		_stopFns[other]?.();
 	}
 	// Stop any active live stream unless this is a radio or deck-B claim —
@@ -188,30 +189,32 @@ export const mediaEngine = $state<NowPlayingState & {
 	_onNext: null,
 	_onPrev: null,
 
-	/** Last-resort pause fallback. Radio is engine-owned (_streamAudio); other
-	 *  sources own their own <audio> element and MUST register a _onPause handler.
-	 *  In dev, a missing handler for a non-radio source logs a warning so stale
-	 *  transport wiring surfaces immediately instead of silently no-op'ing. */
+	/** Pause the active transport. The registered `_onPause` handler is the source
+	 *  currently on screen (which may be Deck B while the radio stays in the
+	 *  background), so it takes priority. The engine-owned radio stream is the
+	 *  fallback for when no source has claimed the transport. In dev, a missing
+	 *  handler for a non-radio source logs a warning so stale wiring surfaces. */
 	pause() {
 		markUserPaused();
+		if (this._onPause) { this._onPause(); return; }
 		if (this.source === 'radio' && _streamAudio) {
 			_streamAudio.pause();
 			this.radioPlaying = false;
 			return;
 		}
-		if (this._onPause) { this._onPause(); return; }
 		if (import.meta.env && import.meta.env.DEV) {
 			console.warn('[mediaEngine] pause() with no handler for source', this.source);
 		}
 	},
 
-	/** Last-resort resume fallback. Radio only; other sources need _onPlay. */
+	/** Resume the active transport, preferring the registered `_onPlay` handler
+	 *  (the source on screen) over the engine-owned radio stream fallback. */
 	resume() {
+		if (this._onPlay) { this._onPlay(); return; }
 		if (this.source === 'radio' && _streamAudio) {
 			resumeStreamAudio(this);
 			return;
 		}
-		if (this._onPlay) { this._onPlay(); return; }
 		if (import.meta.env && import.meta.env.DEV) {
 			console.warn('[mediaEngine] resume() with no handler for source', this.source);
 		}
