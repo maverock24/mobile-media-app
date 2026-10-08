@@ -588,4 +588,23 @@ describe('player — URL cleanup', () => {
 
 		expect(cleanup).toHaveBeenCalled();
 	});
+
+	it('releases a large hydrated queue in linear time', async () => {
+		// The deck hydrates its queue from the whole library at startup
+		// (Mp3PlayerView's hydrateTracksFromLibrary), and every play()/clear()
+		// releases it. Mapping the array once per index made that O(n^2) and froze
+		// the UI for minutes on a big folder. Guard the linear path: the old form
+		// does not finish 10k tracks inside the suite's timeout.
+		const count = 10_000;
+		const tracks = Array.from({ length: count }, (_, i) => mkSrc(`t${i}.mp3`, `t${i}`));
+		const { player, state } = makePlayer();
+		player.load(tracks);
+
+		const startedAt = performance.now();
+		await player.play(tracks, 0);
+		const elapsedMs = performance.now() - startedAt;
+
+		expect(state.tracks).toHaveLength(count);
+		expect(elapsedMs).toBeLessThan(3000);
+	});
 });

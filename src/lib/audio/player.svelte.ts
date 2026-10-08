@@ -260,14 +260,27 @@ export function createPlayer(opts: PlayerOptions): Player {
 
 	function releaseUrl(index: number) {
 		const track = state.tracks[index];
-		if (track?.cleanup) { try { track.cleanup(); } catch { /* noop */ } }
-		if (track) {
+		if (!track) return;
+		if (track.cleanup) { try { track.cleanup(); } catch { /* noop */ } }
+		if (track.url || track.cleanup) {
 			state.tracks = state.tracks.map((t, i) => (i === index ? { ...t, url: '', cleanup: undefined } : t));
 		}
 	}
 
+	/** Release every queued URL in a single pass. Mapping per index is O(n^2),
+	 *  and the deck hydrates its queue from the whole library at startup (see
+	 *  Mp3PlayerView's hydrateTracksFromLibrary), so `play()`/`clear()` on a large
+	 *  folder blocked the main thread for minutes. */
 	function revokeAll() {
-		for (let i = 0; i < state.tracks.length; i++) releaseUrl(i);
+		if (state.tracks.length === 0) return;
+		let changed = false;
+		const next = state.tracks.map((t) => {
+			if (!t.url && !t.cleanup) return t;
+			if (t.cleanup) { try { t.cleanup(); } catch { /* noop */ } }
+			changed = true;
+			return { ...t, url: '', cleanup: undefined };
+		});
+		if (changed) state.tracks = next;
 	}
 
 	// ── queue ─────────────────────────────────────────────────────────────────
