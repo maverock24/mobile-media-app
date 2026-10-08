@@ -45,7 +45,8 @@
 		type YoutubeQueueItem,
 	} from '$lib/youtube/queue';
 	import { musicFavorites } from '$lib/stores/musicView.svelte';
-	import { ChevronLeft, Loader2, Play, Search, Star, X, Youtube } from 'lucide-svelte';
+	import { saveYoutubeItemToMp3, type SaveProgress } from '$lib/youtube/save';
+	import { ChevronLeft, Download, Loader2, Play, Search, Star, X, Youtube } from 'lucide-svelte';
 
 	const isNativeApp = Capacitor.isNativePlatform();
 
@@ -74,6 +75,24 @@
 	let currentTime = $state(0);
 	let duration    = $state(0);
 	let resolvingId: string | null = $state(null);
+
+	// MP3 save state: which row is saving and how far the pipeline is.
+	let savingId: string | null = $state(null);
+	let saveProgress = $state<SaveProgress | null>(null);
+	const SAVE_PHASE_LABELS: Record<SaveProgress['phase'], string> = {
+		picking: 'Choosing folder',
+		resolving: 'Resolving stream',
+		downloading: 'Downloading',
+		encoding: 'Encoding MP3',
+		saving: 'Saving file'
+	};
+	const saveLabel = $derived.by(() => {
+		if (!saveProgress) return '';
+		const label = SAVE_PHASE_LABELS[saveProgress.phase];
+		return saveProgress.ratio != null
+			? `${label} ${Math.round(saveProgress.ratio * 100)}%`
+			: label;
+	});
 
 	// ── Derived ──────────────────────────────────────────────────
 	const youtubeFavorites = $derived(
@@ -393,6 +412,28 @@
 		return youtubeFavorites.some((item) => item.videoId === videoId);
 	}
 
+	// ── Save as MP3 ──────────────────────────────────────────────
+	async function saveItem(item: YoutubeQueueItem) {
+		if (savingId !== null) return;
+		savingId = item.videoId;
+		saveProgress = { phase: 'picking', ratio: null };
+		try {
+			await saveYoutubeItemToMp3(item, {
+				onProgress: (progress) => { saveProgress = progress; }
+			});
+			addToast({ message: `Saved "${item.title}" as MP3.`, type: 'info' });
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			// A cancelled folder picker is not an error.
+			if (!/cancel/i.test(message)) {
+				addToast({ message: `Could not save MP3: ${message}`, type: 'error' });
+			}
+		} finally {
+			savingId = null;
+			saveProgress = null;
+		}
+	}
+
 	// ── Transport ────────────────────────────────────────────────
 	/**
 	 * Start or restart playback on the user's behalf.
@@ -564,6 +605,10 @@
 		<p class="text-xs text-destructive px-3 py-2 shrink-0">{error}</p>
 	{/if}
 
+	{#if savingId}
+		<p class="text-[11px] text-muted-foreground px-3 py-1.5 border-b shrink-0">{saveLabel}…</p>
+	{/if}
+
 	<!-- List -->
 	<div class="flex-1 min-h-0 overflow-y-auto">
 		{#if visibleList.length === 0}
@@ -616,6 +661,21 @@
 							</p>
 						</div>
 					</button>
+					<Button
+						variant="ghost"
+						size="icon"
+						class="h-9 w-9 shrink-0 text-muted-foreground"
+						onclick={() => saveItem(item)}
+						disabled={!isNativeApp || savingId !== null}
+						aria-label={`Save ${item.title} as MP3`}
+						title={isNativeApp ? 'Save as MP3' : 'Saving to MP3 works in the Android app'}
+					>
+						{#if savingId === item.videoId}
+							<Loader2 class="w-4 h-4 animate-spin" />
+						{:else}
+							<Download class="w-4 h-4" />
+						{/if}
+					</Button>
 					<Button
 						variant="ghost"
 						size="icon"

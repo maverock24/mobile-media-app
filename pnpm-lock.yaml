@@ -38,6 +38,9 @@ importers:
       tailwind-merge:
         specifier: ^3.5.0
         version: 3.5.0
+      wasm-media-encoders:
+        specifier: 0.7.0
+        version: 0.7.0
       youtubei.js:
         specifier: ^18.1.0
         version: 18.1.0
@@ -6409,6 +6412,10 @@ packages:
   w3c-xmlserializer@5.0.0:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
     engines: {node: '>=18'}
+
+  wasm-media-encoders@0.7.0:
+    resolution: {integrity: sha512-Sp4wUasgxOK/IFfNhpon6LQQgYGwtpxyV4isjGIe1rvhnJL3w2KYr4f+CdqDNtGPDcgCDRY+uBanVfSx6Si0WQ==}
+    engines: {node: '>= 10'}
 
   wcwidth@1.0.1:
     resolution: {integrity: sha512-XHPEwS0q6TaxcvG85+8EYkbiCux2XtWG2mkc47Ng2A77BQu9+DqIOJldST4HgPkuea7dvKSj5VgX3P1d4rW8Tg==}
@@ -13518,6 +13525,10 @@ snapshots:
   w3c-xmlserializer@5.0.0:
     dependencies:
       xml-name-validator: 5.0.0
+
+  wasm-media-encoders@0.7.0:
+    dependencies:
+      '@swc/helpers': 0.5.19
 
   wcwidth@1.0.1:
     dependencies:
