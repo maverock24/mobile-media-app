@@ -69,7 +69,7 @@
 	// Transport follows the visible tab: Deck B can mix with radio, so when the
 	// radio view is on screen it re-claims the MiniPlayer controls from the deck.
 	$effect(() => {
-		if (mediaEngine.activeView === 'radio' && currentStation) {
+		if (mediaEngine.displayedSource === 'radio' && currentStation) {
 			mediaEngine.claimStreamControls();
 		}
 	});

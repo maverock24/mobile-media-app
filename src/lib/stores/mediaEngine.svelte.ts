@@ -101,6 +101,8 @@ export interface NowPlayingState {
 	 *  clobber another source's playing state (the Android WebView race that
 	 *  caused radio/podcast/MP3 to stop immediately after starting). */
 	readonly isPlaying: boolean;
+	/** Derived: which source the MiniPlayer should show (see the getter). */
+	readonly displayedSource: 'A' | 'B' | 'youtube' | 'podcast' | 'radio' | null;
 	currentTime: number;    // seconds
 	duration:    number;    // seconds
 	source:      MediaSource | null;
@@ -200,6 +202,48 @@ export const mediaEngine = $state<NowPlayingState & {
 	deckBBuffering:   false,
 	get isPlaying(): boolean {
 		return this.musicPlayingA || this.musicPlayingB || this.podcastPlaying || this.radioPlaying || this.youtubePlaying || this.mixerPlaying;
+	},
+	/** The source the MiniPlayer should mirror. The visible view's own source wins
+	 *  while it is playing (so pausing the deck you watch does not jump away);
+	 *  otherwise a non-deck source that owns the primary state and is playing
+	 *  (YouTube / podcast / radio); otherwise the first other source that plays;
+	 *  otherwise the view's own source (paused). */
+	get displayedSource(): 'A' | 'B' | 'youtube' | 'podcast' | 'radio' | null {
+		const view = this.activeView;
+		const viewSource: 'A' | 'B' | 'youtube' | 'podcast' | 'radio' | null =
+			view === 'music:A' ? 'A'
+			: view === 'music:B' ? 'B'
+			: view === 'music:youtube' ? 'youtube'
+			: view === 'podcasts' ? 'podcast'
+			: view === 'radio' ? 'radio'
+			: null;
+
+		const playing = (source: 'A' | 'B' | 'youtube' | 'podcast' | 'radio'): boolean =>
+			source === 'A' ? this.musicPlayingA
+			: source === 'B' ? this.musicPlayingB
+			: source === 'youtube' ? this.youtubePlaying
+			: source === 'podcast' ? this.podcastPlaying
+			: this.radioPlaying;
+
+		if (viewSource && playing(viewSource)) return viewSource;
+
+		const primary: 'youtube' | 'podcast' | 'radio' | null =
+			this.source === 'youtube' ? 'youtube'
+			: this.source === 'podcast' ? 'podcast'
+			: this.source === 'radio' ? 'radio'
+			: null;
+		if (primary && playing(primary)) return primary;
+
+		// A deck view while a deck owns the primary state: keep the view's deck
+		// even when paused, so pausing the deck on screen does not jump the
+		// MiniPlayer to the other deck.
+		if ((viewSource === 'A' || viewSource === 'B') && this.source === 'music') return viewSource;
+
+		for (const source of ['youtube', 'B', 'A', 'podcast', 'radio'] as const) {
+			if (source !== viewSource && playing(source)) return source;
+		}
+
+		return viewSource;
 	},
 	currentTime: 0,
 	duration:    0,

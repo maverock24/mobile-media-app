@@ -21,6 +21,9 @@ import { fileURLToPath } from 'url';
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const SILENCE_MP3 = path.join(FIXTURES_DIR, 'silence.mp3');
+/** A 30 s silent encode for tests that keep a routed radio stream alive across
+ *  several tab switches (the 1 s fixture ends and stops the stream mid-test). */
+const SILENCE_30S_MP3 = path.join(FIXTURES_DIR, 'silence-30s.mp3');
 
 /** A real 1 s silent LAME encode — short enough to auto-advance quickly. */
 function createMinimalMp3(name: string, dir: string): string {
@@ -512,7 +515,7 @@ test.describe('Music deck playback (player module)', () => {
 			route.fulfill({
 				status: 200,
 				contentType: 'audio/mpeg',
-				body: fs.readFileSync(SILENCE_MP3),
+				body: fs.readFileSync(SILENCE_30S_MP3),
 			})
 		);
 
@@ -542,9 +545,23 @@ test.describe('Music deck playback (player module)', () => {
 
 			// The radio tab shows the radio in the MiniPlayer...
 			await expect(mini).toContainText('BBC Radio', { timeout: 10_000 });
+			// ...with a Pause button, since the radio is the source on screen.
+			await expect(mini.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
 			// ...while Deck B's element is still playing underneath it.
 			await expect.poll(() => playingDeckFiles(page), { timeout: 10_000 })
 				.toContain('Beta 1.mp3');
+
+			// Podcasts tab with no podcast loaded: the MiniPlayer mirrors the audible
+			// source (radio) with a Pause button, not the idle view's Play button.
+			await goToTab(page, 'Podcasts');
+			await expect(mini).toContainText('BBC Radio', { timeout: 10_000 });
+			await expect(mini.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+
+			// A sub-tab with deck A idle: same rule, the radio stays shown with Pause.
+			await goToTab(page, 'Music');
+			await page.getByRole('tab', { name: 'A', exact: true }).click();
+			await expect(mini).toContainText('BBC Radio', { timeout: 10_000 });
+			await expect(mini.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
 
 			// Back to the B sub-tab: the MiniPlayer shows Deck B again and its
 			// transport controls Deck B, without touching the radio.

@@ -641,7 +641,7 @@
 	//     and no other non-music source is playing, so MediaSession and native
 	//     controls still work. ──
 	$effect(() => {
-		const isMusicView = mediaEngine.activeView === (deck === 'A' ? 'music:A' : 'music:B');
+		const isMusicView = mediaEngine.displayedSource === (deck === 'A' ? 'A' : 'B');
 		// A deck only owns the engine's global now-playing state while no other
 		// non-music source is playing — Deck B can mix with podcast/radio/YouTube,
 		// and those sources must keep the MiniPlayer + MediaSession on their own
@@ -731,7 +731,7 @@
 			mediaEngine.deckBDuration = total;
 		}
 		// Only push global progress when this deck owns the MiniPlayer display.
-		if (mediaEngine.activeView === (deck === 'A' ? 'music:A' : 'music:B') && mediaEngine.source === 'music') {
+		if (mediaEngine.displayedSource === (deck === 'A' ? 'A' : 'B') && mediaEngine.source === 'music') {
 			mediaEngine.updateTime(time, total);
 		}
 	});
@@ -756,7 +756,7 @@
 		} else {
 			mediaEngine.deckBItem = item;
 		}
-		const isMusicView = mediaEngine.activeView === (deck === 'A' ? 'music:A' : 'music:B');
+		const isMusicView = mediaEngine.displayedSource === (deck === 'A' ? 'A' : 'B');
 		const musicOwnsDisplay = !mediaEngine.podcastPlaying && !mediaEngine.radioPlaying
 			&& !mediaEngine.youtubePlaying && !mediaEngine.mixerPlaying;
 		// Only this deck's own view may overwrite the global now-playing state; a

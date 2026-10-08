@@ -111,7 +111,7 @@
 	// panel is on screen it owns play/pause/seek/next/prev, so switching to it
 	// from a playing Deck B hands the controls back to YouTube.
 	$effect(() => {
-		if (mediaEngine.activeView === 'music:youtube' && currentItem) {
+		if (mediaEngine.displayedSource === 'youtube' && currentItem) {
 			claimEngineControls();
 		}
 	});

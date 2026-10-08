@@ -27,19 +27,12 @@
 	let showSleepTimerOptions = $state(false);
 	let showMusicSpeedOptions = $state(false);
 
-	// Which source the visible view drives. `activeView` is published by
-	// +page.svelte and kept in lockstep with the A / B / YouTube sub-tabs, so the
-	// MiniPlayer shows (and controls) exactly the source on screen — even when
-	// Deck B is mixing with another playing source.
+	// Which source the MiniPlayer mirrors. `mediaEngine.displayedSource` resolves
+	// the visible view against what is actually playing, so the title and the
+	// play/pause button always describe the same source — even when Deck B mixes
+	// with another source and the view's own source is idle.
 	const displayKind = $derived.by((): 'A' | 'B' | 'youtube' | 'podcast' | 'radio' | 'global' => {
-		switch (mediaEngine.activeView) {
-			case 'music:A':       return 'A';
-			case 'music:B':       return 'B';
-			case 'music:youtube': return 'youtube';
-			case 'podcasts':      return 'podcast';
-			case 'radio':         return 'radio';
-			default:              return 'global';
-		}
+		return mediaEngine.displayedSource ?? 'global';
 	});
 	const isDeckDisplay = $derived(displayKind === 'A' || displayKind === 'B');
 

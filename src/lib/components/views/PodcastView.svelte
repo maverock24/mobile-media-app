@@ -330,7 +330,7 @@
 		// Transport follows the visible tab: while the podcast view is on screen it
 		// owns the MiniPlayer controls even if Deck B is also playing in the
 		// background.
-		if (mediaEngine.activeView === 'podcasts' && currentEpisode) {
+		if (mediaEngine.displayedSource === 'podcast' && currentEpisode) {
 			podcastPlayer.claimPodcastControls();
 		}
 	});

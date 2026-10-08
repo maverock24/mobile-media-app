@@ -142,6 +142,54 @@ describe('audio exclusivity (claimAudio)', () => {
 	});
 });
 
+describe('displayedSource', () => {
+	function resetDisplay() {
+		mediaEngine.clear();
+		mediaEngine.deckAItem = null;
+		mediaEngine.deckBItem = null;
+		mediaEngine.activeMusicDeck = 'A';
+		mediaEngine.activeView = 'music:A';
+	}
+
+	it('shows the view source while it plays', () => {
+		resetDisplay();
+		mediaEngine.musicPlayingA = true;
+		expect(mediaEngine.displayedSource).toBe('A');
+	});
+
+	it('falls back to a playing non-deck source when the view source is idle', () => {
+		resetDisplay();
+		mediaEngine.activeView = 'podcasts';
+		mediaEngine.source = 'youtube';
+		mediaEngine.youtubePlaying = true;
+		expect(mediaEngine.displayedSource).toBe('youtube');
+	});
+
+	it('keeps the watched deck while a deck owns the primary state', () => {
+		resetDisplay();
+		mediaEngine.activeView = 'music:A';
+		mediaEngine.source = 'music';
+		mediaEngine.musicPlayingB = true;
+		expect(mediaEngine.displayedSource).toBe('A');
+	});
+
+	it('shows B on the B sub-tab while B plays even when YouTube owns the primary state', () => {
+		resetDisplay();
+		mediaEngine.activeView = 'music:B';
+		mediaEngine.activeMusicDeck = 'B';
+		mediaEngine.source = 'youtube';
+		mediaEngine.youtubePlaying = true;
+		mediaEngine.musicPlayingB = true;
+		expect(mediaEngine.displayedSource).toBe('B');
+	});
+
+	it('shows the view source when nothing is playing', () => {
+		resetDisplay();
+		mediaEngine.activeView = 'radio';
+		expect(mediaEngine.displayedSource).toBe('radio');
+	});
+});
+
 describe('transport fallbacks', () => {
 	it('next/prev delegate to registered _onNext/_onPrev', () => {
 		const onNext = vi.fn();
