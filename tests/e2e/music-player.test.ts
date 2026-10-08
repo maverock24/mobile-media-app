@@ -363,6 +363,13 @@ test.describe('Music deck playback (player module)', () => {
 			await expectDeckShows(page, 'Alpha 2', 'Alpha 2.mp3');
 			await page.getByRole('tab', { name: 'B', exact: true }).click();
 			await expectDeckShows(page, 'Beta 4', 'Beta 4.mp3');
+
+			// Both decks still play. On a non-music tab the MiniPlayer shows Deck A
+			// (Deck A outranks Deck B there), with a Pause button since it plays.
+			await goToTab(page, 'Podcasts');
+			await expect(miniPlayer(page)).toContainText('Alpha 2', { timeout: 10_000 });
+			await expect(miniPlayer(page)).not.toContainText('Beta 4');
+			await expect(miniPlayer(page).getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
 		} finally {
 			fs.rmSync(dirA, { recursive: true, force: true });
 			fs.rmSync(dirB, { recursive: true, force: true });

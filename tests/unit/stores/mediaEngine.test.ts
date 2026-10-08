@@ -188,6 +188,15 @@ describe('displayedSource', () => {
 		mediaEngine.activeView = 'radio';
 		expect(mediaEngine.displayedSource).toBe('radio');
 	});
+
+	it('prefers Deck A over Deck B on a non-music tab when both decks play', () => {
+		resetDisplay();
+		mediaEngine.activeView = 'podcasts';
+		mediaEngine.source = 'music';
+		mediaEngine.musicPlayingA = true;
+		mediaEngine.musicPlayingB = true;
+		expect(mediaEngine.displayedSource).toBe('A');
+	});
 });
 
 describe('transport fallbacks', () => {

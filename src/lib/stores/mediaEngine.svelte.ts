@@ -239,7 +239,9 @@ export const mediaEngine = $state<NowPlayingState & {
 		// MiniPlayer to the other deck.
 		if ((viewSource === 'A' || viewSource === 'B') && this.source === 'music') return viewSource;
 
-		for (const source of ['youtube', 'B', 'A', 'podcast', 'radio'] as const) {
+		// Deck A outranks Deck B here: with both decks playing on a non-music tab,
+		// the MiniPlayer shows Deck A.
+		for (const source of ['youtube', 'A', 'B', 'podcast', 'radio'] as const) {
 			if (source !== viewSource && playing(source)) return source;
 		}
 
