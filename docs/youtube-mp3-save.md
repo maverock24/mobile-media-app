@@ -23,8 +23,10 @@ Save a YouTube track from the panel's list to an MP3 file on the device.
    quality 2. The encoder is imported dynamically so its WASM stays out of the
    startup bundle, and PCM is fed in 1152×32-sample chunks with a `setTimeout(0)`
    yield between chunks so the UI keeps painting. Progress is reported per chunk.
-6. **Write** — `DirectoryReader.writeFile` writes the base64 payload into the
-   SAF tree (`rememberTreeUri` persists the permission first).
+6. **Write** — `DirectoryReader.appendFileChunk` in 256 KB chunks (the first
+   creates the file, the rest append). One base64 string of a whole song over
+   the Capacitor bridge crashed the app, so the write is chunked like the
+   download. `rememberTreeUri` persists the SAF permission first.
 
 ## Where it lives in the UI
 
@@ -44,3 +46,11 @@ SAF `writeFile` need a real device pass.
 `wasm-media-encoders` (MIT) inlines its ~130 KB LAME WASM as base64, so Vite
 needs no asset loader. Do not swap it for `lamejs`: that is pure JS and roughly
 an order of magnitude slower, which matters when re-encoding a full track.
+
+## CSP
+
+The WASM encoder only compiles if the page's `script-src` includes
+`'wasm-unsafe-eval'` (or `'unsafe-eval'`). SvelteKit's CSP is configured in
+`svelte.config.js`; removing that token makes `createMp3Encoder()` throw a CSP
+error at runtime. The mobile build's `dist-mobile/index.html` meta tag is the
+place to confirm it.

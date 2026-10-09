@@ -23,7 +23,7 @@ const config = {
 			mode: 'hash',
 			directives: {
 				'default-src': ['self'],
-				'script-src': ['self', 'https://accounts.google.com'],
+				'script-src': ['self', 'https://accounts.google.com', 'wasm-unsafe-eval'],
 				'connect-src': [
 					'self',
 					'https://www.googleapis.com',

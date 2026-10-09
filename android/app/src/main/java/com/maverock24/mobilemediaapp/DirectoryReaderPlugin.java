@@ -488,6 +488,94 @@ public class DirectoryReaderPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Append one base64 chunk to a SAF file, creating it on the first call.
+	 *
+	 * Used by the YouTube-to-MP3 save: the encoded MP3 is several megabytes, and
+	 * handing that to `writeFile` as one base64 string over the Capacitor bridge
+	 * is what crashed the app. Each call here stays small.
+	 */
+	@PluginMethod
+	public void appendFileChunk(PluginCall call) {
+		try {
+			String treeUriString = call.getString("treeUri");
+			if (treeUriString == null || treeUriString.isEmpty()) {
+				call.reject("treeUri is required.");
+				return;
+			}
+			Uri treeUri = Uri.parse(treeUriString);
+			DocumentFile root = DocumentFile.fromTreeUri(getContext(), treeUri);
+			if (root == null || !root.exists() || !root.isDirectory()) {
+				call.reject("Selected directory is not accessible.");
+				return;
+			}
+
+			DocumentFile target = root;
+			String relativePath = call.getString("path", "");
+			if (relativePath != null && !relativePath.isEmpty()) {
+				for (String segment : relativePath.split("/")) {
+					if (segment == null || segment.isEmpty()) continue;
+					DocumentFile next = target.findFile(segment);
+					if (next == null || !next.exists() || !next.isDirectory()) {
+						call.reject("Selected directory is not accessible.");
+						return;
+					}
+					target = next;
+				}
+			}
+
+			String fileName = call.getString("fileName");
+			if (fileName == null || fileName.isEmpty()) {
+				call.reject("fileName is required.");
+				return;
+			}
+			String mimeType = call.getString("mimeType", "application/octet-stream");
+			String base64Data = call.getString("data");
+			if (base64Data == null || base64Data.isEmpty()) {
+				call.reject("data is required.");
+				return;
+			}
+			boolean create = Boolean.TRUE.equals(call.getBoolean("create", false));
+
+			byte[] bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT);
+
+			DocumentFile file;
+			if (create) {
+				DocumentFile existing = target.findFile(fileName);
+				if (existing != null && existing.isFile()) {
+					existing.delete();
+				}
+				file = target.createFile(mimeType, fileName);
+			} else {
+				file = target.findFile(fileName);
+			}
+			if (file == null) {
+				call.reject("Unable to open file: " + fileName);
+				return;
+			}
+
+			// openFileDescriptor + FileOutputStream is API 19+; the two-arg
+			// openOutputStream(uri, mode) overload is API 26 and minSdk here is 24.
+			try (android.os.ParcelFileDescriptor pfd = getContext().getContentResolver()
+					.openFileDescriptor(file.getUri(), create ? "w" : "wa")) {
+				if (pfd == null) {
+					call.reject("Unable to open output stream for: " + fileName);
+					return;
+				}
+				try (java.io.OutputStream out = new java.io.FileOutputStream(pfd.getFileDescriptor())) {
+					out.write(bytes);
+					out.flush();
+				}
+			}
+
+			JSObject result = new JSObject();
+			result.put("path", file.getUri().toString());
+			call.resolve(result);
+		} catch (Exception e) {
+			call.reject("Failed to write file chunk: " + e.getMessage(), e);
+		}
+	}
+
 	// ── File management (move / copy / delete) — ADR-0002 ─────────────────────
 	private DocumentFile resolveDirectory(String treeUriString, String relativePath) {
 		if (treeUriString == null || treeUriString.isEmpty()) return null;

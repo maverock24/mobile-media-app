@@ -33,6 +33,9 @@ const MP3_VBR_QUALITY = 2;
 const BASE64_CHUNK = 8192;
 /** Bytes per range request. Keeps each base64 bridge payload well under 1 MB. */
 const RANGE_CHUNK_BYTES = 512 * 1024;
+/** Bytes per SAF write call. The encoded MP3 is several MB; one base64 string of
+ *  that size over the Capacitor bridge is what crashed the app. */
+const WRITE_CHUNK_BYTES = 256 * 1024;
 /** decodeAudioData is one blocking call with no progress; bound it so it cannot hang. */
 const DECODE_TIMEOUT_MS = 120_000;
 
@@ -133,8 +136,16 @@ export async function fetchYoutubeAudioBytes(
 		total += chunk.length;
 
 		const contentRange = headerValue(response.headers, 'content-range');
-		const totalMatch = contentRange ? /\/(\d+)\s*$/.exec(contentRange) : null;
-		if (totalMatch) totalBytes = Number(totalMatch[1]);
+		const rangeMatch = contentRange ? /bytes\s+(\d+)-(\d+)\/(\d+|\*)/.exec(contentRange) : null;
+		if (rangeMatch) {
+			const start = Number(rangeMatch[1]);
+			// Guard against a server that ignores the offset and repeats a chunk:
+			// without this the loop would grow `parts` until the app OOMs.
+			if (start !== total - chunk.length) {
+				throw new Error('Download returned an unexpected byte range.');
+			}
+			totalBytes = rangeMatch[3] === '*' ? null : Number(rangeMatch[3]);
+		}
 		onProgress?.(totalBytes ? Math.min(1, total / totalBytes) : null);
 
 		// 200 means the server ignored the Range and returned the whole body.
@@ -214,9 +225,14 @@ export async function transcodeToMp3(
 	const audioContext = new AudioContext();
 	let decoded: AudioBuffer;
 	try {
-		// decodeAudioData detaches the buffer, so hand it a copy.
+		// decodeAudioData detaches the buffer. Hand it the array's own buffer when
+		// this view covers it (the normal case) so the multi-MB payload is not
+		// copied; the caller does not need it afterwards.
+		const buffer = input.byteOffset === 0 && input.byteLength === input.buffer.byteLength
+			? input.buffer as ArrayBuffer
+			: input.slice().buffer as ArrayBuffer;
 		decoded = await withTimeout(
-			audioContext.decodeAudioData(input.slice().buffer as ArrayBuffer),
+			audioContext.decodeAudioData(buffer),
 			DECODE_TIMEOUT_MS,
 			'Audio decode timed out.',
 		);
@@ -228,6 +244,39 @@ export async function transcodeToMp3(
 
 export interface SaveYoutubeOptions {
 	onProgress?: (progress: SaveProgress) => void;
+}
+
+/**
+ * Persist the encoded MP3 into the SAF folder, one small chunk at a time.
+ * A single base64 string of a whole song over the Capacitor bridge crashed the
+ * app; 256 KB per call keeps every payload small.
+ */
+export async function writeMp3File(
+	treeUri: string,
+	fileName: string,
+	mp3: Uint8Array,
+	onProgress?: (ratio: number) => void,
+): Promise<string> {
+	try {
+		await DirectoryReader.rememberTreeUri({ treeUri });
+	} catch {
+		// A transient grant is normally enough for the immediate writes below.
+	}
+
+	let path = '';
+	for (let offset = 0; offset < mp3.length; offset += WRITE_CHUNK_BYTES) {
+		const chunk = mp3.subarray(offset, offset + WRITE_CHUNK_BYTES);
+		const result = await DirectoryReader.appendFileChunk({
+			treeUri,
+			fileName,
+			mimeType: 'audio/mpeg',
+			data: base64FromBytes(chunk),
+			create: offset === 0,
+		});
+		path = result.path;
+		onProgress?.(Math.min(1, (offset + chunk.length) / mp3.length));
+	}
+	return path;
 }
 
 /**
@@ -256,17 +305,11 @@ export async function saveYoutubeItemToMp3(
 		onProgress?.({ phase: 'encoding', ratio });
 	});
 
-	onProgress?.({ phase: 'saving', ratio: null });
-	try {
-		await DirectoryReader.rememberTreeUri({ treeUri });
-	} catch {
-		// A transient grant is normally enough for the immediate write below.
-	}
-	const { path } = await DirectoryReader.writeFile({
+	onProgress?.({ phase: 'saving', ratio: 0 });
+	return writeMp3File(
 		treeUri,
-		fileName: sanitizeMp3FileName(source.title || item.title),
-		mimeType: 'audio/mpeg',
-		data: base64FromBytes(mp3Bytes),
-	});
-	return path;
+		sanitizeMp3FileName(source.title || item.title),
+		mp3Bytes,
+		(ratio) => onProgress?.({ phase: 'saving', ratio }),
+	);
 }

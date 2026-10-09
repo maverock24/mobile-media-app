@@ -14,13 +14,23 @@ vi.mock('@capacitor/core', () => ({
 	registerPlugin: () => ({}),
 }));
 
+vi.mock('$lib/native/directory-reader', () => ({
+	DirectoryReader: {
+		rememberTreeUri: vi.fn(async () => {}),
+		appendFileChunk: vi.fn(async () => ({ path: 'content://tree/Song.mp3' })),
+		writeFile: vi.fn(),
+	},
+}));
+
 import { CapacitorHttp } from '@capacitor/core';
+import { DirectoryReader } from '$lib/native/directory-reader';
 import {
 	sanitizeMp3FileName,
 	base64FromBytes,
 	bytesFromBase64,
 	encodeAudioBufferToMp3,
 	fetchYoutubeAudioBytes,
+	writeMp3File,
 } from '$lib/youtube/save';
 
 const RANGE_CHUNK_BYTES = 512 * 1024;
@@ -120,6 +130,27 @@ describe('fetchYoutubeAudioBytes', () => {
 
 		expect(bytes).toEqual(full);
 		expect(ranges).toEqual([`bytes=0-${RANGE_CHUNK_BYTES - 1}`, `bytes=${RANGE_CHUNK_BYTES}-${RANGE_CHUNK_BYTES + RANGE_CHUNK_BYTES - 1}`]);
+		expect(ratios.at(-1)).toBe(1);
+	});
+});
+
+describe('writeMp3File', () => {
+	it('writes the MP3 in bounded chunks, creating the file on the first call', async () => {
+		const append = vi.mocked(DirectoryReader.appendFileChunk);
+		append.mockClear();
+		const writeChunk = 256 * 1024;
+		const mp3 = new Uint8Array(writeChunk * 2 + 10);
+		const ratios: number[] = [];
+
+		await writeMp3File('content://tree', 'Song.mp3', mp3, (ratio) => ratios.push(ratio));
+
+		expect(append).toHaveBeenCalledTimes(3);
+		expect(append.mock.calls[0][0].create).toBe(true);
+		expect(append.mock.calls[1][0].create).toBe(false);
+		expect(append.mock.calls[0][0].fileName).toBe('Song.mp3');
+		// Every bridge payload is small enough to survive.
+		expect(append.mock.calls[0][0].data.length).toBeLessThan(400_000);
+		expect(bytesFromBase64(append.mock.calls[0][0].data).length).toBe(writeChunk);
 		expect(ratios.at(-1)).toBe(1);
 	});
 });
