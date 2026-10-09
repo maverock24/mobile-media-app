@@ -20,6 +20,7 @@
 	} from '$lib/stores/runtimeDiagnostics.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { closeYoutubePanel, openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
+	import { takeCrashedSavePhase } from '$lib/youtube/saveMarker';
 	import { Music, Mic2, Radio, Cloud, Settings2, Youtube } from 'lucide-svelte';
 	import { checkForAndroidUpdate } from '$lib/utils/androidUpdate';
 
@@ -101,6 +102,16 @@
 				autoDismissMs: 5000,
 			});
 			sessionStorage.setItem(RUNTIME_ERROR_NOTICE_KEY, '1');
+		}
+
+		// A native crash during an MP3 save leaves no error; report the step it died in.
+		const crashedSavePhase = takeCrashedSavePhase();
+		if (crashedSavePhase) {
+			addToast({
+				message: `The last MP3 save stopped during ${crashedSavePhase}.`,
+				type: 'warning',
+				autoDismissMs: 10000,
+			});
 		}
 
 		const onWindowError = (event: ErrorEvent) => {

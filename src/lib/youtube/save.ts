@@ -3,6 +3,7 @@ import { FilePicker } from '@capawesome/capacitor-file-picker';
 import { DirectoryReader } from '$lib/native/directory-reader';
 import { resolveYoutubeAudio } from './client';
 import type { YoutubeQueueItem } from './queue';
+import { clearSavePhase, markSavePhase } from './saveMarker';
 
 /**
  * Save a YouTube track as an MP3 file on the device.
@@ -162,6 +163,10 @@ export async function fetchYoutubeAudioBytes(
 		bytes.set(part, written);
 		written += part.length;
 	}
+	// A truncated file would be handed to the media decoder, which can crash it.
+	if (totalBytes !== null && total !== totalBytes) {
+		throw new Error(`Download incomplete (${total} of ${totalBytes} bytes).`);
+	}
 	return bytes;
 }
 
@@ -222,7 +227,9 @@ export async function transcodeToMp3(
 	input: Uint8Array,
 	onProgress?: (ratio: number) => void,
 ): Promise<Uint8Array> {
-	const audioContext = new AudioContext();
+	// 44100 Hz is universally supported and cuts the decoded PCM buffer a little
+	// versus a 48 kHz context; decodeAudioData resamples to the context rate.
+	const audioContext = new AudioContext({ sampleRate: 44100 });
 	let decoded: AudioBuffer;
 	try {
 		// decodeAudioData detaches the buffer. Hand it the array's own buffer when
@@ -288,28 +295,37 @@ export async function saveYoutubeItemToMp3(
 	options: SaveYoutubeOptions = {},
 ): Promise<string> {
 	const { onProgress } = options;
+	try {
+		onProgress?.({ phase: 'picking', ratio: null });
+		markSavePhase('picking');
+		const { path: treeUri } = await FilePicker.pickDirectory();
 
-	onProgress?.({ phase: 'picking', ratio: null });
-	const { path: treeUri } = await FilePicker.pickDirectory();
+		onProgress?.({ phase: 'resolving', ratio: null });
+		markSavePhase('resolving');
+		const source = await resolveYoutubeAudio(item.videoId);
 
-	onProgress?.({ phase: 'resolving', ratio: null });
-	const source = await resolveYoutubeAudio(item.videoId);
+		onProgress?.({ phase: 'downloading', ratio: null });
+		markSavePhase('downloading');
+		const audioBytes = await fetchYoutubeAudioBytes(source.audioUrl, (ratio) => {
+			onProgress?.({ phase: 'downloading', ratio });
+		});
 
-	onProgress?.({ phase: 'downloading', ratio: null });
-	const audioBytes = await fetchYoutubeAudioBytes(source.audioUrl, (ratio) => {
-		onProgress?.({ phase: 'downloading', ratio });
-	});
+		onProgress?.({ phase: 'encoding', ratio: 0 });
+		markSavePhase('encoding');
+		const mp3Bytes = await transcodeToMp3(audioBytes, (ratio) => {
+			onProgress?.({ phase: 'encoding', ratio });
+		});
 
-	onProgress?.({ phase: 'encoding', ratio: 0 });
-	const mp3Bytes = await transcodeToMp3(audioBytes, (ratio) => {
-		onProgress?.({ phase: 'encoding', ratio });
-	});
-
-	onProgress?.({ phase: 'saving', ratio: 0 });
-	return writeMp3File(
-		treeUri,
-		sanitizeMp3FileName(source.title || item.title),
-		mp3Bytes,
-		(ratio) => onProgress?.({ phase: 'saving', ratio }),
-	);
+		onProgress?.({ phase: 'saving', ratio: 0 });
+		markSavePhase('saving');
+		return await writeMp3File(
+			treeUri,
+			sanitizeMp3FileName(source.title || item.title),
+			mp3Bytes,
+			(ratio) => onProgress?.({ phase: 'saving', ratio }),
+		);
+	} finally {
+		// Cleared on success and on a caught error. Only a crash leaves it behind.
+		clearSavePhase();
+	}
 }

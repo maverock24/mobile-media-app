@@ -24,6 +24,7 @@ vi.mock('$lib/native/directory-reader', () => ({
 
 import { CapacitorHttp } from '@capacitor/core';
 import { DirectoryReader } from '$lib/native/directory-reader';
+import { markSavePhase, clearSavePhase, takeCrashedSavePhase } from '$lib/youtube/saveMarker';
 import {
 	sanitizeMp3FileName,
 	base64FromBytes,
@@ -131,6 +132,24 @@ describe('fetchYoutubeAudioBytes', () => {
 		expect(bytes).toEqual(full);
 		expect(ranges).toEqual([`bytes=0-${RANGE_CHUNK_BYTES - 1}`, `bytes=${RANGE_CHUNK_BYTES}-${RANGE_CHUNK_BYTES + RANGE_CHUNK_BYTES - 1}`]);
 		expect(ratios.at(-1)).toBe(1);
+	});
+});
+
+describe('saveMarker', () => {
+	it('remembers the phase a crash left behind, once', () => {
+		clearSavePhase();
+		expect(takeCrashedSavePhase()).toBeNull();
+
+		markSavePhase('encoding');
+		expect(takeCrashedSavePhase()).toBe('decoding and encoding');
+		// Consumed: a second read reports nothing.
+		expect(takeCrashedSavePhase()).toBeNull();
+	});
+
+	it('clears the marker on a completed save', () => {
+		markSavePhase('saving');
+		clearSavePhase();
+		expect(takeCrashedSavePhase()).toBeNull();
 	});
 });
 

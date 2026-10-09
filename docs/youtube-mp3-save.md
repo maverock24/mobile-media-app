@@ -41,6 +41,23 @@ can reach: the pure helpers and the WASM encoder are unit-tested, and the web
 build is exercised in Playwright. The `CapacitorHttp` base64 download and the
 SAF `writeFile` need a real device pass.
 
+## Crash breadcrumb
+
+A native crash (OOM, or the platform media decoder dying) leaves no JS error and
+no toast. `saveMarker.ts` writes the current phase to `localStorage` before each
+step and clears it on success or a caught error, so a crash leaves the phase
+behind and the next launch reports which step died. `AndroidManifest.xml` also
+sets `android:largeHeap="true"` to raise the app's heap ceiling for the
+transcode.
+
+## Memory
+
+`decodeAudioData` materialises the whole track as PCM (~80 MB for four minutes
+at 44.1 kHz stereo), which is the pipeline's peak. The context is created at
+44100 Hz to shave a little off a 48 kHz source. If a long track still OOMs, the
+next step is a streaming decoder (WebCodecs `AudioDecoder` plus an MP4 demuxer),
+not a bigger buffer.
+
 ## Dependency
 
 `wasm-media-encoders` (MIT) inlines its ~130 KB LAME WASM as base64, so Vite
