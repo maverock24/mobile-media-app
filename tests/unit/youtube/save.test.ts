@@ -1,5 +1,29 @@
-import { describe, it, expect } from 'vitest';
-import { sanitizeMp3FileName, base64FromBytes, bytesFromBase64, encodeAudioBufferToMp3 } from '$lib/youtube/save';
+import { describe, it, expect, vi } from 'vitest';
+
+// save.ts reaches @capacitor/core transitively (CapacitorHttp, registerPlugin), so
+// mock the module rather than spying: CapacitorHttp's `get` is not an own property
+// and vi.spyOn cannot patch it.
+vi.mock('@capacitor/core', () => ({
+	CapacitorHttp: { get: vi.fn() },
+	Capacitor: {
+		isNativePlatform: () => false,
+		isPluginAvailable: () => false,
+		getPlatform: () => 'web',
+		convertFileSrc: (path: string) => path,
+	},
+	registerPlugin: () => ({}),
+}));
+
+import { CapacitorHttp } from '@capacitor/core';
+import {
+	sanitizeMp3FileName,
+	base64FromBytes,
+	bytesFromBase64,
+	encodeAudioBufferToMp3,
+	fetchYoutubeAudioBytes,
+} from '$lib/youtube/save';
+
+const RANGE_CHUNK_BYTES = 512 * 1024;
 
 describe('sanitizeMp3FileName', () => {
 	it('appends .mp3 and keeps an existing extension', () => {
@@ -64,6 +88,38 @@ describe('encodeAudioBufferToMp3', () => {
 		// MPEG audio frame sync: 11 set bits.
 		expect(mp3[0]).toBe(0xff);
 		expect(mp3[1] & 0xe0).toBe(0xe0);
+		expect(ratios.at(-1)).toBe(1);
+	});
+});
+
+describe('fetchYoutubeAudioBytes', () => {
+	it('downloads in ranges, assembles the bytes and reports progress', async () => {
+		const full = new Uint8Array(RANGE_CHUNK_BYTES + 100);
+		for (let index = 0; index < full.length; index += 1) full[index] = (index * 31) % 256;
+
+		const ranges: string[] = [];
+		const get = vi.mocked(CapacitorHttp.get);
+		get.mockImplementation(async (options) => {
+			const range = String(options.headers?.Range ?? '');
+			ranges.push(range);
+			const match = /bytes=(\d+)-(\d+)/.exec(range);
+			const start = Number(match?.[1] ?? 0);
+			const end = Math.min(Number(match?.[2] ?? full.length - 1), full.length - 1);
+			const slice = full.subarray(start, end + 1);
+			return {
+				status: 206,
+				headers: { 'Content-Range': `bytes ${start}-${end}/${full.length}` },
+				data: base64FromBytes(slice),
+				url: 'https://example.test/audio',
+			};
+		});
+
+		const ratios: Array<number | null> = [];
+		const bytes = await fetchYoutubeAudioBytes('https://example.test/audio', (ratio) => ratios.push(ratio));
+		get.mockReset();
+
+		expect(bytes).toEqual(full);
+		expect(ranges).toEqual([`bytes=0-${RANGE_CHUNK_BYTES - 1}`, `bytes=${RANGE_CHUNK_BYTES}-${RANGE_CHUNK_BYTES + RANGE_CHUNK_BYTES - 1}`]);
 		expect(ratios.at(-1)).toBe(1);
 	});
 });

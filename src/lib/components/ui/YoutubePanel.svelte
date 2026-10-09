@@ -426,7 +426,8 @@
 			const message = err instanceof Error ? err.message : String(err);
 			// A cancelled folder picker is not an error.
 			if (!/cancel/i.test(message)) {
-				addToast({ message: `Could not save MP3: ${message}`, type: 'error' });
+				const phase = saveProgress ? ` (${SAVE_PHASE_LABELS[saveProgress.phase].toLowerCase()})` : '';
+				addToast({ message: `Could not save MP3${phase}: ${message}`, type: 'error' });
 			}
 		} finally {
 			savingId = null;
@@ -606,7 +607,15 @@
 	{/if}
 
 	{#if savingId}
-		<p class="text-[11px] text-muted-foreground px-3 py-1.5 border-b shrink-0">{saveLabel}…</p>
+		<div class="px-3 py-2 border-b shrink-0 space-y-1">
+			<p class="text-[11px] text-muted-foreground">{saveLabel}…</p>
+			<div class="h-1 rounded-full bg-muted overflow-hidden">
+				<div
+					class="h-full bg-primary transition-all"
+					style="width: {saveProgress?.ratio != null ? Math.round(saveProgress.ratio * 100) : 0}%"
+				></div>
+			</div>
+		</div>
 	{/if}
 
 	<!-- List -->

@@ -8,11 +8,17 @@ Save a YouTube track from the panel's list to an MP3 file on the device.
    picker. The returned `path` is the tree URI.
 2. **Resolve** — `resolveYoutubeAudio(videoId)` returns a fresh googlevideo URL
    (URLs are IP-bound and short-lived, so a new one is fetched per save).
-3. **Download** — `CapacitorHttp.get({ responseType: 'arraybuffer' })`. The
-   stream host sends no CORS headers, so a WebView `fetch` is blocked. On
-   Android the bridge returns the body as `Base64.DEFAULT` (line-wrapped);
-   `bytesFromBase64` strips whitespace before decoding.
-4. **Decode** — `AudioContext.decodeAudioData`. YouTube serves AAC (`audio/mp4`).
+3. **Download** — `CapacitorHttp.get` in 512 KB byte ranges. The stream host
+   sends no CORS headers, so a WebView `fetch` is blocked. Ranges matter twice
+   over: a single binary response is handed to JS as one base64 string over the
+   Capacitor bridge, and for a whole song that call never settles (the spinner
+   hangs with no error), and the `Content-Range` header of each 206 gives the
+   total size for a real progress percentage. On Android the bridge returns the
+   payload as `Base64.DEFAULT` (line-wrapped); `bytesFromBase64` strips
+   whitespace before decoding. Each request carries a 15 s connect and 30 s read
+   timeout so a stalled chunk fails loudly instead of hanging.
+4. **Decode** — `AudioContext.decodeAudioData`, bounded by a 120 s timeout.
+   YouTube serves AAC (`audio/mp4`).
 5. **Encode** — LAME compiled to WASM (`wasm-media-encoders`), configured as VBR
    quality 2. The encoder is imported dynamically so its WASM stays out of the
    startup bundle, and PCM is fed in 1152×32-sample chunks with a `setTimeout(0)`

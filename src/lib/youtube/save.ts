@@ -31,6 +31,10 @@ const CHUNK_SAMPLES = 1152 * 32;
 /** LAME VBR quality 0 (best) to 9.999 (worst). 2 is a good size/quality balance. */
 const MP3_VBR_QUALITY = 2;
 const BASE64_CHUNK = 8192;
+/** Bytes per range request. Keeps each base64 bridge payload well under 1 MB. */
+const RANGE_CHUNK_BYTES = 512 * 1024;
+/** decodeAudioData is one blocking call with no progress; bound it so it cannot hang. */
+const DECODE_TIMEOUT_MS = 120_000;
 
 /** Replace characters Android SAF and common media scanners reject. */
 export function sanitizeMp3FileName(title: string): string {
@@ -68,23 +72,86 @@ function yieldToUi(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/**
- * Download the resolved googlevideo stream. Native HTTP is required: the stream
- * host sends no CORS headers, so the WebView fetch cannot read it.
- */
-export async function fetchYoutubeAudioBytes(audioUrl: string): Promise<Uint8Array> {
-	const response = await CapacitorHttp.get({
-		url: audioUrl,
-		responseType: 'arraybuffer',
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(message)), ms);
+		promise.then(
+			(value) => { clearTimeout(timer); resolve(value); },
+			(error: unknown) => { clearTimeout(timer); reject(error); },
+		);
 	});
-	if (response.status < 200 || response.status >= 300) {
-		throw new Error(`Download failed (HTTP ${response.status}).`);
+}
+
+function headerValue(headers: Record<string, string> | undefined, name: string): string | null {
+	if (!headers) return null;
+	const target = name.toLowerCase();
+	for (const key of Object.keys(headers)) {
+		if (key.toLowerCase() === target) return headers[key];
+	}
+	return null;
+}
+
+/**
+ * Fetch the resolved googlevideo stream in byte-range chunks.
+ *
+ * A single `CapacitorHttp` binary response is handed to JS as one base64 string
+ * over the Capacitor bridge; for a whole song that is several megabytes and the
+ * call never settles (the row spinner hangs with no error). Ranges keep every
+ * bridge payload under ~700 KB and expose the total size from `Content-Range`,
+ * so the download reports real progress. Native HTTP is still required: the
+ * stream host sends no CORS headers, so a WebView fetch cannot read it.
+ */
+export async function fetchYoutubeAudioBytes(
+	audioUrl: string,
+	onProgress?: (ratio: number | null) => void,
+): Promise<Uint8Array> {
+	const parts: Uint8Array[] = [];
+	let total = 0;
+	let totalBytes: number | null = null;
+
+	for (;;) {
+		const rangeEnd = total + RANGE_CHUNK_BYTES - 1;
+		const response = await CapacitorHttp.get({
+			url: audioUrl,
+			responseType: 'arraybuffer',
+			headers: { Range: `bytes=${total}-${rangeEnd}` },
+			connectTimeout: 15_000,
+			readTimeout: 30_000,
+		});
+		if (response.status < 200 || response.status >= 300) {
+			throw new Error(`Download failed (HTTP ${response.status}).`);
+		}
+
+		const data: unknown = response.data;
+		const chunk = typeof data === 'string'
+			? bytesFromBase64(data)
+			: data instanceof ArrayBuffer ? new Uint8Array(data) : null;
+		if (!chunk) throw new Error('Unexpected download payload.');
+		if (chunk.length === 0) break;
+
+		parts.push(chunk);
+		total += chunk.length;
+
+		const contentRange = headerValue(response.headers, 'content-range');
+		const totalMatch = contentRange ? /\/(\d+)\s*$/.exec(contentRange) : null;
+		if (totalMatch) totalBytes = Number(totalMatch[1]);
+		onProgress?.(totalBytes ? Math.min(1, total / totalBytes) : null);
+
+		// 200 means the server ignored the Range and returned the whole body.
+		if (response.status !== 206) break;
+		if (chunk.length < RANGE_CHUNK_BYTES) break;
+		if (totalBytes !== null && total >= totalBytes) break;
+
+		await yieldToUi();
 	}
 
-	const data: unknown = response.data;
-	if (typeof data === 'string') return bytesFromBase64(data);
-	if (data instanceof ArrayBuffer) return new Uint8Array(data);
-	throw new Error('Unexpected download payload.');
+	const bytes = new Uint8Array(total);
+	let written = 0;
+	for (const part of parts) {
+		bytes.set(part, written);
+		written += part.length;
+	}
+	return bytes;
 }
 
 export interface DecodedAudio {
@@ -148,7 +215,11 @@ export async function transcodeToMp3(
 	let decoded: AudioBuffer;
 	try {
 		// decodeAudioData detaches the buffer, so hand it a copy.
-		decoded = await audioContext.decodeAudioData(input.slice().buffer as ArrayBuffer);
+		decoded = await withTimeout(
+			audioContext.decodeAudioData(input.slice().buffer as ArrayBuffer),
+			DECODE_TIMEOUT_MS,
+			'Audio decode timed out.',
+		);
 	} finally {
 		void audioContext.close().catch(() => {});
 	}
@@ -176,7 +247,9 @@ export async function saveYoutubeItemToMp3(
 	const source = await resolveYoutubeAudio(item.videoId);
 
 	onProgress?.({ phase: 'downloading', ratio: null });
-	const audioBytes = await fetchYoutubeAudioBytes(source.audioUrl);
+	const audioBytes = await fetchYoutubeAudioBytes(source.audioUrl, (ratio) => {
+		onProgress?.({ phase: 'downloading', ratio });
+	});
 
 	onProgress?.({ phase: 'encoding', ratio: 0 });
 	const mp3Bytes = await transcodeToMp3(audioBytes, (ratio) => {
