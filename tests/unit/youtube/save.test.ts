@@ -1,8 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-// save.ts reaches @capacitor/core transitively (CapacitorHttp, registerPlugin), so
-// mock the module rather than spying: CapacitorHttp's `get` is not an own property
-// and vi.spyOn cannot patch it.
+// save.ts reaches @capacitor/core transitively through the plugin modules.
 vi.mock('@capacitor/core', () => ({
 	CapacitorHttp: { get: vi.fn() },
 	Capacitor: {
@@ -22,19 +20,26 @@ vi.mock('$lib/native/directory-reader', () => ({
 	},
 }));
 
-import { CapacitorHttp } from '@capacitor/core';
+vi.mock('$lib/native/youtube-audio', () => ({
+	YoutubeAudio: {
+		preparePcm: vi.fn(),
+		readPcmChunk: vi.fn(),
+		release: vi.fn(async () => {}),
+		addListener: vi.fn(async () => ({ remove: async () => {} })),
+	},
+}));
+
 import { DirectoryReader } from '$lib/native/directory-reader';
-import { markSavePhase, clearSavePhase, takeCrashedSavePhase } from '$lib/youtube/saveMarker';
+import { YoutubeAudio } from '$lib/native/youtube-audio';
 import {
 	sanitizeMp3FileName,
 	base64FromBytes,
 	bytesFromBase64,
-	encodeAudioBufferToMp3,
-	fetchYoutubeAudioBytes,
+	interleavedInt16ToPlanarFloats,
+	encodePcmToMp3,
 	writeMp3File,
 } from '$lib/youtube/save';
-
-const RANGE_CHUNK_BYTES = 512 * 1024;
+import { markSavePhase, clearSavePhase, takeCrashedSavePhase } from '$lib/youtube/saveMarker';
 
 describe('sanitizeMp3FileName', () => {
 	it('appends .mp3 and keeps an existing extension', () => {
@@ -62,11 +67,7 @@ describe('base64 chunking', () => {
 		const bytes = new Uint8Array(200_000);
 		for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 256;
 
-		const encoded = base64FromBytes(bytes);
-		const decoded = bytesFromBase64(encoded);
-
-		expect(decoded.length).toBe(bytes.length);
-		expect(decoded).toEqual(bytes);
+		expect(bytesFromBase64(base64FromBytes(bytes))).toEqual(bytes);
 	});
 
 	it('accepts a data URL and ignores surrounding whitespace', () => {
@@ -84,72 +85,52 @@ describe('base64 chunking', () => {
 	});
 });
 
-describe('encodeAudioBufferToMp3', () => {
-	it('encodes decoded PCM into a valid MP3 stream and reports progress', async () => {
-		const sampleRate = 44100;
-		const silence = new Float32Array(sampleRate); // 1 second mono
-		const ratios: number[] = [];
+describe('interleavedInt16ToPlanarFloats', () => {
+	it('de-interleaves stereo samples into planar floats', () => {
+		const samples = new Int16Array([0, 32767, -32768, 16384]);
+		const { left, right } = interleavedInt16ToPlanarFloats(new Uint8Array(samples.buffer), 2);
 
-		const mp3 = await encodeAudioBufferToMp3(
-			{ numberOfChannels: 1, sampleRate, getChannelData: () => silence },
-			(ratio) => ratios.push(ratio)
+		expect(Array.from(left)).toEqual([0, -1]);
+		expect(right).not.toBeNull();
+		expect(right?.[0]).toBeCloseTo(32767 / 32768, 5);
+		expect(right?.[1]).toBeCloseTo(0.5, 5);
+	});
+
+	it('returns no right channel for mono', () => {
+		const samples = new Int16Array([1000, -1000]);
+		const { left, right } = interleavedInt16ToPlanarFloats(new Uint8Array(samples.buffer), 1);
+		expect(right).toBeNull();
+		expect(Array.from(left)).toEqual([1000 / 32768, -1000 / 32768]);
+	});
+});
+
+describe('encodePcmToMp3', () => {
+	it('reads the native PCM in chunks and produces a valid MP3', async () => {
+		const sampleRate = 44100;
+		const channels = 1 as const;
+		const samples = sampleRate; // 1 second
+		const totalBytes = samples * 2 * channels;
+
+		vi.mocked(YoutubeAudio.readPcmChunk).mockImplementation(async ({ offset, length }) => {
+			const size = Math.min(length, totalBytes - offset);
+			return {
+				data: base64FromBytes(new Uint8Array(size)),
+				eof: offset + size >= totalBytes,
+			};
+		});
+
+		const ratios: number[] = [];
+		const mp3 = await encodePcmToMp3(
+			{ path: 'pcm', sampleRate, channels, samples },
+			(ratio) => ratios.push(ratio),
 		);
 
+		expect(YoutubeAudio.readPcmChunk).toHaveBeenCalledTimes(2);
 		expect(mp3.length).toBeGreaterThan(0);
 		// MPEG audio frame sync: 11 set bits.
 		expect(mp3[0]).toBe(0xff);
 		expect(mp3[1] & 0xe0).toBe(0xe0);
 		expect(ratios.at(-1)).toBe(1);
-	});
-});
-
-describe('fetchYoutubeAudioBytes', () => {
-	it('downloads in ranges, assembles the bytes and reports progress', async () => {
-		const full = new Uint8Array(RANGE_CHUNK_BYTES + 100);
-		for (let index = 0; index < full.length; index += 1) full[index] = (index * 31) % 256;
-
-		const ranges: string[] = [];
-		const get = vi.mocked(CapacitorHttp.get);
-		get.mockImplementation(async (options) => {
-			const range = String(options.headers?.Range ?? '');
-			ranges.push(range);
-			const match = /bytes=(\d+)-(\d+)/.exec(range);
-			const start = Number(match?.[1] ?? 0);
-			const end = Math.min(Number(match?.[2] ?? full.length - 1), full.length - 1);
-			const slice = full.subarray(start, end + 1);
-			return {
-				status: 206,
-				headers: { 'Content-Range': `bytes ${start}-${end}/${full.length}` },
-				data: base64FromBytes(slice),
-				url: 'https://example.test/audio',
-			};
-		});
-
-		const ratios: Array<number | null> = [];
-		const bytes = await fetchYoutubeAudioBytes('https://example.test/audio', (ratio) => ratios.push(ratio));
-		get.mockReset();
-
-		expect(bytes).toEqual(full);
-		expect(ranges).toEqual([`bytes=0-${RANGE_CHUNK_BYTES - 1}`, `bytes=${RANGE_CHUNK_BYTES}-${RANGE_CHUNK_BYTES + RANGE_CHUNK_BYTES - 1}`]);
-		expect(ratios.at(-1)).toBe(1);
-	});
-});
-
-describe('saveMarker', () => {
-	it('remembers the phase a crash left behind, once', () => {
-		clearSavePhase();
-		expect(takeCrashedSavePhase()).toBeNull();
-
-		markSavePhase('encoding');
-		expect(takeCrashedSavePhase()).toBe('decoding and encoding');
-		// Consumed: a second read reports nothing.
-		expect(takeCrashedSavePhase()).toBeNull();
-	});
-
-	it('clears the marker on a completed save', () => {
-		markSavePhase('saving');
-		clearSavePhase();
-		expect(takeCrashedSavePhase()).toBeNull();
 	});
 });
 
@@ -171,5 +152,23 @@ describe('writeMp3File', () => {
 		expect(append.mock.calls[0][0].data.length).toBeLessThan(400_000);
 		expect(bytesFromBase64(append.mock.calls[0][0].data).length).toBe(writeChunk);
 		expect(ratios.at(-1)).toBe(1);
+	});
+});
+
+describe('saveMarker', () => {
+	it('remembers the phase a crash left behind, once', () => {
+		clearSavePhase();
+		expect(takeCrashedSavePhase()).toBeNull();
+
+		markSavePhase('encoding');
+		expect(takeCrashedSavePhase()).toBe('decoding and encoding');
+		// Consumed: a second read reports nothing.
+		expect(takeCrashedSavePhase()).toBeNull();
+	});
+
+	it('clears the marker on a completed save', () => {
+		markSavePhase('saving');
+		clearSavePhase();
+		expect(takeCrashedSavePhase()).toBeNull();
 	});
 });
