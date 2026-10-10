@@ -72,6 +72,21 @@ public class ScreenDimPlugin extends Plugin {
         call.resolve(result);
     }
 
+    // Reports the app as fully drawn once the web layer signals hydration.
+    // @PluginMethod calls run on Capacitor's HandlerThread, so hop to the
+    // main thread — reportFullyDrawn() must be called from the UI thread.
+    @PluginMethod
+    public void reportFullyDrawn(PluginCall call) {
+        handler.post(() -> {
+            try {
+                getActivity().reportFullyDrawn();
+                call.resolve();
+            } catch (Exception e) {
+                call.reject("reportFullyDrawn failed", e);
+            }
+        });
+    }
+
     private void disableInternal() {
         if (!enabled) return;
         enabled = false;

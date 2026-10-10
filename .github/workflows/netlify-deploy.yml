@@ -142,8 +142,20 @@ jobs:
           PACKAGE_VERSION: ${{ steps.android_meta.outputs.package_version }}
           NETLIFY_SITE_URL: ${{ steps.netlify_meta.outputs.site_url }}
         run: |
+          if [[ "$BUILD_TYPE" != "release" ]]; then
+            # A debug build must never enter the release channel, and this step's
+            # output is never deployed for a debug run (see the deploy step's
+            # condition). The in-app updater reads /releases/android/latest.json
+            # (androidUpdate.ts), so writing it here would offer a debug build to
+            # every installed app. The debug APK reaches the user as the
+            # media-hub-android-debug-apk workflow artifact instead.
+            echo "Debug build: skipping the release asset staging. No latest.apk, no latest.json."
+            exit 0
+          fi
+
           mkdir -p static/releases/android
           find static/releases/android -maxdepth 1 -type f \( -name '*.apk' -o -name '*.json' \) -delete
+
           cp "$ARTIFACT_PATH" "static/releases/android/latest.apk"
 
           APK_SIZE=$(stat -c%s "static/releases/android/latest.apk")
@@ -179,7 +191,20 @@ jobs:
           path: ${{ steps.android_build.outputs.artifact_path }}
           if-no-files-found: error
 
+      - name: Upload R8 mapping file
+        if: steps.android_build.outputs.build_type == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mapping.txt
+          path: android/app/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: error
+
+      # A debug run must not reach the production deploy. Netlify deploys are atomic
+      # snapshots of --dir, so publishing a debug build would replace the live release
+      # assets with latest-debug.apk alone and delete latest.apk/latest.json. The debug
+      # APK is delivered as the media-hub-android-debug-apk workflow artifact instead.
       - name: Deploy updated site to Netlify
+        if: steps.android_build.outputs.build_type == 'release'
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}

@@ -72,7 +72,8 @@ every 3 s (L1) and the web-only canvas redraw per frame (J6).
 | L5 | SAF scan copies the whole array per batch | P2 | APK |
 | L6 | Weather refetches on every tab visit | P2 | APK |
 | L7 | Four small leaks and one dead code path | P3 | mixed |
-| M0-M6 | The repo cannot currently measure anything on Android | P1 | CI |
+| M0 | Measurement prerequisites landed: R8 on, `profileable` release, benchmark variant, `reportFullyDrawn`. See `docs/performance-measurement.md` | done | CI |
+| M1-M6 | No performance number exists yet; the run needs a device and Play Console access | P1 | CI |
 
 ## Startup
 
@@ -444,6 +445,13 @@ Start here, because none of the above can be verified or closed without it. The 
 produce a valid Android performance number, and one workflow actively produces an invalid one.
 
 ### M0. Make a build worth measuring. Do this first.
+
+**Status: done.** R8 and `shrinkResources` are on for release, the release manifest carries
+`<profileable android:shell="true" />`, `:app` has a `benchmark` build type and `:benchmark` is a
+macrobenchmark module, `+layout.svelte` reports fully drawn at hydration, `quality.yml` compiles the
+release variant and checks the minified DEX on every pull request, and the debug fallback publishes
+as `latest-debug.apk`; the runnable procedure, including the Play Console baseline slot, is
+`docs/performance-measurement.md`. The bullets below are kept as the original proposal.
 
 - Add `<profileable android:shell="true" tools:targetApi="29" />` to the release manifest. Without it,
   no `am profile`, Perfetto or simpleperf run against a release build on API 29+, and the only

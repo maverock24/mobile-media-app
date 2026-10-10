@@ -70,8 +70,22 @@ android {
             if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+        create("benchmark") {
+            // Mirrors release exactly (same minified, shrunk, R8-obfuscated output)
+            // but is signed with the built-in debug key so the APK installs without
+            // the release keystore. macrobenchmark refuses a debuggable target, and
+            // the CI DEX assertion only means anything against minified output, so
+            // both invariants are stated here instead of being left to the init
+            // inheritance.
+            initWith(getByName("release"))
+            minifyEnabled true
+            debuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += ["release"]
         }
     }
 }
