@@ -13,6 +13,7 @@ export interface MediaControlsPlugin {
 		positionSec: number;
 		durationSec: number;
 	}): Promise<void>;
+	updatePosition(options: { positionSec: number }): Promise<void>;
 	setTransportAvailability(options: {
 		hasNext: boolean;
 		hasPrevious: boolean;

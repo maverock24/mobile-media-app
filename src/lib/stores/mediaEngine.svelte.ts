@@ -907,16 +907,17 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 			}).catch(() => {});
 
 			if (!isPlaying || item == null) return;
-			// While a track plays, slowly re-sync position (every 3s) so the lock-screen
-			// / Android Auto seek bar stays accurate and corrects drift after a user
-			// seek — without the 4Hz focus churn. The native focus request is now
-			// transition-guarded (see MediaPlaybackService.requestAudioFocus), so this
-			// low cadence is safe even though it still routes through updateService.
+			// While a track plays, slowly re-sync the native session position (every
+			// 3s) so the lock-screen / Android Auto seek bar stays accurate and
+			// corrects drift after a user seek. This uses updatePosition(), which
+			// re-asserts the current PlaybackState and skips the metadata, audio-focus
+			// and notification rebuild that updatePlaybackState() does: the
+			// notification has no position bar, so re-posting it every 3s was churn,
+			// and it re-requested audio focus before that request became
+			// transition-guarded (see MediaPlaybackService.requestAudioFocus).
 			const timer = window.setInterval(() => {
-				void MediaControls.updatePlaybackState({
-					isPlaying:   true,
+				void MediaControls.updatePosition({
 					positionSec: mediaEngine.currentTime,
-					durationSec: mediaEngine.duration,
 				}).catch(() => {});
 			}, 3000);
 			return () => window.clearInterval(timer);
