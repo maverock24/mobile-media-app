@@ -158,6 +158,13 @@ public class MediaControlsPlugin extends Plugin {
 	}
 
 	@PluginMethod
+	public void updatePosition(PluginCall call) {
+		positionMs = secondsToMs(call.getDouble("positionSec", 0d));
+		updateServicePosition();
+		call.resolve();
+	}
+
+	@PluginMethod
 	public void setTransportAvailability(PluginCall call) {
 		hasNext = call.getBoolean("hasNext", false);
 		hasPrevious = call.getBoolean("hasPrevious", false);
@@ -218,6 +225,27 @@ public class MediaControlsPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Position-only push for the 3s re-sync tick. Unlike updateService() this must
+	 * NOT rebuild the metadata, audio focus or the foreground notification: the
+	 * tick only changes positionMs. A null service still (re)starts once, mirroring
+	 * updateService(), so a dead service is recovered on the next tick.
+	 */
+	private void updateServicePosition() {
+		if (playbackService == null) {
+			startPlaybackService();
+			return;
+		}
+		try {
+			playbackService.updatePosition(positionMs);
+		} catch (Exception e) {
+			// Same detach contract as updateService(): a dead service must never
+			// crash the WebView; the next call re-binds a fresh one.
+			playbackService = null;
+			playbackServiceRequested = false;
+		}
+	}
+
 	private void updateServiceInternal() {
 		// 1. Update MediaSession Metadata
 		MediaMetadataCompat.Builder metaBuilder = new MediaMetadataCompat.Builder()
@@ -243,7 +271,7 @@ public class MediaControlsPlugin extends Plugin {
 			.setActions(actions)
 			.setState(state, positionMs, isPlaying ? 1f : 0f)
 			.build();
-		playbackService.getMediaSession().setPlaybackState(pState);
+		playbackService.setPlaybackState(pState);
 		playbackService.getMediaSession().setActive(!title.isEmpty());
 
 		// 3. Audio Focus — request when playing, abandon when paused

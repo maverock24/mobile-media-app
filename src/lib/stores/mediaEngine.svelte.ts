@@ -669,6 +669,27 @@ async function releaseWakeLock() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Capacitor Native Media Controls Integration
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Gate for the native MediaControls bridge calls. False at module import, so the
+ * four bridge-reaching `$effect`s below skip their bridge call until
+ * `+page.svelte` calls `initMediaEngine()` from `onMount` — after first paint.
+ *
+ * The read is reactive: flipping the flag re-runs each gated `$effect`, which
+ * then subscribes to the engine fields it needs. Registration that does not touch
+ * the bridge (the `document` pause/resume listeners and the `_userWantsPlayback`
+ * latch) stays at import, so it is armed before any mount happens.
+ */
+let nativeControlsReady = $state(false);
+
+/**
+ * Allow the native MediaControls bridge effects to run. Idempotent: assigning the
+ * same value does not re-notify (Svelte's source equality is `===`). On web the
+ * native effect root is never created, so calling this is a no-op.
+ */
+export function initMediaEngine(): void {
+	nativeControlsReady = true;
+}
+
 if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 	$effect.root(() => {
 		let mediaActionHandle: Promise<{ remove: () => Promise<void> }> | null = null;
@@ -789,6 +810,7 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		document.addEventListener('resume', handleDocumentResume);
 
 		$effect(() => {
+			if (!nativeControlsReady) return;
 			mediaActionHandle = MediaControls.addListener('mediaAction', (event) => {
 				switch (event.action) {
 					case 'play':
@@ -822,6 +844,7 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		});
 
 		$effect(() => {
+			if (!nativeControlsReady) return;
 			const item = mediaEngine.item;
 			// A source can be audibly playing while the global `item` is null — e.g.
 			// a deck that isn't the "active" deck, or the music tab not focused.
@@ -847,6 +870,7 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		});
 
 		$effect(() => {
+			if (!nativeControlsReady) return;
 			// Transport availability is driven entirely by the active source's
 			// registered _onNext/_onPrev handlers (the engine owns no queue).
 			void MediaControls.setTransportAvailability({
@@ -869,6 +893,7 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 		// immune). Position is snapshotted via untrack() so reading it does NOT make
 		// it a reactive dependency.
 		$effect(() => {
+			if (!nativeControlsReady) return;
 			const isPlaying  = mediaEngine.isPlaying;
 			const durationSec = mediaEngine.duration;
 			const item        = mediaEngine.item;     // track-change dep
@@ -882,16 +907,17 @@ if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
 			}).catch(() => {});
 
 			if (!isPlaying || item == null) return;
-			// While a track plays, slowly re-sync position (every 3s) so the lock-screen
-			// / Android Auto seek bar stays accurate and corrects drift after a user
-			// seek — without the 4Hz focus churn. The native focus request is now
-			// transition-guarded (see MediaPlaybackService.requestAudioFocus), so this
-			// low cadence is safe even though it still routes through updateService.
+			// While a track plays, slowly re-sync the native session position (every
+			// 3s) so the lock-screen / Android Auto seek bar stays accurate and
+			// corrects drift after a user seek. This uses updatePosition(), which
+			// re-asserts the current PlaybackState and skips the metadata, audio-focus
+			// and notification rebuild that updatePlaybackState() does: the
+			// notification has no position bar, so re-posting it every 3s was churn,
+			// and it re-requested audio focus before that request became
+			// transition-guarded (see MediaPlaybackService.requestAudioFocus).
 			const timer = window.setInterval(() => {
-				void MediaControls.updatePlaybackState({
-					isPlaying:   true,
+				void MediaControls.updatePosition({
 					positionSec: mediaEngine.currentTime,
-					durationSec: mediaEngine.duration,
 				}).catch(() => {});
 			}, 3000);
 			return () => window.clearInterval(timer);

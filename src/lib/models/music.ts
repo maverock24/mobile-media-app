@@ -217,13 +217,14 @@ export function formatDuration(seconds: number): string {
 }
 
 export function sortFiles(files: StoredAudioFile[], sortOrder: string): StoredAudioFile[] {
-	return [...files].sort((a, b) => {
-		if (sortOrder === 'title')
-			return parseFilename(a.name).title.localeCompare(parseFilename(b.name).title);
-		if (sortOrder === 'artist')
-			return parseFilename(a.name).artist.localeCompare(parseFilename(b.name).artist);
-		return a.name.localeCompare(b.name, undefined, { numeric: true });
-	});
+	if (sortOrder === 'title' || sortOrder === 'artist') {
+		const key = sortOrder;
+		return files
+			.map((f) => ({ f, key: parseFilename(f.name)[key] }))
+			.sort((a, b) => a.key.localeCompare(b.key))
+			.map((x) => x.f);
+	}
+	return [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 }
 
 export function mergeStoredFiles(existing: StoredAudioFile[], incoming: StoredAudioFile[]): StoredAudioFile[] {
