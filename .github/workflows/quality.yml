@@ -46,3 +46,55 @@ jobs:
 
       - name: Run smoke end-to-end tests
         run: pnpm test:e2e
+
+  android-release-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PUBLIC_GOOGLE_CLIENT_ID: playwright-google-client-id.apps.googleusercontent.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          # The action defaults to `tools platform-tools`, but the `tools`
+          # package was removed from the Android SDK repository — sdkmanager
+          # exits 1 with "Failed to find package 'tools'". Only install
+          # platform-tools; Gradle auto-installs platforms/build-tools.
+          packages: 'platform-tools'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build mobile web assets
+        run: pnpm build:mobile
+
+      - name: Sync Capacitor Android project
+        run: pnpm exec cap sync android
+
+      - name: Assemble release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease
