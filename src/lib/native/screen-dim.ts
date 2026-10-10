@@ -4,6 +4,7 @@ export interface ScreenDimPlugin {
 	enable(options: { delayMs: number }): Promise<void>;
 	disable(): Promise<void>;
 	isEnabled(): Promise<{ enabled: boolean }>;
+	reportFullyDrawn(): Promise<void>;
 }
 
 export const ScreenDim = registerPlugin<ScreenDimPlugin>('ScreenDim');

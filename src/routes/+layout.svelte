@@ -44,6 +44,12 @@
 	onMount(() => {
 		document.body.dataset.hydrated = '1';
 
+		// Tell Android the shell has hydrated, so reportFullyDrawn() marks the
+		// first frame the user can actually interact with (not the WebView's first frame).
+		if (Capacitor.isNativePlatform()) {
+			ScreenDim.reportFullyDrawn().catch(() => {});
+		}
+
 		// Initial dimmer setup
 		applyScreenDim();
 
