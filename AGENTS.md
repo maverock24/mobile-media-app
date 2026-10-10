@@ -29,7 +29,7 @@ The live code in `src/` is authoritative. Planning docs (`01_PRD.md`, `PROGRESS.
 - **TypeScript strict**: no `any` unless no practical alternative; exported functions get explicit return types; discriminated unions for source/persisted models.
 - **Imports**: `$lib/...` for internal modules.
 - **File org**: views → `src/lib/components/views/`, UI primitives → `src/lib/components/ui/`.
-- **Commits**: small, single-purpose, Conventional Commit style (`feat:`, `fix:`, `docs:`, `chore:`).
+- **Commits**: small, single-purpose, Conventional Commit style (`feat:`, `fix:`, `docs:`, `chore:`). Push to `origin/main` in the same turn as the commit. No waiting to be asked.
 
 ## Commands
 
