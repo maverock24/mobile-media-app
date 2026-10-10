@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- requestLegacyExternalStorage lets the benchmark write its Perfetto traces to
+         the additional test output directory on API 29. It is ignored on newer APIs. -->
+    <application android:requestLegacyExternalStorage="true" />
+
+</manifest>

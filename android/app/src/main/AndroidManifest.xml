@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -10,6 +11,13 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
+
+        <!-- Macrobenchmark measures this app only when it is profileable and not
+             debuggable. The element exists from API 29, so tools:targetApi keeps
+             lint quiet for the lower minSdk. -->
+        <profileable
+            android:shell="true"
+            tools:targetApi="29" />
 
         <!-- Android Auto: declare this app as a media source -->
         <meta-data

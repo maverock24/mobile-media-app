@@ -1,0 +1,34 @@
+apply plugin: 'com.android.test'
+
+android {
+    namespace = 'com.maverock24.mobilemediaapp.benchmark'
+    compileSdk = rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        // Baseline Profiles need API 28; plain startup works lower.
+        minSdkVersion 28
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    targetProjectPath = ':app'
+    // Run the instrumentation in its own process instead of the target app.
+    experimentalProperties['android.experimental.self-instrumenting'] = true
+
+    buildTypes {
+        benchmark {
+            // Mirror the :app benchmark variant: this test APK is signed with the
+            // debug key but its target must not be debuggable.
+            debuggable = false
+            signingConfig = signingConfigs.getByName('debug')
+            matchingFallbacks += listOf('release')
+        }
+    }
+}
+
+dependencies {
+    implementation "androidx.benchmark:benchmark-macro-junit4:$androidxBenchmarkVersion"
+    implementation "androidx.test.uiautomator:uiautomator:$androidxUiAutomatorVersion"
+    implementation "androidx.test.ext:junit:$androidxJunitVersion"
+    implementation "androidx.test:runner:$androidxTestRunnerVersion"
+}

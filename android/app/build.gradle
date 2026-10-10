@@ -74,6 +74,15 @@ android {
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+        create("benchmark") {
+            // Mirrors release exactly (same minified, shrunk, R8-obfuscated output)
+            // but is signed with the built-in debug key so the APK installs without
+            // the release keystore. release never sets debuggable, so it stays
+            // false here, which macrobenchmark requires of its target.
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
 }
 
