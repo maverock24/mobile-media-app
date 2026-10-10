@@ -10,7 +10,7 @@
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
 	import { initSleepTimer } from '$lib/stores/sleepTimer.svelte';
 	import { appSettings } from '$lib/stores/settings.svelte';
-	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	import { initMediaEngine, mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { triggerTabHaptic } from '$lib/native/haptics';
 	import {
 		recordConsoleError,
@@ -93,6 +93,7 @@
 	onMount(() => {
 		activeTab = readSavedTab();
 		initSleepTimer();
+		initMediaEngine();
 		void checkForAndroidUpdate();
 
 		if (runtimeDiagnostics.lastRuntimeError && typeof sessionStorage !== 'undefined' && !sessionStorage.getItem(RUNTIME_ERROR_NOTICE_KEY)) {
