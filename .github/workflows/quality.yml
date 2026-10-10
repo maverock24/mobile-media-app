@@ -98,3 +98,100 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease
+
+      # The benchmark build type is initWith(release), so this APK is the same
+      # R8-minified, resource-shrunk output as release, but signed with the
+      # debug key so a human can adb install it for the startup smoke.
+      - name: Assemble benchmark APKs
+        run: |
+          cd android
+          ./gradlew :app:assembleBenchmark :benchmark:assembleBenchmark
+
+      # Compilation alone does not prove the reflective plugin constructors
+      # survive R8. Capacitor instantiates plugins via
+      # getDeclaredConstructor().newInstance(), and the AAR consumer rule
+      # "-keep public class * extends com.getcapacitor.Plugin { *; }" keeps the
+      # class and its members but not <init>. Read the minified DEX and fail if
+      # any app plugin class, its no-arg constructor, or a @PluginMethod name is
+      # gone.
+      - name: Assert plugin constructors survive R8 in the minified DEX
+        run: |
+          set -euo pipefail
+
+          APK=android/app/build/outputs/apk/benchmark/app-benchmark.apk
+          if [[ ! -f "$APK" ]]; then
+            echo "::error::benchmark APK not found at $APK"
+            exit 1
+          fi
+
+          # dexdump ships in the SDK build-tools. setup-android exports the SDK
+          # location; Gradle installs the build-tools pinned by the AGP. Take the
+          # newest installed build-tools and fail loudly if none is present.
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "$SDK" || ! -d "$SDK/build-tools" ]]; then
+            echo "::error::ANDROID_HOME/ANDROID_SDK_ROOT unset or has no build-tools; cannot locate dexdump"
+            exit 1
+          fi
+          DEXDUMP="$(find "$SDK/build-tools" -maxdepth 2 -type f -name dexdump | sort -V | tail -n1)"
+          if [[ -z "$DEXDUMP" || ! -x "$DEXDUMP" ]]; then
+            echo "::error::dexdump not found under $SDK/build-tools"
+            exit 1
+          fi
+          echo "Using dexdump: $DEXDUMP"
+
+          WORK="$RUNNER_TEMP/dex-check"
+          rm -rf "$WORK" && mkdir -p "$WORK"
+          unzip -o -q "$APK" 'classes*.dex' -d "$WORK"
+
+          # Index every class member as "<descriptor> <name><type>", e.g.
+          # "Lcom/maverock24/mobilemediaapp/ScreenDimPlugin; <init>()V".
+          : > "$WORK/members.txt"
+          for dex in "$WORK"/classes*.dex; do
+            "$DEXDUMP" "$dex" 2>/dev/null | awk -F"'" '
+              /^[[:space:]]*Class descriptor[[:space:]]*:/ { cls = $2; name = ""; next }
+              /^[[:space:]]*name[[:space:]]*:/ { name = $2; next }
+              /^[[:space:]]*type[[:space:]]*:/ { type = $2; if (name != "") { print cls " " name type } name = "" }
+            ' >> "$WORK/members.txt"
+          done
+
+          CLASSES=(DirectoryReaderPlugin GoogleDriveNativePlugin MediaControlsPlugin ScreenDimPlugin YoutubeAudioPlugin)
+          declare -A METHODS=(
+            [DirectoryReaderPlugin]="rememberTreeUri startAudioScan getAudioScanBatch cancelAudioScan listEntries listAudioFiles writeFile appendFileChunk deleteEntry copyEntry moveEntry installApk"
+            [GoogleDriveNativePlugin]="authorize consumePendingAuthorizationResult"
+            [MediaControlsPlugin]="ensureNotificationPermission updateNowPlaying updatePlaybackState setTransportAvailability clear"
+            [ScreenDimPlugin]="enable disable isEnabled reportFullyDrawn"
+            [YoutubeAudioPlugin]="download readFileChunk release"
+          )
+
+          fail=0
+          for cls in "${CLASSES[@]}"; do
+            desc="Lcom/maverock24/mobilemediaapp/$cls;"
+            if ! grep -qF "$desc " "$WORK/members.txt"; then
+              echo "::error::$desc is missing from the minified DEX (R8 removed or renamed it)"
+              fail=1
+              continue
+            fi
+            if ! grep -qF "$desc <init>()V" "$WORK/members.txt"; then
+              echo "::error::$desc has no no-arg constructor <init>(); Capacitor's reflective instantiation would throw NoSuchMethodException"
+              fail=1
+            fi
+            for method in ${METHODS[$cls]}; do
+              if ! grep -qF "$desc $method(" "$WORK/members.txt"; then
+                echo "::error::$desc.$method() is missing from the minified DEX"
+                fail=1
+              fi
+            done
+          done
+          if [[ "$fail" -ne 0 ]]; then
+            exit 1
+          fi
+          echo "All five plugin classes, their no-arg constructors and all 26 @PluginMethod names survived R8."
+
+      # The release APK is unsigned in CI (no signing secrets), so the benchmark
+      # APK is the one a human can install for the manual smoke test.
+      - name: Upload benchmark APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-benchmark-apk
+          path: android/app/build/outputs/apk/benchmark/app-benchmark.apk
+          if-no-files-found: error
