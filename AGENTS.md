@@ -21,7 +21,7 @@ The live code in `src/` is authoritative. Planning docs (`01_PRD.md`, `PROGRESS.
 | Utils | `src/lib/utils/`, `src/lib/persisted.svelte.ts` |
 | Android project | `android/` (Capacitor + native plugins) |
 | Tests (Playwright E2E) | `tests/` (~3,173 lines; `*.test.ts`) |
-| CI | `.github/workflows/` (`quality`, `android-build`, `android-release`, `netlify-deploy`) |
+| CI | `.github/workflows/` — `quality` (check + unit + E2E) runs on push and pull request; `netlify-deploy` compiles `android/` and builds the APK on every push to main; `android-release` on version tags; `android-build` is a manual debug-APK button. No workflow compiles Java on a pull request. |
 
 ## Conventions
 
