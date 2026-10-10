@@ -4,6 +4,9 @@ Date: 2026-10-10
 Tree: `269e185` plus the uncommitted edits to `+layout.svelte` and `screen-dim`
 Reference: Google's Android performance guidance (startup latency, scroll jank, transitions, power/allocation)
 
+Corrections: 2026-10-10, after a citation audit of every `file:line` in this document. Thirteen were
+wrong, four of them substantively rather than cosmetically. The corrected text is in place below.
+
 ## What this is, and what it is not
 
 This is a static analysis. Nobody ran a device, a Perfetto trace, or a profiler, so there is not a
@@ -77,7 +80,7 @@ every 3 s (L1) and the web-only canvas redraw per frame (J6).
 
 `src/routes/+page.svelte:3-25` statically imports `Mp3PlayerView` (2559 lines), `PodcastView`,
 `RadioView`, `WeatherView`, `SettingsView`, `MiniPlayer`, `YoutubePanel`, `ToastContainer`, plus
-`lucide-svelte` and seven stores. There is no lazy boundary anywhere on the boot route. The only
+`lucide-svelte` and six stores. There is no lazy boundary anywhere on the boot route. The only
 dynamic `import()` in the whole client is `youtubei.js` (`src/lib/youtube/client.ts:115`).
 
 `prerender = true` and no `ssr = false` means `adapter-static` ships prerendered HTML that is then
@@ -197,7 +200,7 @@ with no key and no windowing. Every row runs two `{@const}` helpers that read `c
 ```
 
 `currentTime` is a `$state` at `PodcastView.svelte:98`, written through the setter at `:157` by
-`src/lib/podcast/podcastPlayer.ts:206`. That write is throttled to 250 ms (`podcastPlayer.ts:199`),
+`src/lib/podcast/podcastPlayer.ts:206`. That write is throttled to 250 ms (`podcastPlayer.ts:204`),
 which is 4 Hz by design. Svelte re-derives each item's scope when a dependency changes, so all
 episodes re-derive four times a second, for as long as playback lasts. A 200-episode feed is roughly
 2,400 helper calls per second plus a spread of the current episode object on every tick.
@@ -215,23 +218,26 @@ forced layout read. A typical feed is 50 to 300 rows, so that is 50 to 300 obser
 layout reads on first paint.
 
 While I was in there: `Mp3PlayerView.svelte:33` imports `marqueeTitle` and never uses it, so the
-`title-marquee` class on song rows never gets `is-active` and song titles never scroll. That is a
+`title-marquee` class on song rows is never activated on overflow, so the marquee fires for the wrong
+reason: `Mp3PlayerView.svelte:2123` hardcodes `is-active` for the current track, and
+`app.css:645-646` animates `.title-marquee.is-active`, so the current track's title always scrolls,
+whether or not it overflows, while every other row never does. That is a
 functional bug hiding behind a performance one, and it is why the 500-row music list avoids this cost.
 
 ### J3. The 500-row music list recomputes per-row work on every state change. P2, APK
 
 `Mp3PlayerView.svelte:1944` renders up to 500 rows (`BROWSE_RENDER_LIMIT` at `:325`, slice at `:328`),
 unkeyed. Each row calls `parseFilename(entry.name)` three times (`:2123` twice, `:2124`) and
-`favoriteTracks.isFavoriteTrack(entry.file)` four times (`:2135,2140,2141,2143`).
+`favoriteTracks.isFavoriteTrack(entry.file)` five times (`:2135`, twice at `:2140`, `:2141`, `:2143`).
 
 Neither is free. `parseFilename` (`src/lib/models/music.ts:185-190`) runs two regex replaces, a
 `replace` and an `indexOf` on every call. `isFavoriteTrack`
 (`src/lib/favorites/favoriteTracks.ts:197-202`) is an `Array.some` scan over the favourites array. So a
-play/pause or track change re-evaluates roughly 1,500 parses and 1,500 scans.
+play/pause or track change re-evaluates roughly 1,500 parses and 2,500 scans.
 
 To be fair to the code: this is update cost, not scroll cost. The rows carry
 `content-visibility: auto` with `contain-intrinsic-size` (`:2541-2542`) and the container has
-`contain: layout style` (`:2546`), so pure scrolling runs no JavaScript and off-screen paint is culled.
+`contain: layout style` (`:2548`), so pure scrolling runs no JavaScript and off-screen paint is culled.
 The music list's deriveds depend on the browse entries and the search query, not on `currentTime`
 (`:304-329`, debounced 200 ms). That part was done properly.
 
@@ -277,9 +283,10 @@ This is the one the readers missed. `src/routes/+layout.svelte` builds an array 
 registers one handler for all of them:
 
 ```
-const ACTIVITY_EVENTS = ['pointerdown', 'touchstart', 'keydown', 'keyup',
+const ACTIVITY_EVENTS: (keyof DocumentEventMap)[] = ['pointerdown', 'touchstart', 'keydown', 'keyup',
   'beforeinput', 'input', 'compositionupdate', 'wheel', 'scroll'];
-document.addEventListener(type, reportScreenDimActivity, { capture: true, passive: true });
+const options: AddEventListenerOptions = { capture: true, passive: true };
+for (const type of ACTIVITY_EVENTS) document.addEventListener(type, reportScreenDimActivity, options);
 ```
 
 The handler throttles the bridge call to 250 ms, and it registers only on native, so the cost is
@@ -303,12 +310,14 @@ oddities on touch. Worth removing, cheap to verify on a device.
 
 `MiniPlayer.svelte:446` animates `width`, a layout property, at 4 Hz with `transition: width 250ms
 linear`, so it is layout plus paint instead of a transform. `app.css` puts `will-change: transform` on
-`.mini-player-seek`, which is the deck B volume range input (`MiniPlayer.svelte:452`), not the progress
+`.mini-player-seek`, which is the deck B volume range input (`MiniPlayer.svelte:465`; `:452` is the
+thumb dot), not the progress
 fill it was meant to promote.
 
 `app.css` defines `.ui-panel-surface` with `backdrop-filter: blur(18px) saturate(125%)`, applied by
-`ui/Card.svelte` and by several fixed dialog backdrops (`Mp3PlayerView.svelte:2413`,
-`SettingsView.svelte:1238`) and the buffering overlay (`:2202`). Each forces an offscreen raster of the
+`ui/Card.svelte` and by Weather's cards. Three further sites use Tailwind's `backdrop-blur-*`
+utilities rather than that class: the fixed dialog backdrops at `Mp3PlayerView.svelte:2413` and
+`SettingsView.svelte:1238`, and the buffering overlay at `:2202`. Each forces an offscreen raster of the
 backdrop, but they appear one at a time and none of them is inside a scrolling list. Credit where it
 is due: the codebase already stripped `backdrop-filter` from the MiniPlayer and the tab bars, with a
 comment explaining why. That is the right instinct.
@@ -328,7 +337,7 @@ This journey is in better shape than the others.
 
 The switching mechanism is a state write, not a remount. Music, Podcast and Radio stay mounted and are
 toggled with `class:hidden`, so those three tabs cost one `$state` assignment plus a haptic tick
-(`+page.svelte:35-37`). Weather and Settings are conditionally mounted (`+page.svelte:256-262`), so
+(`+page.svelte:35-39`, the haptic at `:38`). Weather and Settings are conditionally mounted (`+page.svelte:256-262`), so
 they build their DOM fresh, but nothing synchronous runs in the click handler: `SettingsView`'s mount
 does an async network call, and `WeatherView`'s effect starts an async fetch. No parse, sort or
 IndexedDB read blocks the tap.
@@ -376,14 +385,14 @@ that stays until it is tapped. The array has no cap and no dedupe.
 
 ### L4. `rssCache` is never swept. P2, APK
 
-`src/lib/rss.ts:13` is a module-level `Map` keyed by feed URL and page. `fetchRss` (`:100-105`) honours
+`src/lib/podcast/rss.ts:13` is a module-level `Map` keyed by feed URL and page. `fetchRss` (`:116`) honours
 the 30-minute TTL on read but never deletes a stale entry, and only an explicit `clearRssCache` prunes
 anything. Each entry holds a parsed feed of up to 50 episodes with 200-character descriptions, so tens
 to hundreds of KB per entry, growing with every distinct podcast page browsed in a session.
 
 ### L5. The SAF scan copies the whole array per batch. P2, APK
 
-`deviceLibrary.svelte.ts:211-216` does `view.allFiles = [...view.allFiles, ...mappedBatch]` plus a
+`deviceLibrary.svelte.ts:178` does `view.allFiles = [...view.allFiles, ...mappedBatch]` plus a
 `bumpBrowseVersion()` per batch. A 10,000-track library at 500 per batch is 20 full-array copies and 20
 reactive invalidations. Transient cost during a scan, not a leak.
 
@@ -504,8 +513,9 @@ and A/B on the same device and OS build. `lockClocks` is for microbenchmarks onl
 for launch, duration-of-use or jank tests.
 
 Today there is no such document. `docs/device-verification.md` is a 20-case functional pass with no
-timings, and the only timing assertion in the entire test suite is a 3 s upper bound guarding an
-O(n^2) queue hydration in `tests/unit/models/player.test.ts`.
+timings. Timing assertions are thin but this is not the only one: a 3 s upper bound guards an O(n^2)
+queue hydration in `tests/unit/models/player.test.ts`, a 5 s bound sits in
+`tests/unit/youtube/live.test.ts:96`, and a 200 ms bound in `tests/unit/models/podcast-refresh.test.ts:24`.
 
 ### M6. The CI gap
 
