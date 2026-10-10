@@ -142,17 +142,19 @@ jobs:
           PACKAGE_VERSION: ${{ steps.android_meta.outputs.package_version }}
           NETLIFY_SITE_URL: ${{ steps.netlify_meta.outputs.site_url }}
         run: |
-          mkdir -p static/releases/android
-          find static/releases/android -maxdepth 1 -type f \( -name '*.apk' -o -name '*.json' \) -delete
-
           if [[ "$BUILD_TYPE" != "release" ]]; then
-            # A debug build must never enter the release channel. The in-app
-            # updater reads /releases/android/latest.json (androidUpdate.ts), so
-            # writing it here would offer a debug build to every installed app.
-            cp "$ARTIFACT_PATH" "static/releases/android/latest-debug.apk"
-            echo "Staged debug APK as latest-debug.apk; latest.apk and latest.json untouched."
+            # A debug build must never enter the release channel, and this step's
+            # output is never deployed for a debug run (see the deploy step's
+            # condition). The in-app updater reads /releases/android/latest.json
+            # (androidUpdate.ts), so writing it here would offer a debug build to
+            # every installed app. The debug APK reaches the user as the
+            # media-hub-android-debug-apk workflow artifact instead.
+            echo "Debug build: skipping the release asset staging. No latest.apk, no latest.json."
             exit 0
           fi
+
+          mkdir -p static/releases/android
+          find static/releases/android -maxdepth 1 -type f \( -name '*.apk' -o -name '*.json' \) -delete
 
           cp "$ARTIFACT_PATH" "static/releases/android/latest.apk"
 
