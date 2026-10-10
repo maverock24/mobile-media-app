@@ -44,7 +44,10 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 	// Last PlaybackStateCompat pushed by the plugin. MediaSessionCompat exposes no
 	// getPlaybackState(), so this cache is what lets updatePosition() re-assert the
 	// exact state and actions the transition push established.
-	private PlaybackStateCompat lastPlaybackState;
+	// Written on Capacitor's plugin thread by the full push, and on the main thread by
+	// setServiceInstance() when the service starts; read on the plugin thread. Hence
+	// volatile. The state object is never mutated after it is built.
+	private volatile PlaybackStateCompat lastPlaybackState;
 	private AudioManager audioManager;
 	private PowerManager.WakeLock wakeLock;
 	private AudioFocusRequest focusRequest;
@@ -373,8 +376,9 @@ public class MediaPlaybackService extends MediaBrowserServiceCompat {
 	}
 
 	/** Cache the last playback state pushed by the plugin and forward it to the
-	 *  session. Every plugin method runs on the main thread, so the cache needs no
-	 *  extra synchronisation. */
+	 *  session. Plugin methods arrive on Capacitor's CapacitorPlugins HandlerThread,
+	 *  while setServiceInstance() reaches this from the main thread, so the field is
+	 *  volatile rather than relying on a single-thread invariant. */
 	public void setPlaybackState(PlaybackStateCompat state) {
 		lastPlaybackState = state;
 		mediaSession.setPlaybackState(state);
