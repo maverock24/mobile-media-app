@@ -16,11 +16,13 @@ The live code in `src/` is authoritative. Planning docs (`01_PRD.md`, `PROGRESS.
 | UI components | `src/lib/components/views/*` (feature screens), `src/lib/components/ui/*` (primitives) |
 | Google Drive | `src/lib/google-drive.ts` (API), `src/lib/google-drive-native.ts` (Android bridge), `src/lib/google-drive-auth-error.ts`, `src/lib/drive/` (extracted modules, currently `driveSession.svelte.ts`) |
 | Audio | `src/lib/audio/player.svelte.ts` (per-deck player), `src/lib/audio/fileResolver.ts`, `src/lib/audio/equalizer.ts` |
-| Native bridges (Android/Capacitor) | `src/lib/native/*` (`haptics`, `directory-reader`, `media-controls`) |
+| Native bridges (Android/Capacitor) | `src/lib/native/*` (`haptics`, `directory-reader`, `media-controls`, `youtube-audio`, `screen-dim`) |
+| Browse / library | `src/lib/browse/*` (`folderScan` holds the listing cascade, `libraryCache` the IndexedDB cache), `src/lib/device/*` (per-deck library state, rescan) |
 | Models | `src/lib/models/` (`media`, `music`, `browse`) |
 | Utils | `src/lib/utils/`, `src/lib/persisted.svelte.ts` |
 | Android project | `android/` (Capacitor + native plugins) |
-| Tests (Playwright E2E) | `tests/` (~3,173 lines; `*.test.ts`) |
+| Tests | `tests/` (11,859 lines: `tests/unit` is vitest, `tests/e2e` is Playwright) |
+| Decisions & specs | `docs/adr/` (decisions), `docs/state/` (runtime state machines), `docs/device-verification.md` (device checks) |
 | CI | `.github/workflows/` — `quality` (check + unit + E2E) runs on push and pull request; `netlify-deploy` compiles `android/` and builds the APK on every push to main; `android-release` on version tags; `android-build` is a manual debug-APK button. No workflow compiles Java on a pull request. |
 
 ## Conventions
@@ -34,23 +36,20 @@ The live code in `src/` is authoritative. Planning docs (`01_PRD.md`, `PROGRESS.
 ## Commands
 
 ```sh
-pnpm dev           # dev server (Node 22, pnpm 10)
-pnpm check         # Svelte + TypeScript validation
-pnpm test          # Playwright E2E
-pnpm validate      # typecheck + E2E (single entry point)
-pnpm build         # web build → build/
-pnpm build:mobile  # mobile static build → dist-mobile/
-pnpm android:doctor  # Java/toolchain + Android OAuth fingerprints
-pnpm repo:check      # fail if Drive/APK setup incomplete
+pnpm dev           # dev server
+pnpm validate      # check + unit + E2E: the gate to run before committing
+pnpm build:mobile  # mobile static build → dist-mobile/ (the APK target)
 ```
+
+Every other script lives in `package.json`. Note `pnpm test` is vitest only; the
+Playwright suite is `pnpm test:e2e`.
 
 **Primary product target: Android APK.** Web is secondary (local preview + Playwright coverage).
 
 ## Ignore lists (avoid reading/grepping)
 
 - **Build/output** (gitignored): `android/app/build`, `.gradle`, `.svelte-kit`, `.netlify`, `dist-mobile`, `build`, `playwright-report`, `test-results`, `tmp-test-files`
-- **VS Code Copilot agent defs** (not used by Pi): `.github/agents/*.md`, `.github/instructions/*.instructions.md`, `.github/copilot-instructions.md`
-- **Historical planning docs**: `01_PRD.md`, `PROGRESS.md`, `ROADMAP.md`, `guardrails.md` — read only on explicit request.
+- **Historical**: `docs/archive/`, and the planning docs `01_PRD.md`, `PROGRESS.md`, `ROADMAP.md`, `guardrails.md`. Live material is under `docs/`, see the map above.
 
 ## Google Drive / Android auth
 
