@@ -81,7 +81,7 @@ android {
             // false here, which macrobenchmark requires of its target.
             initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
-            matchingFallbacks += listOf("release")
+            matchingFallbacks += ["release"]
         }
     }
 }

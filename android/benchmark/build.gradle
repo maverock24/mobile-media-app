@@ -17,11 +17,12 @@ android {
 
     buildTypes {
         benchmark {
-            // Mirror the :app benchmark variant: this test APK is signed with the
-            // debug key but its target must not be debuggable.
-            debuggable = false
+            // The test APK is a harness, not the measured app: it is signed with the
+            // debug key and left debuggable, matching the Android Studio benchmark
+            // template. Only the measured :app benchmark variant must be non-debuggable.
+            debuggable = true
             signingConfig = signingConfigs.getByName('debug')
-            matchingFallbacks += listOf('release')
+            matchingFallbacks += ['release']
         }
     }
 }
