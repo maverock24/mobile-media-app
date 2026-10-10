@@ -104,6 +104,13 @@ jobs:
       - name: Prepare release asset
         run: cp android/app/build/outputs/apk/release/app-release.apk media-hub-${{ github.ref_name }}-android-release.apk
 
+      - name: Upload R8 mapping file
+        uses: actions/upload-artifact@v4
+        with:
+          name: mapping.txt
+          path: android/app/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: error
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
