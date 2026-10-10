@@ -144,6 +144,16 @@ jobs:
         run: |
           mkdir -p static/releases/android
           find static/releases/android -maxdepth 1 -type f \( -name '*.apk' -o -name '*.json' \) -delete
+
+          if [[ "$BUILD_TYPE" != "release" ]]; then
+            # A debug build must never enter the release channel. The in-app
+            # updater reads /releases/android/latest.json (androidUpdate.ts), so
+            # writing it here would offer a debug build to every installed app.
+            cp "$ARTIFACT_PATH" "static/releases/android/latest-debug.apk"
+            echo "Staged debug APK as latest-debug.apk; latest.apk and latest.json untouched."
+            exit 0
+          fi
+
           cp "$ARTIFACT_PATH" "static/releases/android/latest.apk"
 
           APK_SIZE=$(stat -c%s "static/releases/android/latest.apk")
@@ -187,7 +197,12 @@ jobs:
           path: android/app/build/outputs/mapping/release/mapping.txt
           if-no-files-found: error
 
+      # A debug run must not reach the production deploy. Netlify deploys are atomic
+      # snapshots of --dir, so publishing a debug build would replace the live release
+      # assets with latest-debug.apk alone and delete latest.apk/latest.json. The debug
+      # APK is delivered as the media-hub-android-debug-apk workflow artifact instead.
       - name: Deploy updated site to Netlify
+        if: steps.android_build.outputs.build_type == 'release'
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
