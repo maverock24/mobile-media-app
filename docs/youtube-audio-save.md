@@ -23,7 +23,13 @@ plays in the app's own player.
    (`DirectoryReader.appendFileChunk`, the first call creates it). The byte count
    is checked against the downloaded size and a short file is reported rather
    than left behind.
-5. **Clean up** — `YoutubeAudio.release` deletes the cached file.
+5. **Refresh the library index** — the panel calls `requestLibraryRescan()`, the
+   same signal the Settings rescan button fires, and every mounted music view
+   listens for it. The browse view lists from the library index rather than from
+   the disk, so without this step the saved track is on disk but invisible in
+   the Music tab until the user rescans by hand. Both decks rebuild their own
+   copy of the index, which is what the per-deck view state requires.
+6. **Clean up** — `YoutubeAudio.release` deletes the cached file.
 
 ## Why there is no transcoding
 
@@ -85,9 +91,14 @@ caught error, so a crash leaves the phase behind and the next launch reports it.
 
 The native download has no automated coverage. Only the JS helpers are
 unit-tested: file-name sanitizing, base64 round trips, the chunked copy and its
-short-write guard, the save flow against mocked plugin calls, and the crash
-marker. `scripts/hitl-youtube-save.sh` captures the logcat and the breadcrumb a
-device run needs to produce.
+short-write guard, the save flow against mocked plugin calls, the crash marker,
+and the rescan signal. `scripts/hitl-youtube-save.sh` captures the logcat and the
+breadcrumb a device run needs to produce.
+
+The last hop has no test either: that the panel dispatches the rescan signal
+after a save, and that the mounted view rebuilds the index when it does. Both
+sides exist and are wired, but only a device run shows the track appearing in
+its folder without a manual rescan.
 
 ## Dependencies
 

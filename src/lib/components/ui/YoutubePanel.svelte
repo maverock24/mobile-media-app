@@ -44,7 +44,7 @@
 		queueItemFromSearchResult,
 		type YoutubeQueueItem,
 	} from '$lib/youtube/queue';
-	import { musicFavorites } from '$lib/stores/musicView.svelte';
+	import { musicFavorites, requestLibraryRescan } from '$lib/stores/musicView.svelte';
 	import { saveYoutubeItem, type SaveProgress } from '$lib/youtube/save';
 	import { ChevronLeft, Download, Loader2, Play, Search, Star, X, Youtube } from 'lucide-svelte';
 
@@ -420,6 +420,10 @@
 			await saveYoutubeItem(item, {
 				onProgress: (progress) => { saveProgress = progress; }
 			});
+			// The file landed in a folder the library index already covers, and the browse
+			// view lists from that index rather than from the disk. Without this the track
+			// is on disk but invisible in the Music tab until a manual rescan.
+			requestLibraryRescan();
 			addToast({ message: `Saved "${item.title}" to your device.`, type: 'info' });
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);

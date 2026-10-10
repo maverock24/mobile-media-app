@@ -84,7 +84,7 @@
 	import { mediaEngine, claimAudio, registerAudioSource, markUserPaused } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
-	import { musicFavorites, registerMusicPlayerView } from '$lib/stores/musicView.svelte';
+	import { LIBRARY_RESCAN_EVENT, musicFavorites, registerMusicPlayerView } from '$lib/stores/musicView.svelte';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
@@ -1592,8 +1592,8 @@
 	$effect(() => {
 		if (typeof window === 'undefined') return;
 		const onRescan = () => { void deviceLibrary.rescanCurrentLibraryIndex(); };
-		window.addEventListener('music-library:rescan', onRescan);
-		return () => window.removeEventListener('music-library:rescan', onRescan);
+		window.addEventListener(LIBRARY_RESCAN_EVENT, onRescan);
+		return () => window.removeEventListener(LIBRARY_RESCAN_EVENT, onRescan);
 	});
 
 	$effect(() => { return () => { player.destroy(); audioCtx?.close(); }; });

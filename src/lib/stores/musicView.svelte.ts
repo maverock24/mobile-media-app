@@ -1,5 +1,5 @@
 /**
- * Cross-component request to show the music player view.
+ * Cross-component requests shared by the music views.
  *
  * `Mp3PlayerView` owns the browse/player toggle (`showQueue`), but the
  * MiniPlayer that drives it lives at the shell level. The view is mounted twice
@@ -24,6 +24,26 @@ export function registerMusicPlayerView(handler: () => void): () => void {
 /** Ask every mounted music view to show the now-playing screen. */
 export function requestMusicPlayerView(): void {
 	for (const handler of _showPlayerHandlers) handler();
+}
+
+/**
+ * The event the mounted music views listen for to rebuild the library index.
+ *
+ * A window event rather than a second handler registry, because the request can
+ * come from any screen (Settings, the YouTube panel) that holds no reference to
+ * the views.
+ */
+export const LIBRARY_RESCAN_EVENT = 'music-library:rescan';
+
+/**
+ * Ask every mounted music view to rebuild the library index.
+ *
+ * The browse view lists from that index rather than from the disk, so a file
+ * written by the app itself stays invisible in the Music tab until the index is
+ * rebuilt. Both decks rebuild their own copy.
+ */
+export function requestLibraryRescan(): void {
+	window.dispatchEvent(new CustomEvent(LIBRARY_RESCAN_EVENT));
 }
 
 /**

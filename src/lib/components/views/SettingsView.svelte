@@ -11,6 +11,7 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import SleepTimerSettings from '$lib/components/settings/SleepTimerSettings.svelte';
 	import { appSettings, musicSettings, podcastSettings, sleepTimerSettings, weatherSettings } from '$lib/stores/settings.svelte';
+	import { requestLibraryRescan } from '$lib/stores/musicView.svelte';
 	import { EQ_PRESETS } from '$lib/models/music';
 	import { LIST_TILE_TONE_OPTIONS } from '$lib/utils/listTileTone';
 	import {
@@ -761,7 +762,7 @@
 					<div class="pt-1 space-y-2">
 						<button
 							class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-border text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
-							onclick={() => window.dispatchEvent(new CustomEvent('music-library:rescan'))}
+							onclick={() => requestLibraryRescan()}
 							disabled={musicSettings.librarySource !== 'drive' && !musicSettings.nativeTreeUri && !musicSettings.lastFolderName}
 						>
 							<RefreshCw class="w-4 h-4" />
