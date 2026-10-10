@@ -154,6 +154,18 @@ jobs:
             ' >> "$WORK/members.txt"
           done
 
+          # A parse that produced nothing would make every check below fail with a
+          # misleading "class missing" error, which reads like an R8 problem. Fail
+          # here instead, so the first failure names the real cause: dexdump output
+          # that this awk does not understand.
+          if [[ ! -s "$WORK/members.txt" ]] || ! grep -q 'Lcom/maverock24/mobilemediaapp/' "$WORK/members.txt"; then
+            echo "::error::the dexdump index is empty or holds no app classes; the parse or the dexdump output format is wrong"
+            echo "--- first lines of dexdump output, for diagnosing the format ---"
+            "$DEXDUMP" "$(ls "$WORK"/classes*.dex | head -n1)" 2>/dev/null | head -25 || true
+            exit 1
+          fi
+          echo "Indexed $(wc -l < "$WORK/members.txt") class members from the minified DEX."
+
           CLASSES=(DirectoryReaderPlugin GoogleDriveNativePlugin MediaControlsPlugin ScreenDimPlugin YoutubeAudioPlugin)
           declare -A METHODS=(
             [DirectoryReaderPlugin]="rememberTreeUri startAudioScan getAudioScanBatch cancelAudioScan listEntries listAudioFiles writeFile appendFileChunk deleteEntry copyEntry moveEntry installApk"
