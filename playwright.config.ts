@@ -41,6 +41,8 @@ export default defineConfig({
 		command: `PUBLIC_GOOGLE_CLIENT_ID=${process.env.PUBLIC_GOOGLE_CLIENT_ID ?? 'playwright-google-client-id.apps.googleusercontent.com'} pnpm build && PUBLIC_GOOGLE_CLIENT_ID=${process.env.PUBLIC_GOOGLE_CLIENT_ID ?? 'playwright-google-client-id.apps.googleusercontent.com'} pnpm preview --host 127.0.0.1 --port 4177`,
 		url: 'http://127.0.0.1:4177',
 		reuseExistingServer: !process.env.CI,
-		timeout: 120_000,
+		// The build alone takes ~90 s on this machine, so 120 s left no room for the
+		// preview start and the gate failed with a timeout rather than a real fault.
+		timeout: 300_000,
 	},
 });
