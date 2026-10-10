@@ -1,9 +1,8 @@
 package com.maverock24.mobilemediaapp;
 
-import android.media.MediaCodec;
-import android.media.MediaExtractor;
-import android.media.MediaFormat;
+import android.net.Uri;
 import android.util.Base64;
+import android.util.Log;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -13,65 +12,86 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.ByteBuffer;
 
 /**
- * Native download + AAC/Opus decode for the YouTube → MP3 save.
+ * Native download for the YouTube → file save.
  *
- * The WebView path (fetch the stream, then AudioContext.decodeAudioData) needs
- * the whole track in RAM and runs through the WebView media decoder, which
- * crashed the app on device. This downloads to a cache file and decodes it to
- * 16-bit PCM with MediaExtractor/MediaCodec, so JS only ever pulls bounded PCM
- * chunks to feed the LAME encoder.
+ * The WebView cannot do this hop: googlevideo sends no CORS headers, so a
+ * WebView fetch of the stream is blocked before it leaves the app, and pulling a
+ * whole song into JS holds it in the WebView. This downloads to a cache file
+ * with HttpURLConnection instead, and JS copies that file into the picked SAF
+ * folder in bounded chunks.
+ *
+ * Two details of the old implementation are replaced here:
+ *
+ *  - It issued one bare GET per save, with no request headers and no range.
+ *    youtubei.js's own downloader does both
+ *    (node_modules/youtubei.js/dist/src/utils/FormatUtils.js): it sends
+ *    `accept`/`origin`/`referer`, and it walks the file with the
+ *    `range=<start>-<end>` query parameter rather than a Range header. This
+ *    mirrors that, in 4 MB windows with a retry per window, and logs the URL's
+ *    own `range` value so a device run can show whether YouTube ever hands out
+ *    a partial one.
+ *  - Every 128 KB crossed the Capacitor bridge as a progress event. Progress is
+ *    now reported once per megabyte.
  *
  * Capacitor dispatches plugin methods on its own background thread, so the
- * blocking download and decode do not touch the WebView UI thread.
+ * blocking download does not touch the WebView UI thread.
  */
 @CapacitorPlugin(name = "YoutubeAudio")
 public class YoutubeAudioPlugin extends Plugin {
 
+	private static final String TAG = "YoutubeAudio";
+	/** Bytes per read from the socket. */
 	private static final int DOWNLOAD_BUFFER_BYTES = 128 * 1024;
-	private static final long DEQUEUE_TIMEOUT_US = 10_000L;
+	/** Maximum bytes per request. Small enough to resume quickly after a stall. */
+	private static final int RANGE_WINDOW_BYTES = 4 * 1024 * 1024;
+	/** Attempts per window before the download is declared failed. */
+	private static final int MAX_WINDOW_ATTEMPTS = 3;
+	/** Bytes between progress events. Each event crosses the Capacitor bridge. */
+	private static final long PROGRESS_STEP_BYTES = 1024 * 1024;
+	/** A range that starts past the end of the stream, which is how a download
+	 *  whose size is an exact multiple of the window discovers it is done. */
+	private static final int HTTP_RANGE_NOT_SATISFIABLE = 416;
+	private static final int CONNECT_TIMEOUT_MS = 15_000;
+	private static final int READ_TIMEOUT_MS = 30_000;
 
 	@PluginMethod
-	public void preparePcm(PluginCall call) {
+	public void download(PluginCall call) {
 		String url = call.getString("url");
 		String id = call.getString("id");
 		if (url == null || url.isEmpty() || id == null || id.isEmpty()) {
 			call.reject("url and id are required.");
 			return;
 		}
+		Long expectedBytes = call.getLong("expectedBytes");
+		logStreamRequest(id, url, expectedBytes);
 
 		try {
-			File cacheDir = getContext().getCacheDir();
-			File source = new File(cacheDir, "yt-" + id + ".src");
-			File pcm = new File(cacheDir, "yt-" + id + ".pcm");
-
-			downloadToFile(url, source, id);
-
-			DecodeResult result = decodeToPcm(source, pcm);
-			// The encoded stream is large and unneeded now; the PCM file is all
-			// JS reads from here on.
+			File target = new File(getContext().getCacheDir(), "yt-" + id + ".audio");
 			//noinspection ResultOfMethodCallIgnored
-			source.delete();
+			target.delete();
+
+			long size = downloadToFile(url, target, expectedBytes);
 
 			JSObject output = new JSObject();
-			output.put("path", pcm.getAbsolutePath());
-			output.put("sampleRate", result.sampleRate);
-			output.put("channels", result.channels);
-			output.put("samples", result.samples);
+			output.put("path", target.getAbsolutePath());
+			output.put("size", size);
 			call.resolve(output);
 		} catch (Exception e) {
-			call.reject("Failed to prepare audio: " + e.getMessage(), e);
+			call.reject("Failed to download audio: " + e.getMessage(), e);
 		}
 	}
 
+	/** Read part of a downloaded file. The caller copies it into the picked folder. */
 	@PluginMethod
-	public void readPcmChunk(PluginCall call) {
+	public void readFileChunk(PluginCall call) {
 		String path = call.getString("path");
 		Integer offsetValue = call.getInt("offset", 0);
 		Integer lengthValue = call.getInt("length", 0);
@@ -92,6 +112,7 @@ public class YoutubeAudioPlugin extends Plugin {
 			if (offset >= size) {
 				JSObject output = new JSObject();
 				output.put("data", "");
+				output.put("bytesRead", 0);
 				output.put("eof", true);
 				call.resolve(output);
 				return;
@@ -105,14 +126,15 @@ public class YoutubeAudioPlugin extends Plugin {
 
 			JSObject output = new JSObject();
 			output.put("data", Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP));
+			output.put("bytesRead", read);
 			output.put("eof", offset + read >= size);
 			call.resolve(output);
 		} catch (Exception e) {
-			call.reject("Failed to read PCM chunk: " + e.getMessage(), e);
+			call.reject("Failed to read the downloaded file: " + e.getMessage(), e);
 		}
 	}
 
-	/** Delete the temp files for one save. Safe to call more than once. */
+	/** Delete the cached file for one save. Safe to call more than once. */
 	@PluginMethod
 	public void release(PluginCall call) {
 		String id = call.getString("id");
@@ -122,7 +144,9 @@ public class YoutubeAudioPlugin extends Plugin {
 		}
 		try {
 			File cacheDir = getContext().getCacheDir();
-			for (String suffix : new String[] { ".src", ".pcm" }) {
+			// The .src/.pcm names are from the decode pipeline this replaced;
+			// deleting them clears leftovers from an earlier version.
+			for (String suffix : new String[] { ".audio", ".src", ".pcm" }) {
 				File file = new File(cacheDir, "yt-" + id + suffix);
 				if (file.exists()) {
 					//noinspection ResultOfMethodCallIgnored
@@ -131,149 +155,140 @@ public class YoutubeAudioPlugin extends Plugin {
 			}
 			call.resolve();
 		} catch (Exception e) {
-			call.reject("Failed to release temp files: " + e.getMessage(), e);
+			call.reject("Failed to release the cached file: " + e.getMessage(), e);
 		}
 	}
 
 	// ── Download ──────────────────────────────────────────────────────────
-	private void downloadToFile(String urlString, File destination, String id) throws Exception {
-		HttpURLConnection connection = (HttpURLConnection) new URL(urlString).openConnection();
-		connection.setConnectTimeout(15_000);
-		connection.setReadTimeout(30_000);
+	/**
+	 * Record what the resolver handed over. Whether YouTube's own URL already
+	 * carries a `range` parameter decides whether a partial response is even
+	 * possible, and this is the only place that can be observed.
+	 */
+	private void logStreamRequest(String id, String url, Long expectedBytes) {
+		Uri parsed = Uri.parse(url);
+		String urlRange = parsed.getQueryParameter("range");
+		Log.i(TAG, "download id=" + id + " host=" + parsed.getHost()
+			+ " expected=" + (expectedBytes == null ? "unknown" : expectedBytes.toString())
+			+ " urlRange=" + (urlRange == null ? "none" : urlRange));
+	}
+
+	/**
+	 * Fetch the stream into `destination` in windows, returning the byte count.
+	 *
+	 * Each window asks for `range=<start>-<end>`, which is how youtubei.js
+	 * addresses this host, and is retried on its own so a stall costs one window
+	 * rather than the whole download. A window that does not return exactly what
+	 * was asked for marks the end of the stream, whether short (truncated) or
+	 * long (the server ignored the range parameter).
+	 */
+	private long downloadToFile(String urlString, File destination, Long expectedBytes) throws Exception {
+		long offset = 0L;
+		long lastReported = 0L;
+		int attempts = 0;
+
+		try (FileOutputStream out = new FileOutputStream(destination)) {
+			while (expectedBytes == null || offset < expectedBytes) {
+				long windowStart = offset;
+				long windowEnd = expectedBytes == null
+					? windowStart + RANGE_WINDOW_BYTES - 1
+					: Math.min(windowStart + RANGE_WINDOW_BYTES, expectedBytes) - 1;
+				long requested = windowEnd - windowStart + 1;
+
+				long written = 0L;
+				try {
+					written = fetchWindow(urlString, windowStart, windowEnd, out);
+				} catch (IOException | RuntimeException error) {
+					attempts++;
+					Log.w(TAG, "range " + windowStart + "-" + windowEnd + " failed (attempt "
+						+ attempts + "): " + error.getMessage());
+					if (attempts >= MAX_WINDOW_ATTEMPTS) {
+						throw new Exception("gave up at byte " + windowStart + " after "
+							+ attempts + " attempts: " + error.getMessage(), error);
+					}
+					// The failed attempt wrote part of the window before it died. Drop
+					// those bytes and put the retry back at the window's start, or the
+					// two attempts would interleave.
+					out.getChannel().truncate(windowStart);
+					out.getChannel().position(windowStart);
+					continue;
+				}
+
+				attempts = 0;
+				offset += written;
+				Log.i(TAG, "range " + windowStart + "-" + windowEnd + " + " + written
+					+ " bytes, " + offset + " total");
+
+				if (offset - lastReported >= PROGRESS_STEP_BYTES || written < requested) {
+					lastReported = offset;
+					notifyProgress(offset, expectedBytes == null ? -1L : expectedBytes);
+				}
+				if (written != requested) break;
+			}
+			out.flush();
+		}
+
+		if (expectedBytes != null && offset != expectedBytes) {
+			throw new Exception("downloaded " + offset + " of " + expectedBytes + " bytes");
+		}
+		notifyProgress(offset, expectedBytes == null ? -1L : expectedBytes);
+		Log.i(TAG, "download finished: " + offset + " bytes");
+		return offset;
+	}
+
+	/** One range request, appended to the stream and closed by the caller. */
+	private long fetchWindow(String urlString, long start, long end, OutputStream out) throws IOException {
+		// YouTube uses its own `range` query parameter rather than a Range header;
+		// youtubei.js appends it the same way and notes the difference.
+		String separator = urlString.contains("?") ? "&" : "?";
+		String windowUrl = urlString + separator + "range=" + start + "-" + end;
+
+		if (!"https".equalsIgnoreCase(Uri.parse(windowUrl).getScheme())) {
+			throw new IOException("refusing a non-HTTPS stream URL");
+		}
+
+		HttpURLConnection connection = (HttpURLConnection) new URL(windowUrl).openConnection();
+		connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+		connection.setReadTimeout(READ_TIMEOUT_MS);
 		connection.setInstanceFollowRedirects(true);
+		// The same headers youtubei.js sends with a stream request. Without them
+		// googlevideo is free to answer a partial or throttled response.
+		connection.setRequestProperty("accept", "*/*");
+		connection.setRequestProperty("origin", "https://www.youtube.com");
+		connection.setRequestProperty("referer", "https://www.youtube.com");
+		// Android's HttpURLConnection asks for gzip by default. Media is never
+		// compressed, and asking for identity keeps the byte count honest.
+		connection.setRequestProperty("accept-encoding", "identity");
+
 		try {
 			int status = connection.getResponseCode();
+			if (status == HTTP_RANGE_NOT_SATISFIABLE) {
+				// Asked for bytes past the end: the stream is already complete.
+				return 0L;
+			}
 			if (status < 200 || status >= 300) {
-				throw new Exception("Download failed (HTTP " + status + ").");
+				throw new IOException("HTTP " + status);
 			}
 
-			long total = connection.getContentLengthLong();
-			long received = 0L;
+			long written = 0L;
 			byte[] buffer = new byte[DOWNLOAD_BUFFER_BYTES];
-			try (InputStream in = connection.getInputStream();
-				 FileOutputStream out = new FileOutputStream(destination)) {
+			try (InputStream in = connection.getInputStream()) {
 				int read;
 				while ((read = in.read(buffer)) != -1) {
 					out.write(buffer, 0, read);
-					received += read;
-					notifyProgress("download", received, total);
+					written += read;
 				}
-				out.flush();
 			}
+			return written;
 		} finally {
 			connection.disconnect();
 		}
 	}
 
-	private void notifyProgress(String phase, long received, long total) {
+	private void notifyProgress(long received, long total) {
 		JSObject progress = new JSObject();
-		progress.put("phase", phase);
 		progress.put("received", received);
 		progress.put("total", total);
 		notifyListeners("progress", progress, false);
-	}
-
-	// ── Decode ────────────────────────────────────────────────────────────
-	private static final class DecodeResult {
-		int sampleRate;
-		int channels;
-		long samples;
-	}
-
-	private DecodeResult decodeToPcm(File source, File pcmFile) throws Exception {
-		MediaExtractor extractor = new MediaExtractor();
-		MediaCodec codec = null;
-		try {
-			extractor.setDataSource(source.getAbsolutePath());
-
-			int trackIndex = -1;
-			MediaFormat inputFormat = null;
-			for (int index = 0; index < extractor.getTrackCount(); index++) {
-				MediaFormat format = extractor.getTrackFormat(index);
-				String mime = format.getString(MediaFormat.KEY_MIME);
-				if (mime != null && mime.startsWith("audio/")) {
-					trackIndex = index;
-					inputFormat = format;
-					break;
-				}
-			}
-			if (trackIndex < 0 || inputFormat == null) {
-				throw new Exception("No audio track found in the stream.");
-			}
-			extractor.selectTrack(trackIndex);
-
-			String mime = inputFormat.getString(MediaFormat.KEY_MIME);
-			codec = MediaCodec.createDecoderByType(mime);
-			codec.configure(inputFormat, null, null, 0);
-			codec.start();
-
-			int sampleRate = inputFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)
-				? inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE) : 44100;
-			int channels = inputFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)
-				? inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT) : 2;
-
-			MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-			boolean inputDone = false;
-			boolean outputDone = false;
-
-			try (FileOutputStream out = new FileOutputStream(pcmFile)) {
-				while (!outputDone) {
-					if (!inputDone) {
-						int inputIndex = codec.dequeueInputBuffer(DEQUEUE_TIMEOUT_US);
-						if (inputIndex >= 0) {
-							ByteBuffer inputBuffer = codec.getInputBuffer(inputIndex);
-							int size = inputBuffer == null ? -1 : extractor.readSampleData(inputBuffer, 0);
-							if (size < 0) {
-								codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-								inputDone = true;
-							} else {
-								codec.queueInputBuffer(inputIndex, 0, size, extractor.getSampleTime(), 0);
-								extractor.advance();
-							}
-						}
-					}
-
-					int outputIndex = codec.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US);
-					if (outputIndex >= 0) {
-						if (info.size > 0) {
-							ByteBuffer outputBuffer = codec.getOutputBuffer(outputIndex);
-							if (outputBuffer != null) {
-								byte[] data = new byte[info.size];
-								outputBuffer.position(info.offset);
-								outputBuffer.limit(info.offset + info.size);
-								outputBuffer.get(data);
-								out.write(data);
-							}
-						}
-						codec.releaseOutputBuffer(outputIndex, false);
-						if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-							outputDone = true;
-						}
-					} else if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-						MediaFormat outputFormat = codec.getOutputFormat();
-						if (outputFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
-							sampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE);
-						}
-						if (outputFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
-							channels = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
-						}
-					}
-				}
-				out.flush();
-			}
-
-			DecodeResult result = new DecodeResult();
-			result.sampleRate = sampleRate;
-			result.channels = channels;
-			int bytesPerFrame = 2 * channels;
-			result.samples = bytesPerFrame > 0 ? pcmFile.length() / bytesPerFrame : 0;
-			return result;
-		} finally {
-			if (codec != null) {
-				try { codec.stop(); } catch (Exception ignored) { /* already stopped */ }
-				codec.release();
-			}
-			extractor.release();
-		}
 	}
 }

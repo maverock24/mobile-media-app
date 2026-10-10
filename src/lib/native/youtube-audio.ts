@@ -1,41 +1,47 @@
 import { registerPlugin } from '@capacitor/core';
 
 /**
- * Native Android bridge for the YouTube → MP3 save.
+ * Native Android bridge for the YouTube → file save.
  *
- * The WebView cannot do this part safely: `decodeAudioData` materialises the
- * whole track as PCM (tens to hundreds of MB) and uses the WebView's media
- * decoder, which is what killed the app. Instead the download and the AAC/Opus
- * decode run natively (HttpURLConnection + MediaExtractor/MediaCodec), producing
- * a 16-bit PCM file on disk. JS then pulls it in bounded chunks and feeds the
- * LAME encoder, so peak memory stays small.
+ * The WebView cannot fetch googlevideo directly: the stream host sends no CORS
+ * headers, and pulling a whole song into JS holds it all in the WebView. The
+ * download therefore runs natively (`HttpURLConnection`), and JS only ever reads
+ * the cached result back in bounded chunks to copy it into the picked folder.
+ *
+ * The bytes are stored exactly as YouTube served them. No decoding, no
+ * re-encoding, so nothing materialises the track as PCM.
  */
 
-export interface PreparePcmResult {
-	/** Absolute path of the decoded 16-bit interleaved PCM file in the cache. */
+export interface DownloadResult {
+	/** Absolute path of the downloaded stream in the cache. */
 	path: string;
-	sampleRate: number;
-	channels: 1 | 2;
-	/** Total frames (samples per channel). */
-	samples: number;
+	/** Bytes on disk. */
+	size: number;
 }
 
-export interface PcmChunkResult {
-	/** Base64 (no line wrapping) of the raw little-endian Int16 PCM bytes. */
+export interface FileChunkResult {
+	/** Base64 (no line wrapping) of the bytes read. */
 	data: string;
+	/** Bytes the native side actually read. */
+	bytesRead: number;
 	eof: boolean;
 }
 
 export interface YoutubeAudioProgressEvent {
-	phase: 'download' | 'decode';
+	/** Bytes downloaded so far. */
 	received: number;
-	/** Total bytes, or -1 when the server did not report a length. */
+	/** Total bytes, or -1 when the length is unknown. */
 	total: number;
 }
 
 export interface YoutubeAudioPlugin {
-	preparePcm(options: { url: string; id: string }): Promise<PreparePcmResult>;
-	readPcmChunk(options: { path: string; offset: number; length: number }): Promise<PcmChunkResult>;
+	download(options: {
+		url: string;
+		id: string;
+		/** Byte size from the resolver, when YouTube reported one. */
+		expectedBytes?: number;
+	}): Promise<DownloadResult>;
+	readFileChunk(options: { path: string; offset: number; length: number }): Promise<FileChunkResult>;
 	release(options: { id: string }): Promise<void>;
 	addListener(
 		eventName: 'progress',

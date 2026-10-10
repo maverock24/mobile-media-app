@@ -1,5 +1,5 @@
 /**
- * Crash-surviving breadcrumb for the YouTube → MP3 save.
+ * Crash-surviving breadcrumb for the YouTube → file save.
  *
  * A native crash (out of memory, or the platform media decoder dying) leaves no
  * JS error and no toast, so there is no way to tell which step killed the app.
@@ -7,13 +7,12 @@
  * success or a caught error. If the process dies mid-save the marker survives,
  * and the next launch reports the phase.
  */
-const SAVE_PHASE_KEY = 'youtube-mp3-save-phase';
+const SAVE_PHASE_KEY = 'youtube-audio-save-phase';
 
 const PHASE_LABELS: Record<string, string> = {
 	picking: 'choosing the folder',
 	resolving: 'resolving the stream',
 	downloading: 'downloading',
-	encoding: 'decoding and encoding',
 	saving: 'saving the file'
 };
 

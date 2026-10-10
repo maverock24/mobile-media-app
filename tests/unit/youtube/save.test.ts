@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from 'vitest';
 
 // save.ts reaches @capacitor/core transitively through the plugin modules.
 vi.mock('@capacitor/core', () => ({
-	CapacitorHttp: { get: vi.fn() },
 	Capacitor: {
 		isNativePlatform: () => false,
 		isPluginAvailable: () => false,
@@ -12,53 +11,74 @@ vi.mock('@capacitor/core', () => ({
 	registerPlugin: () => ({}),
 }));
 
+vi.mock('@capawesome/capacitor-file-picker', () => ({
+	FilePicker: { pickDirectory: vi.fn() },
+}));
+
 vi.mock('$lib/native/directory-reader', () => ({
 	DirectoryReader: {
 		rememberTreeUri: vi.fn(async () => {}),
-		appendFileChunk: vi.fn(async () => ({ path: 'content://tree/Song.mp3' })),
-		writeFile: vi.fn(),
+		appendFileChunk: vi.fn(async () => ({ path: 'content://tree/Song.m4a' })),
 	},
 }));
 
 vi.mock('$lib/native/youtube-audio', () => ({
 	YoutubeAudio: {
-		preparePcm: vi.fn(),
-		readPcmChunk: vi.fn(),
+		download: vi.fn(),
+		readFileChunk: vi.fn(),
 		release: vi.fn(async () => {}),
 		addListener: vi.fn(async () => ({ remove: async () => {} })),
 	},
 }));
 
+vi.mock('$lib/youtube/client', () => ({
+	resolveYoutubeDownload: vi.fn(),
+}));
+
+import { FilePicker } from '@capawesome/capacitor-file-picker';
 import { DirectoryReader } from '$lib/native/directory-reader';
 import { YoutubeAudio } from '$lib/native/youtube-audio';
+import { resolveYoutubeDownload } from '$lib/youtube/client';
 import {
-	sanitizeMp3FileName,
 	base64FromBytes,
 	bytesFromBase64,
-	interleavedInt16ToPlanarFloats,
-	encodePcmToMp3,
-	writeMp3File,
+	sanitizeAudioFileName,
+	saveYoutubeItem,
+	writeDownloadedFile,
 } from '$lib/youtube/save';
 import { markSavePhase, clearSavePhase, takeCrashedSavePhase } from '$lib/youtube/saveMarker';
 
-describe('sanitizeMp3FileName', () => {
-	it('appends .mp3 and keeps an existing extension', () => {
-		expect(sanitizeMp3FileName('Song Title')).toBe('Song Title.mp3');
-		expect(sanitizeMp3FileName('Song Title.mp3')).toBe('Song Title.mp3');
+/** A fake native reader returning real base64 of the requested size. */
+function stubChunkedRead(totalBytes: number): void {
+	vi.mocked(YoutubeAudio.readFileChunk).mockImplementation(async ({ offset, length }) => {
+		const size = Math.max(0, Math.min(length, totalBytes - offset));
+		return { data: base64FromBytes(new Uint8Array(size)), bytesRead: size, eof: offset + size >= totalBytes };
+	});
+}
+
+describe('sanitizeAudioFileName', () => {
+	it('appends the container extension and keeps an existing one', () => {
+		expect(sanitizeAudioFileName('Song Title', 'm4a')).toBe('Song Title.m4a');
+		expect(sanitizeAudioFileName('Song Title.m4a', 'm4a')).toBe('Song Title.m4a');
+		expect(sanitizeAudioFileName('SONG TITLE.M4A', 'm4a')).toBe('SONG TITLE.M4A');
+	});
+
+	it('does not mistake another extension for the target one', () => {
+		expect(sanitizeAudioFileName('Song.mp3', 'm4a')).toBe('Song.mp3.m4a');
 	});
 
 	it('replaces filesystem-illegal characters and collapses spaces', () => {
-		expect(sanitizeMp3FileName('A/B: "C" ?')).toBe('A B C.mp3');
+		expect(sanitizeAudioFileName('A/B: "C" ?', 'm4a')).toBe('A B C.m4a');
 	});
 
 	it('falls back to a default name when nothing usable remains', () => {
-		expect(sanitizeMp3FileName('   ')).toBe('YouTube audio.mp3');
-		expect(sanitizeMp3FileName('///')).toBe('YouTube audio.mp3');
+		expect(sanitizeAudioFileName('   ', 'm4a')).toBe('YouTube audio.m4a');
+		expect(sanitizeAudioFileName('///', 'm4a')).toBe('YouTube audio.m4a');
 	});
 
 	it('strips trailing dots and truncates long titles', () => {
-		expect(sanitizeMp3FileName('Trailing...')).toBe('Trailing.mp3');
-		expect(sanitizeMp3FileName('x'.repeat(300)).length).toBeLessThanOrEqual(124);
+		expect(sanitizeAudioFileName('Trailing...', 'm4a')).toBe('Trailing.m4a');
+		expect(sanitizeAudioFileName('x'.repeat(300), 'm4a').length).toBeLessThanOrEqual(124);
 	});
 });
 
@@ -85,73 +105,115 @@ describe('base64 chunking', () => {
 	});
 });
 
-describe('interleavedInt16ToPlanarFloats', () => {
-	it('de-interleaves stereo samples into planar floats', () => {
-		const samples = new Int16Array([0, 32767, -32768, 16384]);
-		const { left, right } = interleavedInt16ToPlanarFloats(new Uint8Array(samples.buffer), 2);
-
-		expect(Array.from(left)).toEqual([0, -1]);
-		expect(right).not.toBeNull();
-		expect(right?.[0]).toBeCloseTo(32767 / 32768, 5);
-		expect(right?.[1]).toBeCloseTo(0.5, 5);
-	});
-
-	it('returns no right channel for mono', () => {
-		const samples = new Int16Array([1000, -1000]);
-		const { left, right } = interleavedInt16ToPlanarFloats(new Uint8Array(samples.buffer), 1);
-		expect(right).toBeNull();
-		expect(Array.from(left)).toEqual([1000 / 32768, -1000 / 32768]);
-	});
-});
-
-describe('encodePcmToMp3', () => {
-	it('reads the native PCM in chunks and produces a valid MP3', async () => {
-		const sampleRate = 44100;
-		const channels = 1 as const;
-		const samples = sampleRate; // 1 second
-		const totalBytes = samples * 2 * channels;
-
-		vi.mocked(YoutubeAudio.readPcmChunk).mockImplementation(async ({ offset, length }) => {
-			const size = Math.min(length, totalBytes - offset);
-			return {
-				data: base64FromBytes(new Uint8Array(size)),
-				eof: offset + size >= totalBytes,
-			};
-		});
-
-		const ratios: number[] = [];
-		const mp3 = await encodePcmToMp3(
-			{ path: 'pcm', sampleRate, channels, samples },
-			(ratio) => ratios.push(ratio),
-		);
-
-		expect(YoutubeAudio.readPcmChunk).toHaveBeenCalledTimes(2);
-		expect(mp3.length).toBeGreaterThan(0);
-		// MPEG audio frame sync: 11 set bits.
-		expect(mp3[0]).toBe(0xff);
-		expect(mp3[1] & 0xe0).toBe(0xe0);
-		expect(ratios.at(-1)).toBe(1);
-	});
-});
-
-describe('writeMp3File', () => {
-	it('writes the MP3 in bounded chunks, creating the file on the first call', async () => {
+describe('writeDownloadedFile', () => {
+	it('copies the cached file in bounded chunks, creating the document on the first call', async () => {
 		const append = vi.mocked(DirectoryReader.appendFileChunk);
 		append.mockClear();
-		const writeChunk = 256 * 1024;
-		const mp3 = new Uint8Array(writeChunk * 2 + 10);
+		stubChunkedRead(256 * 1024 * 2 + 10);
 		const ratios: number[] = [];
 
-		await writeMp3File('content://tree', 'Song.mp3', mp3, (ratio) => ratios.push(ratio));
+		await writeDownloadedFile({
+			treeUri: 'content://tree',
+			fileName: 'Song.m4a',
+			mimeType: 'audio/mp4',
+			sourcePath: '/cache/yt-x.audio',
+			size: 256 * 1024 * 2 + 10,
+			onProgress: (ratio) => ratios.push(ratio),
+		});
 
 		expect(append).toHaveBeenCalledTimes(3);
 		expect(append.mock.calls[0][0].create).toBe(true);
 		expect(append.mock.calls[1][0].create).toBe(false);
-		expect(append.mock.calls[0][0].fileName).toBe('Song.mp3');
+		expect(append.mock.calls[0][0].fileName).toBe('Song.m4a');
+		expect(append.mock.calls[0][0].mimeType).toBe('audio/mp4');
 		// Every bridge payload is small enough to survive.
 		expect(append.mock.calls[0][0].data.length).toBeLessThan(400_000);
-		expect(bytesFromBase64(append.mock.calls[0][0].data).length).toBe(writeChunk);
+		expect(bytesFromBase64(append.mock.calls[0][0].data).length).toBe(256 * 1024);
 		expect(ratios.at(-1)).toBe(1);
+	});
+
+	it('fails instead of leaving a short file behind', async () => {
+		vi.mocked(YoutubeAudio.readFileChunk).mockResolvedValue({
+			data: '',
+			bytesRead: 0,
+			eof: true,
+		});
+
+		await expect(
+			writeDownloadedFile({
+				treeUri: 'content://tree',
+				fileName: 'Song.m4a',
+				mimeType: 'audio/mp4',
+				sourcePath: '/cache/yt-x.audio',
+				size: 4096,
+			}),
+		).rejects.toThrow(/Only 0 of 4096 bytes/);
+	});
+});
+
+describe('saveYoutubeItem', () => {
+	it('downloads the resolved container and copies it under the right name', async () => {
+		vi.mocked(FilePicker.pickDirectory).mockResolvedValue({ path: 'content://tree' } as never);
+		vi.mocked(resolveYoutubeDownload).mockResolvedValue({
+			videoId: 'dQw4w9WgXcQ',
+			audioUrl: 'https://rr1---sn-x.googlevideo.com/videoplayback?itag=140',
+			title: 'A Song',
+			mimeType: 'audio/mp4',
+			extension: 'm4a',
+			contentLength: 4_194_304,
+		});
+		vi.mocked(YoutubeAudio.download).mockResolvedValue({ path: '/cache/yt-x.audio', size: 4_194_304 });
+		stubChunkedRead(4_194_304);
+		const append = vi.mocked(DirectoryReader.appendFileChunk);
+		append.mockClear();
+		append.mockResolvedValue({ path: 'content://tree/A Song.m4a' });
+
+		const path = await saveYoutubeItem({
+			videoId: 'dQw4w9WgXcQ',
+			title: 'A Song',
+			subtitle: 'Artist',
+			durationSeconds: 210,
+			durationLabel: '3:30',
+			thumbnailUrl: '',
+		});
+
+		expect(path).toBe('content://tree/A Song.m4a');
+		expect(vi.mocked(YoutubeAudio.download).mock.calls[0][0]).toEqual({
+			url: 'https://rr1---sn-x.googlevideo.com/videoplayback?itag=140',
+			id: 'dQw4w9WgXcQ',
+			expectedBytes: 4_194_304,
+		});
+		expect(append.mock.calls[0][0].fileName).toBe('A Song.m4a');
+		expect(append.mock.calls[0][0].mimeType).toBe('audio/mp4');
+		// The cache is dropped whether or not the copy succeeded.
+		expect(vi.mocked(YoutubeAudio.release)).toHaveBeenCalledWith({ id: 'dQw4w9WgXcQ' });
+	});
+
+	it('reports the download size when the resolver had none', async () => {
+		vi.mocked(FilePicker.pickDirectory).mockResolvedValue({ path: 'content://tree' } as never);
+		vi.mocked(resolveYoutubeDownload).mockResolvedValue({
+			videoId: 'dQw4w9WgXcQ',
+			audioUrl: 'https://x/videoplayback',
+			title: 'A Song',
+			mimeType: 'audio/mp4',
+			extension: 'm4a',
+			contentLength: null,
+		});
+		vi.mocked(YoutubeAudio.download).mockClear();
+		vi.mocked(YoutubeAudio.download).mockResolvedValue({ path: '/cache/yt-x.audio', size: 2048 });
+		stubChunkedRead(2048);
+		vi.mocked(DirectoryReader.appendFileChunk).mockResolvedValue({ path: 'content://tree/A Song.m4a' });
+
+		await saveYoutubeItem({
+			videoId: 'dQw4w9WgXcQ',
+			title: 'A Song',
+			subtitle: 'Artist',
+			durationSeconds: 210,
+			durationLabel: '3:30',
+			thumbnailUrl: '',
+		});
+
+		expect(vi.mocked(YoutubeAudio.download).mock.calls[0][0].expectedBytes).toBeUndefined();
 	});
 });
 
@@ -160,8 +222,8 @@ describe('saveMarker', () => {
 		clearSavePhase();
 		expect(takeCrashedSavePhase()).toBeNull();
 
-		markSavePhase('encoding');
-		expect(takeCrashedSavePhase()).toBe('decoding and encoding');
+		markSavePhase('downloading');
+		expect(takeCrashedSavePhase()).toBe('downloading');
 		// Consumed: a second read reports nothing.
 		expect(takeCrashedSavePhase()).toBeNull();
 	});

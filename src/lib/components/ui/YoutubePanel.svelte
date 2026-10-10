@@ -45,7 +45,7 @@
 		type YoutubeQueueItem,
 	} from '$lib/youtube/queue';
 	import { musicFavorites } from '$lib/stores/musicView.svelte';
-	import { saveYoutubeItemToMp3, type SaveProgress } from '$lib/youtube/save';
+	import { saveYoutubeItem, type SaveProgress } from '$lib/youtube/save';
 	import { ChevronLeft, Download, Loader2, Play, Search, Star, X, Youtube } from 'lucide-svelte';
 
 	const isNativeApp = Capacitor.isNativePlatform();
@@ -76,14 +76,13 @@
 	let duration    = $state(0);
 	let resolvingId: string | null = $state(null);
 
-	// MP3 save state: which row is saving and how far the pipeline is.
+	// Save state: which row is saving and how far the pipeline is.
 	let savingId: string | null = $state(null);
 	let saveProgress = $state<SaveProgress | null>(null);
 	const SAVE_PHASE_LABELS: Record<SaveProgress['phase'], string> = {
 		picking: 'Choosing folder',
 		resolving: 'Resolving stream',
 		downloading: 'Downloading',
-		encoding: 'Encoding MP3',
 		saving: 'Saving file'
 	};
 	const saveLabel = $derived.by(() => {
@@ -412,22 +411,24 @@
 		return youtubeFavorites.some((item) => item.videoId === videoId);
 	}
 
-	// ── Save as MP3 ──────────────────────────────────────────────
+	// ── Save to the device ───────────────────────────────────────
 	async function saveItem(item: YoutubeQueueItem) {
 		if (savingId !== null) return;
 		savingId = item.videoId;
 		saveProgress = { phase: 'picking', ratio: null };
 		try {
-			await saveYoutubeItemToMp3(item, {
+			await saveYoutubeItem(item, {
 				onProgress: (progress) => { saveProgress = progress; }
 			});
-			addToast({ message: `Saved "${item.title}" as MP3.`, type: 'info' });
+			addToast({ message: `Saved "${item.title}" to your device.`, type: 'info' });
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			// A cancelled folder picker is not an error.
 			if (!/cancel/i.test(message)) {
 				const phase = saveProgress ? ` (${SAVE_PHASE_LABELS[saveProgress.phase].toLowerCase()})` : '';
-				addToast({ message: `Could not save MP3${phase}: ${message}`, type: 'error' });
+				// Tagged so it shows up in logcat (chromium) for the HITL loop.
+				console.error('[youtube-save]', saveProgress?.phase ?? 'unknown', message);
+				addToast({ message: `Could not save the track${phase}: ${message}`, type: 'error' });
 			}
 		} finally {
 			savingId = null;
@@ -676,8 +677,8 @@
 						class="h-9 w-9 shrink-0 text-muted-foreground"
 						onclick={() => saveItem(item)}
 						disabled={!isNativeApp || savingId !== null}
-						aria-label={`Save ${item.title} as MP3`}
-						title={isNativeApp ? 'Save as MP3' : 'Saving to MP3 works in the Android app'}
+						aria-label={`Save ${item.title} to this device`}
+						title={isNativeApp ? 'Save to this device' : 'Saving works in the Android app'}
 					>
 						{#if savingId === item.videoId}
 							<Loader2 class="w-4 h-4 animate-spin" />

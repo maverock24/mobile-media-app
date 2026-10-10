@@ -65,6 +65,36 @@ export interface YoutubeAudioSource {
 	thumbnailUrl: string;
 }
 
+/** Everything the save path needs to store the stream exactly as it arrives. */
+export interface YoutubeAudioDownload {
+	videoId: string;
+	audioUrl: string;
+	title: string;
+	/** Container MIME type, codes removed: `audio/mp4`, `audio/webm`, `audio/mpeg`. */
+	mimeType: string;
+	/** File extension for {@link mimeType}, without the dot. */
+	extension: string;
+	/** Exact byte size when YouTube reported one, else null. Used to verify the download. */
+	contentLength: number | null;
+}
+
+/**
+ * File extension per container. `audio/mp4` is the one YouTube normally serves
+ * and the one `SUPPORTED_AUDIO_EXTENSIONS` lists; the rest are here so a
+ * fallback container still gets a truthful name rather than an `.m4a` one.
+ */
+const AUDIO_EXTENSION_BY_MIME: Record<string, string> = {
+	'audio/mp4': 'm4a',
+	'audio/mpeg': 'mp3',
+	'audio/webm': 'webm'
+};
+
+/** Strip codec parameters and map a container to a file extension. */
+export function extensionForAudioMime(mimeType: string): string {
+	const container = mimeType.split(';')[0].trim().toLowerCase();
+	return AUDIO_EXTENSION_BY_MIME[container] ?? 'm4a';
+}
+
 /** Thrown for conditions the user can act on, so the UI can show the message as-is. */
 export class YoutubeError extends Error {
 	constructor(message: string) {
@@ -213,39 +243,105 @@ export async function searchYoutube(query: string): Promise<YoutubeSearchResult[
 }
 
 /**
+ * Fetch the player response once for both callers below, so the live-stream
+ * guard cannot drift between playback and the save path.
+ */
+async function resolveBasicInfo(videoId: string) {
+	const session = await getSession();
+	const basic = await session.getBasicInfo(videoId, { client: PLAYBACK_CLIENT });
+	if (basic.basic_info.is_live) {
+		throw new YoutubeError('Live streams are not supported yet.');
+	}
+	return basic;
+}
+
+type BasicInfo = Awaited<ReturnType<typeof resolveBasicInfo>>;
+
+/** The parts of a chosen format the rest of the app needs. */
+interface PickedStream {
+	url: string;
+	mimeType: string;
+	contentLength: number | null;
+}
+
+/**
+ * Pick the first container that yields a playable URL.
+ *
+ * `format` is a substring match on the format's MIME type, not an enum, and
+ * `chooseFormat` treats an omitted value as `'mp4'`. Every value is passed
+ * explicitly here so a change to that default cannot silently move the save
+ * path to a container the player cannot read. `'any'` is the escape hatch for
+ * a video with no MP4 audio track.
+ */
+function pickStream(basic: BasicInfo, containers: Array<'mp4' | 'any'>): PickedStream {
+	let failure: unknown;
+
+	for (const format of containers) {
+		let chosen: { url?: string; mime_type?: string; content_length?: number };
+		try {
+			chosen = basic.chooseFormat({ type: 'audio', quality: 'best', format });
+		} catch (error) {
+			failure = error;
+			continue;
+		}
+		if (!chosen.url) {
+			// Only happens if YouTube stops returning plain URLs for this client.
+			throw new YoutubeError('YouTube did not return a playable audio stream for this video.');
+		}
+		return {
+			url: chosen.url,
+			mimeType: (chosen.mime_type ?? '').split(';')[0].trim() || 'audio/mp4',
+			contentLength: chosen.content_length ?? null,
+		};
+	}
+
+	throw new YoutubeError(
+		failure instanceof Error && /No matching format/i.test(failure.message)
+			? 'YouTube did not return a playable audio stream for this video.'
+			: describeYoutubeError(failure),
+	);
+}
+
+/**
  * Resolve the best audio-only stream for a video.
  *
  * The returned URL is bound to the requesting IP, which is why this has to run
  * on the device rather than behind the Netlify proxy.
  */
 export async function resolveYoutubeAudio(videoId: string): Promise<YoutubeAudioSource> {
-	const session = await getSession();
-	const basic = await session.getBasicInfo(videoId, { client: PLAYBACK_CLIENT });
+	const basic = await resolveBasicInfo(videoId);
+	const stream = pickStream(basic, ['mp4']);
 	const info = basic.basic_info;
-
-	if (info.is_live) {
-		throw new YoutubeError('Live streams are not supported yet.');
-	}
-
-	let audioUrl: string;
-	try {
-		const format = basic.chooseFormat({ type: 'audio', quality: 'best' });
-		if (!format.url) {
-			// Only happens if YouTube stops returning plain URLs for this client.
-			throw new YoutubeError('YouTube did not return a playable audio stream for this video.');
-		}
-		audioUrl = format.url;
-	} catch (error) {
-		if (error instanceof YoutubeError) throw error;
-		throw new YoutubeError(describeYoutubeError(error));
-	}
 
 	return {
 		videoId,
-		audioUrl,
+		audioUrl: stream.url,
 		title: info.title ?? '',
 		author: info.author ?? '',
 		durationSeconds: info.duration ?? 0,
 		thumbnailUrl: info.thumbnail?.at(-1)?.url ?? '',
+	};
+}
+
+/**
+ * Resolve the stream to write to disk.
+ *
+ * Separate from {@link resolveYoutubeAudio} because a save needs more than a
+ * URL: the container decides the file name, and the reported size is what lets
+ * the native download verify that it got the whole track. The MP4 container is
+ * asked for first and named after, so the saved file plays in the app's own
+ * player (`SUPPORTED_AUDIO_EXTENSIONS`) with no decode and no re-encode.
+ */
+export async function resolveYoutubeDownload(videoId: string): Promise<YoutubeAudioDownload> {
+	const basic = await resolveBasicInfo(videoId);
+	const stream = pickStream(basic, ['mp4', 'any']);
+
+	return {
+		videoId,
+		audioUrl: stream.url,
+		title: basic.basic_info.title ?? '',
+		mimeType: stream.mimeType,
+		extension: extensionForAudioMime(stream.mimeType),
+		contentLength: stream.contentLength,
 	};
 }

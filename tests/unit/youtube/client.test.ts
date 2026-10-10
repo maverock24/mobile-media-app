@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	describeYoutubeError,
+	extensionForAudioMime,
 	toMediaItem,
 	youtubeVideoIdFromInput,
 } from '$lib/youtube/client';
@@ -72,6 +73,23 @@ describe('youtubeVideoIdFromInput', () => {
 
 	it('rejects a YouTube URL with no video ID', () => {
 		expect(youtubeVideoIdFromInput('https://www.youtube.com/feed/subscriptions')).toBeNull();
+	});
+});
+
+describe('extensionForAudioMime', () => {
+	it('maps the containers YouTube serves to file extensions', () => {
+		expect(extensionForAudioMime('audio/mp4')).toBe('m4a');
+		expect(extensionForAudioMime('audio/webm')).toBe('webm');
+		expect(extensionForAudioMime('audio/mpeg')).toBe('mp3');
+	});
+
+	it('ignores codec parameters and case', () => {
+		expect(extensionForAudioMime('audio/mp4; codecs="mp4a.40.2"')).toBe('m4a');
+		expect(extensionForAudioMime('AUDIO/WEBM; codecs="opus"')).toBe('webm');
+	});
+
+	it('falls back to the container the resolver asks for', () => {
+		expect(extensionForAudioMime('audio/unknown')).toBe('m4a');
 	});
 });
 
