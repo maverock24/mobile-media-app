@@ -189,6 +189,7 @@ describe('restoreStoredFilesFromCache', () => {
 			path: '/sdcard/sub/n.mp3',
 			mimeType: 'audio/mpeg',
 			modifiedAt: 7,
+			sizeBytes: undefined,
 		});
 	});
 
@@ -214,8 +215,27 @@ describe('saveCachedLibrary / loadDeviceCachedLibrary', () => {
 		const loaded = await loadDeviceCachedLibrary('content://tree/1', 'Music');
 		expect(loaded?.folderName).toBe('Music');
 		expect(loaded?.files).toEqual([
-			{ source: 'native', name: 'a.mp3', relativePath: 'sub/a.mp3', path: '/sdcard/sub/a.mp3', mimeType: 'audio/mpeg', modifiedAt: undefined },
+			{ source: 'native', name: 'a.mp3', relativePath: 'sub/a.mp3', path: '/sdcard/sub/a.mp3', mimeType: 'audio/mpeg', modifiedAt: undefined, sizeBytes: undefined },
 		]);
+	});
+
+	it('round-trips sizeBytes from a cached native entry', async () => {
+		const sized: StoredAudioFile = {
+			source: 'native',
+			name: 'a.mp3',
+			relativePath: 'sub/a.mp3',
+			path: '/sdcard/sub/a.mp3',
+			mimeType: 'audio/mpeg',
+			modifiedAt: 7,
+			sizeBytes: 4096,
+		};
+		await saveCachedLibrary('content://tree/1', 'Music', [sized]);
+
+		const loaded = await loadDeviceCachedLibrary('content://tree/1', 'Music');
+		expect(loaded?.files[0]).toMatchObject({ sizeBytes: 4096 });
+
+		const [restored] = restoreStoredFilesFromCache(loaded!);
+		expect(restored).toStrictEqual(sized);
 	});
 
 	it('mirrors the write under the last-library key', async () => {

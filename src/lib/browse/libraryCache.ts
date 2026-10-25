@@ -74,6 +74,7 @@ export async function saveCachedLibrary(
 				path: file.path,
 				mimeType: file.mimeType,
 				modifiedAt: file.modifiedAt,
+				sizeBytes: file.sizeBytes,
 			});
 		}
 
@@ -125,6 +126,7 @@ export function restoreStoredFilesFromCache(cachedLibrary: CachedLibrary): Store
 			path: file.path,
 			mimeType: file.mimeType,
 			modifiedAt: file.modifiedAt,
+			sizeBytes: file.sizeBytes,
 		} satisfies StoredAudioFile;
 	});
 }

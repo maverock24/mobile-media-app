@@ -56,6 +56,7 @@ public class DirectoryReaderPlugin extends Plugin {
 		DocumentsContract.Document.COLUMN_DISPLAY_NAME,
 		DocumentsContract.Document.COLUMN_MIME_TYPE,
 		DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+		DocumentsContract.Document.COLUMN_SIZE,
 	};
 
 	/** A directory queued for scanning: its SAF document id + path relative to the scan root. */
@@ -179,6 +180,7 @@ public class DirectoryReaderPlugin extends Plugin {
 					String name = cursor.getString(1);
 					String mime = cursor.getString(2);
 					long modified = cursor.isNull(3) ? 0L : cursor.getLong(3);
+					long size = cursor.isNull(4) ? 0L : cursor.getLong(4);
 					if (docId == null || name == null || name.isEmpty()) continue;
 
 					if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
@@ -190,7 +192,7 @@ public class DirectoryReaderPlugin extends Plugin {
 
 					Uri docUri = DocumentsContract.buildDocumentUriUsingTree(session.treeUri, docId);
 					files.put(createFileObject(name, docUri.toString(),
-						buildRelativePath(dir.relativePath, name), mime, modified));
+						buildRelativePath(dir.relativePath, name), mime, modified, size));
 					filesAdded += 1;
 				}
 			} catch (Exception ignored) {
@@ -247,6 +249,7 @@ public class DirectoryReaderPlugin extends Plugin {
 						String name = cursor.getString(1);
 						String mime = cursor.getString(2);
 						long modified = cursor.isNull(3) ? 0L : cursor.getLong(3);
+						long size = cursor.isNull(4) ? 0L : cursor.getLong(4);
 						if (docId == null || name == null || name.isEmpty()) continue;
 
 						String relativePath = buildRelativePath(basePath, name);
@@ -262,7 +265,7 @@ public class DirectoryReaderPlugin extends Plugin {
 						if (!isSupportedAudioFile(name)) continue;
 
 						Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
-						entries.put(createFileObject(name, docUri.toString(), relativePath, mime, modified));
+						entries.put(createFileObject(name, docUri.toString(), relativePath, mime, modified, size));
 					}
 				}
 			}
@@ -309,6 +312,7 @@ public class DirectoryReaderPlugin extends Plugin {
 						String name = cursor.getString(1);
 						String mime = cursor.getString(2);
 						long modified = cursor.isNull(3) ? 0L : cursor.getLong(3);
+						long size = cursor.isNull(4) ? 0L : cursor.getLong(4);
 						if (docId == null || name == null || name.isEmpty()) continue;
 
 						if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
@@ -320,7 +324,7 @@ public class DirectoryReaderPlugin extends Plugin {
 
 						Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
 						files.put(createFileObject(name, docUri.toString(),
-							buildRelativePath(dir.relativePath, name), mime, modified));
+							buildRelativePath(dir.relativePath, name), mime, modified, size));
 					}
 				} catch (Exception ignored) {
 					// Skip unreadable directory
@@ -402,7 +406,7 @@ public class DirectoryReaderPlugin extends Plugin {
 		return prefix == null || prefix.isEmpty() ? childName : prefix + "/" + childName;
 	}
 
-	private JSObject createFileObject(String name, String uriString, String relativePath, String mimeType, long modifiedAt) {
+	private JSObject createFileObject(String name, String uriString, String relativePath, String mimeType, long modifiedAt, long size) {
 		JSObject result = new JSObject();
 		result.put("kind", "file");
 		result.put("name", name);
@@ -410,6 +414,7 @@ public class DirectoryReaderPlugin extends Plugin {
 		result.put("relativePath", relativePath);
 		result.put("mimeType", mimeType);
 		result.put("modifiedAt", modifiedAt);
+		result.put("sizeBytes", size);
 		return result;
 	}
 

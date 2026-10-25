@@ -7,7 +7,7 @@
 
 export type StoredAudioFile =
 	| { source: 'web'; name: string; relativePath: string; file: File }
-	| { source: 'native'; name: string; relativePath: string; path: string; mimeType?: string; modifiedAt?: number }
+	| { source: 'native'; name: string; relativePath: string; path: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number }
 	| {
 		source: 'drive';
 		name: string;
@@ -63,6 +63,7 @@ export type CachedNativeLibraryFile = {
 	path: string;
 	mimeType?: string;
 	modifiedAt?: number;
+	sizeBytes?: number;
 };
 export type CachedLibraryFile = CachedWebLibraryFile | CachedNativeLibraryFile;
 export type CachedLibrary = { folderName: string; files: CachedLibraryFile[]; savedAt: number; cacheKey?: string };
@@ -142,6 +143,7 @@ export interface NativeDirectoryFile {
 	relativePath: string;
 	mimeType?: string;
 	modifiedAt?: number;
+	sizeBytes?: number;
 }
 
 export function createStoredNativeAudioFile(entry: NativeDirectoryFile): StoredAudioFile {
@@ -152,6 +154,7 @@ export function createStoredNativeAudioFile(entry: NativeDirectoryFile): StoredA
 		path: entry.path,
 		mimeType: entry.mimeType,
 		modifiedAt: entry.modifiedAt,
+		sizeBytes: entry.sizeBytes,
 	};
 }
 

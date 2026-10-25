@@ -7,6 +7,7 @@ export interface NativeDirectoryFile {
 	relativePath: string;
 	mimeType?: string;
 	modifiedAt?: number;
+	sizeBytes?: number;
 }
 
 export interface NativeDirectoryFolder {
