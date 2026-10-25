@@ -79,6 +79,10 @@
 		scanNativeAudioFiles,
 		collectAllFromPath
 	} from '$lib/browse/folderScan';
+	import {
+		createSearchIndex,
+		updateSearchIndex
+	} from '$lib/browse/searchIndex';
 	import { appSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	
@@ -238,68 +242,16 @@
 
 	// Search index: sorted files + lowercase haystacks. Built incrementally
 	// across batch loads so sortFiles + parseFilename don't re-run over the
-	// entire growing array on every incremental library scan batch.
-	let _searchIndexSortedLength = 0;
-	let _searchIndexSorted: Array<{ file: StoredAudioFile; haystack: string }> = [];
+	// entire growing array on every incremental library scan batch. The build,
+	// merge and reset rules live in `$lib/browse/searchIndex` so they can be
+	// unit-tested; this effect only supplies the reactive reads.
+	let _searchIndex = createSearchIndex();
 	$effect(() => {
-		const total = allFiles.length;
-		// A delete shrinks the index. Without this reset the merge branch below
-		// slices past the new end, finds nothing "new", and keeps the deleted
-		// file in the search index forever.
-		if (total < _searchIndexSortedLength) _searchIndexSortedLength = 0;
-		if (total === _searchIndexSortedLength) return;
-		if (total === 0) {
-			_searchIndexSorted = [];
-			_searchIndexSortedLength = 0;
-			return;
-		}
-		// On first build or reset, sort the full array; on incremental batches,
-		// sort only the new slice and merge (the incoming slice is already sorted
-		// within itself from the source, so we benchmark vs full re-sort).
-		if (_searchIndexSortedLength === 0) {
-			_searchIndexSorted = sortFiles(allFiles).map((f) => {
-				const { title, artist } = parseFilename(f.name);
-				return { file: f, haystack: `${f.name} ${title} ${artist}`.toLowerCase() };
-			});
-		} else {
-			const newSlice = allFiles.slice(_searchIndexSortedLength);
-			const newEntries = sortFiles(newSlice).map((f) => {
-				const { title, artist } = parseFilename(f.name);
-				return { file: f, haystack: `${f.name} ${title} ${artist}`.toLowerCase() };
-			});
-			// Merge the pre-sorted index with the new sorted batch
-			_searchIndexSorted = mergeSortedIndex(_searchIndexSorted, newEntries);
-		}
-		_searchIndexSortedLength = total;
+		_searchIndex = updateSearchIndex(_searchIndex, allFiles, musicSettings.sortOrder);
 	});
 
-	function mergeSortedIndex(
-		existing: Array<{ file: StoredAudioFile; haystack: string }>,
-		incoming: Array<{ file: StoredAudioFile; haystack: string }>,
-	): Array<{ file: StoredAudioFile; haystack: string }> {
-		const merged = new Array(existing.length + incoming.length);
-		let ei = 0, ii = 0, mi = 0;
-		const getKey = (entry: { file: StoredAudioFile }) => {
-			if (musicSettings.sortOrder === 'title') return parseFilename(entry.file.name).title;
-			if (musicSettings.sortOrder === 'artist') return parseFilename(entry.file.name).artist;
-			return entry.file.name;
-		};
-		while (ei < existing.length && ii < incoming.length) {
-			const aKey = getKey(existing[ei]);
-			const bKey = getKey(incoming[ii]);
-			if (aKey.localeCompare(bKey, undefined, { numeric: true }) <= 0) {
-				merged[mi++] = existing[ei++];
-			} else {
-				merged[mi++] = incoming[ii++];
-			}
-		}
-		while (ei < existing.length) merged[mi++] = existing[ei++];
-		while (ii < incoming.length) merged[mi++] = incoming[ii++];
-		return merged;
-	}
-
 	// Expose the search index as a reactive alias for the filteredEntries derivation
-	const searchIndex = $derived(_searchIndexSorted);
+	const searchIndex = $derived(_searchIndex.entries);
 
 	// Cap rendered results — a broad query (e.g. "a") matching thousands of
 	// rows explodes the DOM and freezes the UI. In search mode, limit to the
