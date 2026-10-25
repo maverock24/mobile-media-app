@@ -2,7 +2,6 @@
 <script lang="ts">
 	import { env } from '$env/dynamic/public';
 	import { Capacitor } from '@capacitor/core';
-	import { marqueeTitle } from '$lib/actions/marqueeTitle';
 	import { pullToRefresh, swipeBack } from '$lib/actions/touch';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
@@ -441,7 +440,7 @@
 						{/if}
 						<div class="flex items-start gap-3">
 							<div class="flex-1 min-w-0">
-								<div class="flex items-center gap-2 mb-1">
+								<div class="flex items-start gap-2 mb-1">
 									{#if newEpisode}
 										<Badge variant="default" class="shrink-0 gap-1.5 px-2.5 py-0.5 text-[11px] uppercase tracking-wide shadow-sm">
 											<span class="h-1.5 w-1.5 rounded-full bg-primary-foreground"></span>
@@ -454,8 +453,8 @@
 											Played
 										</span>
 									{/if}
-									<p use:marqueeTitle={{ active: activeEpisode }} class="font-semibold text-[0.95rem] leading-tight title-marquee {episode.played ? 'text-muted-foreground' : newEpisode ? 'text-primary text-base' : ''}">
-										<span class="title-marquee-inner" data-text={episode.title}>{episode.title}</span>
+									<p class="flex-1 min-w-0 font-semibold text-[0.95rem] leading-tight break-words {episode.played ? 'text-muted-foreground' : newEpisode ? 'text-primary text-base' : ''}">
+										{episode.title}
 									</p>
 								</div>
 								{#if episode.description}
