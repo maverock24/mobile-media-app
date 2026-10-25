@@ -49,8 +49,7 @@
 import { DirectoryReader } from '$lib/native/directory-reader';
 import { musicSettings } from '$lib/stores/settings.svelte';
 import { addToast } from '$lib/stores/toastStore.svelte';
-import { LAST_LIBRARY_CACHE_KEY, getDeviceLibraryCacheKey, loadDeviceCachedLibrary, saveCachedLibrary } from '$lib/browse/libraryCache';
-import { deleteCachedLibrary } from '$lib/utils/idb';
+import { loadDeviceCachedLibrary, saveCachedLibrary } from '$lib/browse/libraryCache';
 import { getStoredFileKey, type StoredAudioFile } from '$lib/models/music';
 import type { DeviceLibrary } from '$lib/device/deviceLibrary.svelte';
 import type { BrowseNavigation } from '$lib/browse/browseNavigation.svelte';
@@ -208,7 +207,16 @@ export function createFileOps(opts: FileOpsOptions): FileOps {
 	 *
 	 * The rewrite carries the loaded payload's directory tree forward: a delete
 	 * walks nothing, so rebuilding the payload from the file list alone would drop
-	 * `dirs` and force the next start into a full walk.
+	 * `dirs` and force the next start into a full walk. It carries `completedAt`
+	 * forward for the same reason: no walk completed here, and the tree is the one
+	 * the last real walk observed, so stamping the delete's clock would tell the
+	 * next start the tree was just verified and let a delta skip a subtree that
+	 * changed since.
+	 *
+	 * Deleting the last file is still a legitimate empty library (D6 amendment),
+	 * so it writes a completed empty payload rather than dropping the cache keys:
+	 * an absent payload is indistinguishable from "never scanned" and would let a
+	 * stale one from another source answer instead.
 	 */
 	async function forgetDeletedFile(source: StoredAudioFile): Promise<void> {
 		const key = getStoredFileKey(source);
@@ -219,16 +227,11 @@ export function createFileOps(opts: FileOpsOptions): FileOps {
 
 		const treeUri = opts.deviceLibrary.nativeTreeUri;
 		const folderName = musicSettings.lastFolderName || 'Library';
-		if (remaining.length > 0) {
-			const cached = await loadDeviceCachedLibrary(treeUri, folderName);
-			await saveCachedLibrary(treeUri, folderName, remaining, undefined, cached?.dirs ?? []);
-			return;
-		}
-		// `saveCachedLibrary` no-ops on an empty list, which would leave the old
-		// cache in place, so drop the keys instead.
-		const cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName });
-		await deleteCachedLibrary(cacheKey);
-		if (cacheKey !== LAST_LIBRARY_CACHE_KEY) await deleteCachedLibrary(LAST_LIBRARY_CACHE_KEY);
+		const cached = await loadDeviceCachedLibrary(treeUri, folderName);
+		await saveCachedLibrary(treeUri, folderName, remaining, undefined, cached?.dirs ?? [], {
+			allowEmpty: true,
+			completedAt: cached?.completedAt,
+		});
 	}
 
 	async function moveOrCopyFileOp(op: PendingFileOp, destination: { localPath?: string }): Promise<void> {

@@ -270,6 +270,17 @@ describe('saveCachedLibrary / loadDeviceCachedLibrary', () => {
 		expect(loaded?.dirs).toEqual([{ path: '', mtime: 9 }]);
 	});
 
+	it('preserves a supplied completedAt', async () => {
+		// A delete rewrites the index without walking, so it must carry the last
+		// real walk's completion time forward instead of stamping now.
+		const completedAt = 1_600_000_000_000;
+		await saveCachedLibrary('content://tree/1', 'Music', [native('a.mp3')], undefined, [{ path: '', mtime: 4 }], { completedAt });
+
+		const loaded = await loadDeviceCachedLibrary('content://tree/1', 'Music');
+		expect(loaded?.completedAt).toBe(completedAt);
+		expect(loaded?.dirs).toEqual([{ path: '', mtime: 4 }]);
+	});
+
 	it('drops drive entries, so a drive-only library writes nothing', async () => {
 		const drive: StoredAudioFile = { source: 'drive', name: 'd.mp3', relativePath: 'd.mp3', fileId: 'f1' };
 		await saveCachedLibrary('content://tree/1', 'Music', [drive]);

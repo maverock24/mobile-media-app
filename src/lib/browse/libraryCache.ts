@@ -62,6 +62,13 @@ export function getDeviceLibraryCacheKey(options: { treeUri?: string | null; fol
  * the stale payload outlive an emptied folder (D6 amendment). Both scan modes
  * therefore pass `{ allowEmpty: true }`, and the empty payload lands with its tree
  * and its `completedAt`.
+ *
+ * `completedAt` is the time the walk finished, and it defaults to now. A writer
+ * that did not walk (a delete rewriting the index, `fileOps.forgetDeletedFile`)
+ * must pass the time it carries forward instead: stamping now would claim a
+ * verification that never happened, and the next start could trust a tree that
+ * changed since it was read. Leaving it absent writes `Date.now()`, which is
+ * correct only for a writer that really just completed a walk.
  */
 export async function saveCachedLibrary(
 	treeUri: string | null,
@@ -69,7 +76,7 @@ export async function saveCachedLibrary(
 	files: StoredAudioFile[],
 	cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName }),
 	dirs: CachedLibraryDir[] = [],
-	options: { allowEmpty?: boolean } = {}
+	options: { allowEmpty?: boolean; completedAt?: number } = {}
 ) {
 	const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
 		if (file.source === 'web') {
@@ -106,7 +113,7 @@ export async function saveCachedLibrary(
 			savedAt: Date.now(),
 			cacheKey,
 			schemaVersion: 1,
-			completedAt: Date.now(),
+			completedAt: options.completedAt ?? Date.now(),
 			dirs
 		} satisfies CachedLibrary;
 		await idbPut(db, 'libraries', payload, cacheKey);

@@ -311,17 +311,37 @@ describe('deleteFileOp (library index)', () => {
 		expect(cached?.schemaVersion).toBe(1);
 	});
 
-	it('drops both cache keys when the deleted file was the last one', async () => {
-		await saveCachedLibrary('content://tree', 'Library', [song]);
-		expect(await loadCachedLibrary('device:content://tree')).not.toBeNull();
-		expect(await loadCachedLibrary(LAST_LIBRARY_CACHE_KEY)).not.toBeNull();
+	it('writes a completed empty payload when the last file is deleted', async () => {
+		const dirs = [{ path: '', mtime: 5 }];
+		await saveCachedLibrary('content://tree', 'Library', [song], undefined, dirs);
 		const { fileOps, view } = makeFileOps();
 		view.allFiles = [song];
 
 		await fileOps.deleteFileOp({ ...op('delete'), source: song });
 
-		expect(await loadCachedLibrary('device:content://tree')).toBeNull();
-		expect(await loadCachedLibrary(LAST_LIBRARY_CACHE_KEY)).toBeNull();
+		// An emptied folder is a legitimate payload (D6 amendment), so both keys
+		// carry a completed empty index instead of disappearing.
+		for (const key of ['device:content://tree', LAST_LIBRARY_CACHE_KEY]) {
+			const cached = await loadCachedLibrary(key);
+			expect(cached?.files).toEqual([]);
+			expect(cached?.schemaVersion).toBe(1);
+			expect(cached?.dirs).toEqual(dirs);
+		}
+	});
+
+	it('keeps the previous completedAt when a delete rewrites the cache', async () => {
+		// A delete walks nothing. Stamping the write's clock would claim the tree
+		// was just verified and let a delta skip a subtree that changed since.
+		const completedAt = 1_600_000_000_000;
+		await saveCachedLibrary('content://tree', 'Library', [song, keeper], undefined, [{ path: '', mtime: 5 }], { completedAt });
+		const { fileOps, view } = makeFileOps();
+		view.allFiles = [song, keeper];
+
+		await fileOps.deleteFileOp({ ...op('delete'), source: song });
+
+		const cached = await loadCachedLibrary('device:content://tree');
+		expect(cached?.files.map((file) => file.name)).toEqual(['keep.mp3']);
+		expect(cached?.completedAt).toBe(completedAt);
 	});
 
 	it('leaves the index alone when the file was never indexed', async () => {
