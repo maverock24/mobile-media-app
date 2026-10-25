@@ -49,6 +49,12 @@ export interface NativeLibraryScanResult {
 	files: StoredAudioFile[];
 	dirs: NativeDirectoryDir[];
 	skippedDirs: number;
+	/**
+	 * The directories behind `skippedDirs`, as relative paths, without duplicates.
+	 * The merge protects exactly these subtrees (D2 amendment); an empty list with a
+	 * non-zero `skippedDirs` can only come from an APK that predates the paths.
+	 */
+	skippedPaths: string[];
 	unreadableDirs: number;
 }
 
@@ -62,7 +68,7 @@ export async function yieldScanToUi(): Promise<void> {
  * Stream a native SAF audio scan batch by batch, collecting every mapped file
  * and the directory rows the walk observed, and reporting each batch that
  * carries anything to `onBatch`. Passing `prevDirs` lets the native walker skip
- * subtrees whose cached mtime still matches; it reports what it skipped and how
+ * subtrees whose cached mtime still matches; it reports the paths it skipped and how
  * many directories it could not read. A scan that never completes is cancelled
  * in the `finally`, so an aborted caller cannot leak a running native scan.
  */
@@ -73,8 +79,12 @@ export async function scanNativeLibrary(
 	options: NativeLibraryScanOptions = {},
 	onBatch?: (batch: StoredAudioFile[], state: ScanBatchState) => Promise<void> | void,
 ): Promise<NativeLibraryScanResult> {
-	const result: NativeLibraryScanResult = { files: [], dirs: [], skippedDirs: 0, unreadableDirs: 0 };
+	const result: NativeLibraryScanResult = { files: [], dirs: [], skippedDirs: 0, skippedPaths: [], unreadableDirs: 0 };
 	if (!nativeTreeUri) return result;
+
+	// The native payload repeats every skipped path on each batch (it is cumulative,
+	// like the counters), so collect them into a set and hand back the union.
+	const skippedPaths = new Set<string>();
 
 	let scanCompleted = false;
 	let scanId = '';
@@ -99,6 +109,10 @@ export async function scanNativeLibrary(
 			result.dirs.push(...batchDirs);
 			// The native counters are cumulative over the session, so assign them.
 			result.skippedDirs = batch.skippedDirs ?? result.skippedDirs;
+			for (const skippedPath of batch.skippedPaths ?? []) {
+				skippedPaths.add(skippedPath);
+			}
+			result.skippedPaths = [...skippedPaths];
 			result.unreadableDirs = batch.unreadableDirs ?? result.unreadableDirs;
 			if (mappedBatch.length > 0) {
 				result.files.push(...mappedBatch);

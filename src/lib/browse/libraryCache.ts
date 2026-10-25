@@ -57,9 +57,11 @@ export function getDeviceLibraryCacheKey(options: { treeUri?: string | null; fol
  * {@link hasUsableDirectoryTree} reads as "no usable tree".
  *
  * An empty file list is skipped by default, which is how a stale payload survives
- * a folder the user emptied. A completed delta that removed every file is the one
- * case that must be written anyway, so the caller passes `{ allowEmpty: true }`
- * and the empty payload lands with its tree and its `completedAt` (D6 amendment).
+ * a folder the user emptied. A completed walk is the case that must be written
+ * anyway: it owns the payload it produced, and skipping the empty write would let
+ * the stale payload outlive an emptied folder (D6 amendment). Both scan modes
+ * therefore pass `{ allowEmpty: true }`, and the empty payload lands with its tree
+ * and its `completedAt`.
  */
 export async function saveCachedLibrary(
 	treeUri: string | null,

@@ -50,6 +50,13 @@ export interface AudioScanBatchResult {
 	dirs?: NativeDirectoryDir[];
 	/** Directories skipped because their cached mtime matched. Cumulative over the scan. */
 	skippedDirs?: number;
+	/**
+	 * The relative paths behind `skippedDirs`, cumulative over the scan. A count alone
+	 * cannot be turned back into paths: a directory the walk skipped is still on the
+	 * device, while one it never saw may have been deleted. Absent on an APK older
+	 * than this field.
+	 */
+	skippedPaths?: string[];
 	/** Directories this walk could not read. Cumulative over the scan. */
 	unreadableDirs?: number;
 }

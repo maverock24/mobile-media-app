@@ -70,7 +70,12 @@ const batch = (
 	done: boolean,
 	foldersScanned = 1,
 	foldersQueued = 0,
-	extra: { dirs?: { path: string; mtime: number }[]; skippedDirs?: number; unreadableDirs?: number } = {},
+	extra: {
+		dirs?: { path: string; mtime: number }[];
+		skippedDirs?: number;
+		skippedPaths?: string[];
+		unreadableDirs?: number;
+	} = {},
 ) => ({
 	files: files.map((name) => ({ kind: 'file', name, path: `/sdcard/${name}`, relativePath: name })),
 	foldersScanned,
@@ -278,17 +283,43 @@ describe('scanNativeLibrary', () => {
 		expect(result.skippedDirs).toBe(4);
 	});
 
+	it('reports the paths it skipped across batches', async () => {
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		// The native payload is cumulative, so the second batch repeats the first
+		// path and adds one. The union must carry each path once.
+		mocks.getAudioScanBatch
+			.mockResolvedValueOnce(batch(['a.mp3'], false, 1, 1, {
+				skippedDirs: 1,
+				skippedPaths: ['Music/Live'],
+			}))
+			.mockResolvedValueOnce(batch([], true, 2, 0, {
+				skippedDirs: 2,
+				skippedPaths: ['Music/Live', 'Music/Studio'],
+			}));
+
+		const result = await scanNativeLibrary('content://tree', [], 10);
+
+		expect(result.skippedDirs).toBe(2);
+		expect(result.skippedPaths).toEqual(['Music/Live', 'Music/Studio']);
+	});
+
 	it('defaults the delta counters to zero when an older APK omits them', async () => {
 		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
 		mocks.getAudioScanBatch.mockResolvedValueOnce(batch(['a.mp3'], true));
 
 		const result = await scanNativeLibrary('content://tree', [], 10);
 
-		expect(result).toMatchObject({ dirs: [], skippedDirs: 0, unreadableDirs: 0 });
+		expect(result).toMatchObject({ dirs: [], skippedDirs: 0, skippedPaths: [], unreadableDirs: 0 });
 	});
 
 	it('returns an empty result and does not start a scan without a tree URI', async () => {
-		expect(await scanNativeLibrary(null, [], 10)).toEqual({ files: [], dirs: [], skippedDirs: 0, unreadableDirs: 0 });
+		expect(await scanNativeLibrary(null, [], 10)).toEqual({
+			files: [],
+			dirs: [],
+			skippedDirs: 0,
+			skippedPaths: [],
+			unreadableDirs: 0,
+		});
 		expect(mocks.startAudioScan).not.toHaveBeenCalled();
 	});
 });

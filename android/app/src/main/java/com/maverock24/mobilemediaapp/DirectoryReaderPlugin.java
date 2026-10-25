@@ -23,7 +23,9 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import org.json.JSONObject;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -83,6 +85,8 @@ public class DirectoryReaderPlugin extends Plugin {
 		private final Map<String, Long> observedDirMtimes = new HashMap<>();
 		private int foldersScanned = 0;
 		private int skippedDirs = 0;
+		/** Relative paths of the directories counted in {@link #skippedDirs}, in skip order. */
+		private final List<String> skippedDirPaths = new ArrayList<>();
 		private int unreadableDirs = 0;
 
 		private AudioScanSession(Uri treeUri, String startDocumentId, String basePath, String folderName) {
@@ -218,6 +222,7 @@ public class DirectoryReaderPlugin extends Plugin {
 						// this row; a 0 or missing cached value means unknown, so descend.
 						if (previousMtime != null && previousMtime.longValue() > 0L && previousMtime.longValue() == modified) {
 							session.skippedDirs += 1;
+							session.skippedDirPaths.add(childPath);
 							continue;
 						}
 						session.pendingDirs.addLast(new DirNode(docId, childPath));
@@ -248,12 +253,20 @@ public class DirectoryReaderPlugin extends Plugin {
 			AUDIO_SCAN_SESSIONS.remove(scanId);
 		}
 
+		// The skipped paths, not only their number: the caller cannot tell a directory
+		// it must protect from one the user deleted out of a count alone.
+		JSArray skippedPaths = new JSArray();
+		for (String skippedPath : session.skippedDirPaths) {
+			skippedPaths.put(skippedPath);
+		}
+
 		JSObject result = new JSObject();
 		result.put("files", files);
 		result.put("dirs", dirs);
 		result.put("foldersScanned", session.foldersScanned);
 		result.put("foldersQueued", session.pendingDirs.size());
 		result.put("skippedDirs", session.skippedDirs);
+		result.put("skippedPaths", skippedPaths);
 		result.put("unreadableDirs", session.unreadableDirs);
 		result.put("done", done);
 		call.resolve(result);

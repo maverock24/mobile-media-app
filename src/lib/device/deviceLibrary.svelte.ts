@@ -202,9 +202,13 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 	 *
 	 * `delta` (the warm start, D1) merges into `previous` instead: nothing is
 	 * cleared, no batch is published, and the merged index is published once and
-	 * written once. A skipped directory protects its subtree (D2 amendment); the
-	 * native walker reports the count, so the skipped paths are the previous rows
-	 * the walk did not re-observe.
+	 * written once. A skipped directory protects its subtree (D2 amendment), and the
+	 * protected set is the walk's own `skippedPaths`. The count alone is not enough:
+	 * the previous derivation ("previous rows the walk did not re-observe") threw a
+	 * directory the walker skipped, which is still on the device and must be
+	 * protected, into the same bucket as one the user deleted, which is absent from
+	 * the walk and must be pruned. Deleting a folder therefore lingered in the index
+	 * until the next full walk.
 	 *
 	 * `publishOnce` gives a full walk that same quiet shape, which is what the warm
 	 * start's full fallback uses: the restored list stays visible until the walk
@@ -246,16 +250,12 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 					const walk = await scanNativeLibrary(s.nativeTreeUri, [], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {
 						prevDirs: previous.dirs
 					});
-					const observed = new Set(walk.dirs.map((row) => row.path));
-					const skippedPaths = previous.dirs
-						.filter((row) => !observed.has(row.path))
-						.map((row) => row.path);
 					const merged = mergeLibraryDelta({
 						previous: previous.files,
 						walked: walk.files,
 						dirs: walk.dirs,
 						previousDirs: previous.dirs,
-						skippedDirs: skippedPaths,
+						skippedDirs: walk.skippedPaths,
 						unreadableDirs: walk.unreadableDirs,
 						completed: true
 					});
@@ -294,7 +294,10 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 				if (publishOnce) opts.bumpBrowseVersion();
 				if (!trackListLockedByUser && indexChanged) opts.hydrateTracksFromLibrary(scannedFiles);
 				await saveCachedLibrary(s.nativeTreeUri, folderName, scannedFiles, undefined, walkedDirs, {
-					allowEmpty: isDelta
+					// A completed walk owns the payload, whatever it found: an empty library
+					// is a result, and skipping the write would let a stale payload outlive
+					// an emptied folder until the next completed walk.
+					allowEmpty: true
 				});
 			})
 			.catch((error) => {
