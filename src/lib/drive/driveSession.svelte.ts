@@ -58,7 +58,9 @@ export function createDriveSession(opts: DriveSessionOptions): DriveSession {
 	});
 
 	function hasValidDriveToken(): boolean {
-		return state.accessToken.length > 0 && Date.now() < state.expiresAt - 60_000;
+		return state.accessToken.length > 0
+			&& Date.now() < state.expiresAt - 60_000
+			&& googleDriveSession.hasDriveDeleteScope();
 	}
 
 	async function ensureDriveAccessToken(interactive: boolean): Promise<string | null> {
@@ -68,7 +70,7 @@ export function createDriveSession(opts: DriveSessionOptions): DriveSession {
 
 		// Hydrate silently from the persisted session (survives page refresh)
 		googleDriveSession.hydrateFromStorage();
-		if (googleDriveSession.hasValidToken()) {
+		if (googleDriveSession.hasValidToken() && googleDriveSession.hasDriveDeleteScope()) {
 			state.accessToken = googleDriveSession.accessToken;
 			state.expiresAt = googleDriveSession.expiresAt;
 			state.user = googleDriveSession.user;
@@ -84,6 +86,7 @@ export function createDriveSession(opts: DriveSessionOptions): DriveSession {
 				state.error = '';
 				googleDriveSession.accessToken = state.accessToken;
 				googleDriveSession.expiresAt = state.expiresAt;
+				googleDriveSession.scope = pendingNativeAuthorization.scope ?? googleDriveSession.scope;
 				googleDriveSession.persist();
 				return state.accessToken;
 			}
@@ -98,7 +101,9 @@ export function createDriveSession(opts: DriveSessionOptions): DriveSession {
 		try {
 			const response = await requestGoogleDriveAccessToken({
 				clientId: opts.clientId,
-				prompt: state.accessToken ? '' : 'consent'
+				// The full drive scope needs an explicit consent screen; reuse a
+				// token that already carries it silently.
+				prompt: googleDriveSession.hasDriveDeleteScope() ? '' : 'consent'
 			});
 
 			state.accessToken = response.access_token;
@@ -106,6 +111,7 @@ export function createDriveSession(opts: DriveSessionOptions): DriveSession {
 			state.error = '';
 			googleDriveSession.accessToken = state.accessToken;
 			googleDriveSession.expiresAt = state.expiresAt;
+			googleDriveSession.scope = response.scope ?? '';
 			googleDriveSession.persist();
 			return state.accessToken;
 		} catch (error) {

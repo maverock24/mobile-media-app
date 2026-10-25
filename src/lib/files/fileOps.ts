@@ -79,6 +79,8 @@ export interface FileOpsOptions {
 	browseNavigation: Pick<BrowseNavigation, 'loadBrowseEntries'>;
 	/** True on Android native, where the SAF destination picker is available. */
 	isNativeApp: boolean;
+	/** Deletes a Drive file through the Drive API. Required for Drive rows. */
+	deleteDriveFile?: (source: StoredAudioFile) => Promise<void>;
 	/** The view-owned state the module reads and writes. */
 	view: FileOpsView;
 }
@@ -142,7 +144,8 @@ export function createFileOps(opts: FileOpsOptions): FileOps {
 			// Refresh the current folder so the list reflects the change.
 			await reloadCurrentBrowse();
 		} catch (e) {
-			addToast({ message: `${op.op === 'delete' ? 'Delete' : op.op === 'move' ? 'Move' : 'Copy'} failed.`, type: 'error' });
+			const reason = e instanceof Error ? e.message : String(e);
+			addToast({ message: `${op.op === 'delete' ? 'Delete' : op.op === 'move' ? 'Move' : 'Copy'} failed: ${reason}`, type: 'error' });
 		} finally {
 			view.isFileOpRunning = false;
 			view.pendingFileOp = null;
@@ -150,8 +153,28 @@ export function createFileOps(opts: FileOpsOptions): FileOps {
 	}
 
 	async function deleteFileOp(op: PendingFileOp): Promise<void> {
+		// A Drive row must never reach the local SAF tree. The old code called the
+		// local delete with the Drive file's name at the tree root, so it either
+		// failed or deleted a same-named local file.
+		if (op.isDrive) {
+			const source = op.source;
+			if (!source || source.source !== 'drive') throw new Error('Missing Google Drive file.');
+			if (!opts.deleteDriveFile) throw new Error('Google Drive delete is not available.');
+			await opts.deleteDriveFile(source);
+			addToast({ message: `Deleted "${op.name}" from Google Drive.`, type: 'info' });
+			return;
+		}
 		if (!opts.deviceLibrary.nativeTreeUri) throw new Error('no tree');
-		await DirectoryReader.deleteEntry({ treeUri: opts.deviceLibrary.nativeTreeUri, path: '', name: op.name });
+		// `path: ''` resolved the tree root, so a file in a subfolder was never
+		// found. Resolve the file's own directory from its relative path.
+		const relativePath = op.source?.relativePath ?? '';
+		const slash = relativePath.lastIndexOf('/');
+		const path = slash >= 0 ? relativePath.slice(0, slash) : '';
+		await DirectoryReader.deleteEntry({
+			treeUri: opts.deviceLibrary.nativeTreeUri,
+			path,
+			name: op.name,
+		});
 		addToast({ message: `Deleted "${op.name}".`, type: 'info' });
 	}
 

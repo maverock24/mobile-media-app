@@ -9,7 +9,14 @@ const GOOGLE_IDENTITY_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 export const GOOGLE_DRIVE_WRITE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-export const GOOGLE_DRIVE_AUTH_SCOPE = `${GOOGLE_DRIVE_SCOPE} ${GOOGLE_DRIVE_WRITE_SCOPE}`;
+/**
+ * Full Drive access, needed to delete files the app only listed. The narrower
+ * `drive.readonly` + `drive.file` pair cannot delete a file the app did not
+ * create or open, so a delete returned 403. This is a restricted scope: the
+ * user re-consents, and public distribution needs Google verification.
+ */
+export const GOOGLE_DRIVE_DELETE_SCOPE = 'https://www.googleapis.com/auth/drive';
+export const GOOGLE_DRIVE_AUTH_SCOPE = GOOGLE_DRIVE_DELETE_SCOPE;
 
 export interface GoogleDriveTokenResponse {
 	access_token: string;
@@ -106,6 +113,25 @@ async function googleApiFetch<T>(
 	}
 
 	throw new Error('Google API request failed after retries');
+}
+
+/**
+ * Trash a Drive file. Trashing is reversible and returns the file JSON, so it
+ * can go through googleApiFetch (a hard DELETE returns 204 with no body).
+ */
+export async function deleteGoogleDriveFile(accessToken: string, fileId: string): Promise<void> {
+	const normalized = fileId.trim();
+	if (!normalized) throw new Error('Missing Google Drive file id.');
+	await googleApiFetch<GoogleDriveFile>(
+		`/drive/v3/files/${encodeURIComponent(normalized)}`,
+		accessToken,
+		undefined,
+		{
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ trashed: true })
+		}
+	);
 }
 
 export function isGoogleDriveConfigured(): boolean {

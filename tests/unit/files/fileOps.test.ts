@@ -33,6 +33,7 @@ import {
 	type PendingFileOp,
 } from '$lib/files/fileOps';
 import { musicSettings } from '$lib/stores/settings.svelte';
+import type { StoredAudioFile } from '$lib/models/music';
 
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -105,7 +106,7 @@ describe('runPendingFileOp (delete)', () => {
 
 		await fileOps.runPendingFileOp(null);
 
-		expect(mocks.addToast).toHaveBeenCalledWith({ message: 'Delete failed.', type: 'error' });
+		expect(mocks.addToast).toHaveBeenCalledWith({ message: 'Delete failed: boom', type: 'error' });
 		// The reload only runs on success.
 		expect(browseNavigation.loadBrowseEntries).not.toHaveBeenCalled();
 		expect(view.pendingFileOp).toBeNull();
@@ -148,7 +149,7 @@ describe('runPendingFileOp (move / copy)', () => {
 
 		await fileOps.runPendingFileOp({ localPath: 'Albums' });
 
-		expect(mocks.addToast).toHaveBeenCalledWith({ message: 'Move failed.', type: 'error' });
+		expect(mocks.addToast).toHaveBeenCalledWith({ message: 'Move failed: boom', type: 'error' });
 	});
 
 	it('toasts a "Copy failed." when the copy rejects', async () => {
@@ -158,7 +159,7 @@ describe('runPendingFileOp (move / copy)', () => {
 
 		await fileOps.runPendingFileOp({ localPath: 'Albums' });
 
-		expect(mocks.addToast).toHaveBeenCalledWith({ message: 'Copy failed.', type: 'error' });
+		expect(mocks.addToast).toHaveBeenCalledWith({ message: 'Copy failed: boom', type: 'error' });
 	});
 
 	it('does nothing without a pending op', async () => {
@@ -213,6 +214,44 @@ describe('deleteFileOp', () => {
 		await fileOps.deleteFileOp(op('delete'));
 
 		expect(mocks.deleteEntry).toHaveBeenCalledWith({ treeUri: 'content://tree', path: '', name: 'song.mp3' });
+	});
+
+	it('resolves the subfolder from the file relative path', async () => {
+		const { fileOps } = makeFileOps();
+		const source: StoredAudioFile = {
+			source: 'native', name: 'song.mp3', relativePath: 'Albums/Sub/song.mp3', path: '/x',
+		};
+
+		await fileOps.deleteFileOp({ ...op('delete'), source });
+
+		expect(mocks.deleteEntry).toHaveBeenCalledWith({
+			treeUri: 'content://tree', path: 'Albums/Sub', name: 'song.mp3',
+		});
+	});
+
+	it('routes a Drive row to deleteDriveFile and never to the local SAF delete', async () => {
+		const deleteDriveFile = vi.fn().mockResolvedValue(undefined);
+		const { fileOps } = makeFileOps({ deleteDriveFile });
+		const source: StoredAudioFile = {
+			source: 'drive', name: 'song.mp3', relativePath: 'song.mp3', fileId: 'drive-1',
+		};
+
+		await fileOps.deleteFileOp({ ...op('delete'), isDrive: true, fileId: 'drive-1', source });
+
+		expect(deleteDriveFile).toHaveBeenCalledWith(source);
+		expect(mocks.deleteEntry).not.toHaveBeenCalled();
+		expect(mocks.addToast).toHaveBeenCalledWith({ message: 'Deleted "song.mp3" from Google Drive.', type: 'info' });
+	});
+
+	it('rejects a Drive row when no Drive delete is wired', async () => {
+		const { fileOps } = makeFileOps();
+		const source: StoredAudioFile = {
+			source: 'drive', name: 'song.mp3', relativePath: 'song.mp3', fileId: 'drive-1',
+		};
+
+		await expect(fileOps.deleteFileOp({ ...op('delete'), isDrive: true, fileId: 'drive-1', source }))
+			.rejects.toThrow('not available');
+		expect(mocks.deleteEntry).not.toHaveBeenCalled();
 	});
 });
 

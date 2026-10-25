@@ -33,6 +33,7 @@
 	import { marqueeTitle } from '$lib/actions/marqueeTitle';
 	import Button from '$lib/components/ui/Button.svelte';
 	import {
+		deleteGoogleDriveFile,
 		downloadGoogleDriveFile,
 		getGoogleDriveClientId,
 		isGoogleDriveConfigured,
@@ -525,6 +526,12 @@
 		deviceLibrary,
 		browseNavigation,
 		isNativeApp,
+		deleteDriveFile: async (source) => {
+			if (source.source !== 'drive') throw new Error('Not a Google Drive file.');
+			const token = await driveSession.ensureDriveAccessToken(true);
+			if (!token) throw new Error('Google Drive is not connected.');
+			await deleteGoogleDriveFile(token, source.fileId);
+		},
 		view: {
 			get pendingFileOp() { return pendingFileOp; },
 			set pendingFileOp(v) { pendingFileOp = v; },

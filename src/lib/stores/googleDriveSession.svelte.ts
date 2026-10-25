@@ -2,6 +2,7 @@
 import {
 	fetchGoogleDriveUser,
 	getGoogleDriveClientId,
+	GOOGLE_DRIVE_DELETE_SCOPE,
 	isGoogleDriveConfigured,
 	requestGoogleDriveAccessToken,
 	revokeGoogleDriveAccess,
@@ -14,6 +15,7 @@ const GOOGLE_DRIVE_SESSION_KEY = 'google-drive-session';
 type StoredGoogleDriveSession = {
 	accessToken?: string;
 	expiresAt?: number;
+	scope?: string;
 	user?: GoogleDriveUser | null;
 };
 
@@ -32,6 +34,7 @@ function readStoredSession(): StoredGoogleDriveSession {
 		return {
 			accessToken: typeof parsed.accessToken === 'string' ? parsed.accessToken : '',
 			expiresAt: typeof parsed.expiresAt === 'number' ? parsed.expiresAt : 0,
+			scope: typeof parsed.scope === 'string' ? parsed.scope : '',
 			user: parsed.user ?? null
 		};
 	} catch {
@@ -59,6 +62,7 @@ const formatDriveAuthError = formatGoogleDriveAuthError;
 export const googleDriveSession = $state.raw({
 	accessToken: storedSession.accessToken ?? '',
 	expiresAt: storedSession.expiresAt ?? 0,
+	scope: storedSession.scope ?? '',
 	user: storedSession.user ?? null,
 	error: '',
 	isAuthenticating: false,
@@ -67,6 +71,11 @@ export const googleDriveSession = $state.raw({
 
 	hasValidToken() {
 		return this.accessToken.length > 0 && Date.now() < this.expiresAt - 60_000;
+	},
+
+	/** True when the current token carries the full drive scope that delete needs. */
+	hasDriveDeleteScope() {
+		return this.scope.split(/\s+/).includes(GOOGLE_DRIVE_DELETE_SCOPE);
 	},
 
 	refreshConfiguration() {
@@ -82,6 +91,7 @@ export const googleDriveSession = $state.raw({
 
 		this.accessToken = stored.accessToken;
 		this.expiresAt = stored.expiresAt;
+		this.scope = stored.scope ?? this.scope;
 		this.user = stored.user ?? this.user;
 	},
 
@@ -89,6 +99,7 @@ export const googleDriveSession = $state.raw({
 		writeStoredSession({
 			accessToken: this.accessToken,
 			expiresAt: this.expiresAt,
+			scope: this.scope,
 			user: this.user
 		});
 	},
@@ -119,11 +130,13 @@ export const googleDriveSession = $state.raw({
 		this.refreshConfiguration();
 		this.hydrateFromStorage();
 
-		if (this.hasValidToken()) {
+		if (this.hasValidToken() && this.hasDriveDeleteScope()) {
 			this.persist();
 			return this.accessToken;
 		}
 
+		// A token granted before the full drive scope existed cannot delete files.
+		// Fall through to an interactive request that re-consents.
 		if (!interactive) {
 			return null;
 		}
@@ -138,12 +151,14 @@ export const googleDriveSession = $state.raw({
 		try {
 			const response = await requestGoogleDriveAccessToken({
 				clientId: this.clientId,
-				// Use '' (default): only shows UI when needed, not 'consent' which forces screen every time
-				prompt: ''
+				// The full drive scope needs an explicit consent screen; reuse a
+				// token that already carries it silently.
+				prompt: this.hasDriveDeleteScope() ? '' : 'consent'
 			});
 
 			this.accessToken = response.access_token;
 			this.expiresAt = Date.now() + Number(response.expires_in ?? 3600) * 1000;
+			this.scope = response.scope ?? '';
 			this.error = '';
 			this.persist();
 			return this.accessToken;
@@ -173,6 +188,7 @@ export const googleDriveSession = $state.raw({
 
 		this.accessToken = '';
 		this.expiresAt = 0;
+		this.scope = '';
 		this.user = null;
 		this.error = '';
 		this.persist();
