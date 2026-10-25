@@ -191,6 +191,7 @@ function makeDeviceLibrary(overrides: Partial<DeviceLibraryOptions> = {}) {
 		ensureDriveAccessToken: vi.fn().mockResolvedValue('tok'),
 	} as unknown as DriveSession;
 	const bumpBrowseVersion = vi.fn();
+	const bumpLibraryRevision = vi.fn();
 	const hydrateTracksFromLibrary = vi.fn();
 	const runPendingFileOp = vi.fn().mockResolvedValue(undefined);
 	const refreshDriveLibrary = vi.fn().mockResolvedValue(undefined);
@@ -204,6 +205,7 @@ function makeDeviceLibrary(overrides: Partial<DeviceLibraryOptions> = {}) {
 		getFolderInputEl: () => folderInputEl,
 		getNativeFileInputEl: () => nativeFileInputEl,
 		bumpBrowseVersion,
+		bumpLibraryRevision,
 		hydrateTracksFromLibrary,
 		runPendingFileOp,
 		refreshDriveLibrary,
@@ -211,7 +213,7 @@ function makeDeviceLibrary(overrides: Partial<DeviceLibraryOptions> = {}) {
 	});
 
 	return {
-		lib, view, driveSession, bumpBrowseVersion, hydrateTracksFromLibrary,
+		lib, view, driveSession, bumpBrowseVersion, bumpLibraryRevision, hydrateTracksFromLibrary,
 		runPendingFileOp, refreshDriveLibrary, folderInputEl, nativeFileInputEl,
 	};
 }
@@ -346,7 +348,7 @@ describe('startLibraryScan', () => {
 	});
 
 	it('clears the existing list first when resetExistingFiles is set', async () => {
-		const { lib, view, bumpBrowseVersion } = makeDeviceLibrary();
+		const { lib, view, bumpBrowseVersion, bumpLibraryRevision } = makeDeviceLibrary();
 		lib.rootDirHandle = {} as FileSystemDirectoryHandle;
 		view.allFiles = [nativeFile('old.mp3')];
 
@@ -354,6 +356,8 @@ describe('startLibraryScan', () => {
 
 		expect(view.allFiles).toEqual([]);
 		expect(bumpBrowseVersion).toHaveBeenCalledWith();
+		// The clear is a publish, so the search index has to see it (D9).
+		expect(bumpLibraryRevision).toHaveBeenCalledTimes(1);
 		expect(lib.scanProgress).toEqual({ pct: 0, filesFound: 0 });
 		await startScan(lib);
 	});
@@ -393,6 +397,8 @@ describe('startLibraryScan', () => {
 		// a delta never streams batch by batch.
 		expect(writes.map((files) => files.map((f) => f.name))).toEqual([['a.mp3', 'b.mp3']]);
 		expect(made.bumpBrowseVersion).toHaveBeenCalledTimes(1);
+		// One publish, one revision: the search index rebuilds off it (D9).
+		expect(made.bumpLibraryRevision).toHaveBeenCalledTimes(1);
 		expect(made.hydrateTracksFromLibrary).toHaveBeenCalledWith(writes[0]);
 		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
 			'content://tree', 'Music', writes[0], undefined, [{ path: '', mtime: 6 }], { allowEmpty: true }
@@ -603,7 +609,7 @@ describe('restoreLocalLibrary', () => {
 	});
 
 	it('restores the native SAF tree from cache, then walks in full when the payload has no tree', async () => {
-		const { lib, view, hydrateTracksFromLibrary } = makeDeviceLibrary({ isNativeApp: true });
+		const { lib, view, hydrateTracksFromLibrary, bumpLibraryRevision } = makeDeviceLibrary({ isNativeApp: true });
 		musicSettings.nativeTreeUri = 'content://tree';
 		musicSettings.lastFolderName = 'Music';
 		// The shape every device holds today: files, no schemaVersion, no rows.
@@ -615,6 +621,8 @@ describe('restoreLocalLibrary', () => {
 		expect(lib.nativeTreeUri).toBe('content://tree');
 		expect(lib.rootDirHandle).toBeNull();
 		expect(hydrateTracksFromLibrary).toHaveBeenCalled();
+		// The cache restore is a publish too, so the search index sees it (D9).
+		expect(bumpLibraryRevision).toHaveBeenCalled();
 		// The cached list is restored, then the background full walk publishes its
 		// own result once (the mocked walk finds nothing).
 		expect(writes.map((files) => files.map((f) => f.name))).toEqual([[], ['a.mp3'], []]);

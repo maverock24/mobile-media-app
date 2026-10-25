@@ -130,6 +130,12 @@ export interface DeviceLibraryOptions {
 	getNativeFileInputEl(): HTMLInputElement | undefined;
 	/** The `browseVersion` sink — forces the browse view to reload. */
 	bumpBrowseVersion(): void;
+	/**
+	 * The `libraryRevision` sink — tells the search index that a list was published
+	 * (D9). Bumped next to every `bumpBrowseVersion` that follows a publish of
+	 * `view.allFiles`, since the index keys its rebuild/merge decision on it.
+	 */
+	bumpLibraryRevision(): void;
 	/** The view's queue loader, called after a scan or cache restore. */
 	hydrateTracksFromLibrary(files: StoredAudioFile[], resetToStart?: boolean): void;
 	/** The view's pending move/copy runner, reached by the local picker. */
@@ -237,6 +243,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 		if (options.resetExistingFiles && !publishOnce) {
 			view.allFiles = [];
 			opts.bumpBrowseVersion();
+			opts.bumpLibraryRevision();
 		}
 		// Progress is a streaming full-walk shape (directories found out of
 		// directories queued); a once-published walk leaves progress alone.
@@ -283,6 +290,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 						if (scanPromise && libraryScanPromise === scanPromise) {
 							view.allFiles = [...view.allFiles, ...mappedBatch];
 							requestBrowseReload();
+							opts.bumpLibraryRevision();
 							const total = state.foldersScanned + state.foldersQueued;
 							const pct = total > 0 ? Math.min(99, Math.round((state.foldersScanned / total) * 100)) : 1;
 							s.scanProgress = { pct, filesFound: view.allFiles.length };
@@ -303,7 +311,10 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 				view.allFiles = scannedFiles;
 				s.scanProgress = null;
 				// A once-published walk was never published per batch, so this is its one publish.
-				if (publishOnce) opts.bumpBrowseVersion();
+				if (publishOnce) {
+					opts.bumpBrowseVersion();
+					opts.bumpLibraryRevision();
+				}
 				if (!trackListLockedByUser && indexChanged) opts.hydrateTracksFromLibrary(scannedFiles);
 				await saveCachedLibrary(s.nativeTreeUri, folderName, scannedFiles, undefined, walkedDirs, {
 					// A completed walk owns the payload, whatever it found: an empty library
@@ -412,6 +423,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 					view.allFiles = restoredFiles;
 					opts.hydrateTracksFromLibrary(restoredFiles);
 					opts.bumpBrowseVersion();
+					opts.bumpLibraryRevision();
 					scheduleWarmStartScan(folderName || 'Library', cachedLibrary, restoredFiles);
 				} else {
 					startLibraryScan(folderName || 'Library', { mode: 'full', resetExistingFiles: true });
@@ -451,6 +463,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 				opts.hydrateTracksFromLibrary(view.allFiles);
 				view.showQueue = true;
 				opts.bumpBrowseVersion();
+				opts.bumpLibraryRevision();
 				return true;
 			}
 		} catch {
@@ -499,6 +512,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 					view.allFiles = restoreStoredFilesFromCache(cachedLibrary);
 					opts.hydrateTracksFromLibrary(view.allFiles);
 					opts.bumpBrowseVersion();
+					opts.bumpLibraryRevision();
 				}
 			} catch (error) {
 				const isCancel = error instanceof Error && /cancel/i.test(error.message);
@@ -538,6 +552,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 					view.allFiles = restoreStoredFilesFromCache(cachedLibrary);
 					opts.hydrateTracksFromLibrary(view.allFiles);
 					opts.bumpBrowseVersion();
+					opts.bumpLibraryRevision();
 				}
 			} catch { /* user cancelled or API not supported */ }
 		} else {
@@ -557,6 +572,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 		activateDeviceLibrary(files[0].webkitRelativePath?.split('/')[0] ?? 'Selected Files');
 		view.browsePath = [];
 		opts.bumpBrowseVersion();  // triggers browse entry reload
+		opts.bumpLibraryRevision();
 		view.showQueue = true;
 		opts.hydrateTracksFromLibrary(view.allFiles);
 		void saveCachedLibrary(s.nativeTreeUri, musicSettings.lastFolderName || 'Selected Files', view.allFiles);
@@ -584,6 +600,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 		activateDeviceLibrary('Selected Files');
 		view.browsePath = [];
 		opts.bumpBrowseVersion();
+		opts.bumpLibraryRevision();
 		view.showQueue = true;
 		opts.hydrateTracksFromLibrary(view.allFiles, true);
 		void saveCachedLibrary(s.nativeTreeUri, 'Selected Files', view.allFiles);
@@ -613,6 +630,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 					view.allFiles = restoreStoredFilesFromCache(cachedLibrary);
 					opts.hydrateTracksFromLibrary(view.allFiles);
 					opts.bumpBrowseVersion();
+					opts.bumpLibraryRevision();
 				}
 			}
 		} catch { /* user denied */ }
@@ -726,6 +744,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 				};
 				view.allFiles = [...view.allFiles, newFile];
 				opts.bumpBrowseVersion();
+				opts.bumpLibraryRevision();
 			}
 			addToast({ message: `Downloaded "${transferFile.name}" to phone.`, type: 'info' });
 		} catch (e: any) {

@@ -7,10 +7,10 @@ import {
 	type SearchIndex,
 } from '$lib/browse/searchIndex';
 
-// These tests pin the incremental search index as it behaved inside
-// Mp3PlayerView.svelte, including its known length-keyed staleness. That bug is
-// deliberate here: the revision-keyed follow-up rewrites the test named
-// `an equal-length replacement leaves the old index in place`.
+// The incremental search index is keyed on the publish revision (D9), not on
+// `allFiles.length`. A revision that did not move is a no-op; a revision that
+// moved is a merge only when the new list is a strict append of the old one and
+// a rebuild otherwise. Every publish in `deviceLibrary.svelte.ts` bumps it.
 
 const native = (name: string): StoredAudioFile => ({
 	source: 'native',
@@ -22,39 +22,57 @@ const native = (name: string): StoredAudioFile => ({
 
 const names = (index: SearchIndex) => index.entries.map((e) => e.file.name);
 
-const build = (files: StoredAudioFile[]): SearchIndex =>
-	updateSearchIndex(createSearchIndex(), files, 'filename');
+/** The first build: no previous revision, so the whole list is indexed. */
+const build = (files: StoredAudioFile[], revision = 1): SearchIndex =>
+	updateSearchIndex(createSearchIndex(), files, revision, 'filename');
 
 describe('search index', () => {
-	it('an equal-length replacement leaves the old index in place', () => {
-		// The update key is allFiles.length, so swapping b.mp3 for c.mp3 keeps the
-		// length at 2 and the fast path returns without touching the entries.
-		const first = build([native('a.mp3'), native('b.mp3')]);
-		const replaced = updateSearchIndex(first, [native('a.mp3'), native('c.mp3')], 'filename');
+	it('replaces the index when one file is added and another removed', () => {
+		// The length stays at 2, which is exactly what the old length key could not
+		// see: the publish swapped b.mp3 for c.mp3 and the index kept b.mp3.
+		const first = build([native('a.mp3'), native('b.mp3')], 1);
+		const replaced = updateSearchIndex(first, [native('a.mp3'), native('c.mp3')], 2, 'filename');
 
-		expect(names(replaced)).toEqual(['a.mp3', 'b.mp3']);
-		expect(names(replaced)).not.toContain('c.mp3');
-		expect(replaced.length).toBe(2);
+		expect(names(replaced)).toEqual(['a.mp3', 'c.mp3']);
+		expect(names(replaced)).not.toContain('b.mp3');
+		expect(replaced.revision).toBe(2);
 	});
 
-	it('an append merges instead of rebuilding', () => {
-		// A rebuild would sort the whole array again and hand back fresh entry
-		// objects. A merge keeps the existing entries by identity.
-		const first = build([native('a.mp3'), native('c.mp3')]);
-		const appended = updateSearchIndex(first, [native('a.mp3'), native('c.mp3'), native('d.mp3')], 'filename');
+	it('an in-place replacement is visible to the next search', () => {
+		// The publish reuses the array and swaps one row for a renamed copy, so the
+		// length, the array identity and every surviving row are unchanged. Only the
+		// revision moves, and it has to be enough.
+		const files = [native('a.mp3'), native('b.mp3')];
+		const first = updateSearchIndex(createSearchIndex(), files, 1, 'filename');
+		expect(names(first)).toEqual(['a.mp3', 'b.mp3']);
+
+		files[1] = native('c.mp3');
+		const replaced = updateSearchIndex(first, files, 2, 'filename');
+
+		expect(names(replaced)).toEqual(['a.mp3', 'c.mp3']);
+		expect(replaced.revision).toBe(2);
+	});
+
+	it('an append still merges instead of rebuilding', () => {
+		// A rebuild sorts the whole array again and hands back fresh entry objects.
+		// A merge keeps the entries that were already indexed, by identity.
+		const files = [native('a.mp3'), native('c.mp3')];
+		const first = build(files, 1);
+		const appended = updateSearchIndex(first, [...files, native('d.mp3')], 2, 'filename');
 
 		expect(names(appended)).toEqual(['a.mp3', 'c.mp3', 'd.mp3']);
 		expect(appended.entries[0]).toBe(first.entries[0]);
 		expect(appended.entries[1]).toBe(first.entries[1]);
-		expect(appended.entries[2]).not.toBe(first.entries[0]);
-		expect(appended.length).toBe(3);
+		expect(appended.entries.length).toBe(3);
+		expect(appended.revision).toBe(2);
 	});
 
 	it('a merge keeps the index ordered, not just appended', () => {
 		// The merged comparator uses `{ numeric: true }`, so the new batch lands in
 		// its sorted position instead of after the existing entries.
-		const first = build([native('a.mp3'), native('c.mp3')]);
-		const merged = updateSearchIndex(first, [native('a.mp3'), native('c.mp3'), native('b.mp3')], 'filename');
+		const files = [native('a.mp3'), native('c.mp3')];
+		const first = build(files, 1);
+		const merged = updateSearchIndex(first, [...files, native('b.mp3')], 2, 'filename');
 
 		expect(names(merged)).toEqual(['a.mp3', 'b.mp3', 'c.mp3']);
 	});
@@ -81,11 +99,11 @@ describe('search index', () => {
 	});
 
 	it('a shrink resets the index', () => {
-		const first = build([native('a.mp3'), native('b.mp3'), native('c.mp3')]);
-		const shrunk = updateSearchIndex(first, [native('a.mp3')], 'filename');
+		const first = build([native('a.mp3'), native('b.mp3'), native('c.mp3')], 1);
+		const shrunk = updateSearchIndex(first, [native('a.mp3')], 2, 'filename');
 
 		expect(names(shrunk)).toEqual(['a.mp3']);
-		expect(shrunk.length).toBe(1);
+		expect(shrunk.entries.length).toBe(1);
 	});
 
 	it('buildSearchIndex sorts a single batch on its own', () => {

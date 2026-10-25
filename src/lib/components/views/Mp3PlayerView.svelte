@@ -175,6 +175,10 @@
 	let browsePath       = $state<string[]>([]);                 // navigation stack
 	let fileSearchQuery  = $state('');
 	let browseVersion    = $state(0);                          // bump to force reload
+	// Bumped by every publish of `allFiles` (D9). The search index keys its
+	// rebuild/merge decision on it, because a length key cannot see an equal-length
+	// replacement or an in-place one. Same sink shape as `browseVersion`.
+	let libraryRevision  = $state(0);
 	let selectedBrowseFileKeys = $state<string[]>([]);
 	// Per-deck Drive session (token, expiry, user, error). One instance per deck,
 	// created here so two mounted decks never share a token.
@@ -243,11 +247,12 @@
 	// Search index: sorted files + lowercase haystacks. Built incrementally
 	// across batch loads so sortFiles + parseFilename don't re-run over the
 	// entire growing array on every incremental library scan batch. The build,
-	// merge and reset rules live in `$lib/browse/searchIndex` so they can be
-	// unit-tested; this effect only supplies the reactive reads.
+	// merge and rebuild rules live in `$lib/browse/searchIndex` so they can be
+	// unit-tested; this effect only supplies the reactive reads, including the
+	// publish revision that keys the rule.
 	let _searchIndex = createSearchIndex();
 	$effect(() => {
-		_searchIndex = updateSearchIndex(_searchIndex, allFiles, musicSettings.sortOrder);
+		_searchIndex = updateSearchIndex(_searchIndex, allFiles, libraryRevision, musicSettings.sortOrder);
 	});
 
 	// Expose the search index as a reactive alias for the filteredEntries derivation
@@ -396,6 +401,7 @@
 		getFolderInputEl: () => folderInputEl,
 		getNativeFileInputEl: () => nativeFileInputEl,
 		bumpBrowseVersion: () => { browseVersion += 1; },
+		bumpLibraryRevision: () => { libraryRevision += 1; },
 		hydrateTracksFromLibrary,
 		runPendingFileOp: (destination) => fileOps.runPendingFileOp(destination),
 		refreshDriveLibrary: () => driveLibrary.refreshGoogleDrive(),
