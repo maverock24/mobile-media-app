@@ -29,7 +29,8 @@
  *    writes and the `try`/`finally`;
  *  - every `saveCachedLibrary` call site and the nulled tree URI they pass;
  *  - `startLibraryScan`'s `trackListLockedByUser` guard and its progress writes;
- *  - `rescanCurrentLibraryIndex` deleting the cache key before rescanning;
+ *  - `rescanCurrentLibraryIndex` leaving the cached payload alone and letting the
+ *    scan's completion write replace it;
  *  - `reconnectFolder`'s `requestPermission` flow;
  *  - the native picker flows through `FilePicker` / `DirectoryReader`;
  *  - `downloadToLocalFolder`'s transfer phases.
@@ -38,15 +39,13 @@ import { Capacitor } from '@capacitor/core';
 import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
 import { pickNativeAudioDirectory, scanNativeAudioFiles } from '$lib/browse/folderScan';
 import {
-	LAST_LIBRARY_CACHE_KEY,
 	collectStoredFilesFromDirHandle,
-	getDeviceLibraryCacheKey,
 	loadDeviceCachedLibrary,
 	restoreStoredFilesFromCache,
 	saveCachedLibrary
 } from '$lib/browse/libraryCache';
 import { createStoredAudioFile, isSupportedAudioFile, type StoredAudioFile } from '$lib/models/music';
-import { deleteCachedLibrary, loadHandleFromIDB, saveHandleToIDB } from '$lib/utils/idb';
+import { loadHandleFromIDB, saveHandleToIDB } from '$lib/utils/idb';
 import { downloadGoogleDriveFile } from '$lib/google-drive';
 import { musicSettings } from '$lib/stores/settings.svelte';
 import { addToast } from '$lib/stores/toastStore.svelte';
@@ -214,12 +213,9 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 		}
 
 		const folderName = musicSettings.lastFolderName || 'Library';
-		const cacheKey = getDeviceLibraryCacheKey({ treeUri: s.nativeTreeUri, folderName });
-		await deleteCachedLibrary(cacheKey);
-		if (cacheKey !== LAST_LIBRARY_CACHE_KEY) {
-			await deleteCachedLibrary(LAST_LIBRARY_CACHE_KEY);
-		}
 
+		// No pre-scan delete: the cached payload survives a cancelled or failed
+		// walk, and `startLibraryScan`'s completion write replaces it on success.
 		if (s.nativeTreeUri || s.rootDirHandle) {
 			startLibraryScan(folderName, { resetExistingFiles: true });
 		}

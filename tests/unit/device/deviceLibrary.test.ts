@@ -174,6 +174,11 @@ function makeDeviceLibrary(overrides: Partial<DeviceLibraryOptions> = {}) {
 /** Run a scan and wait for the fired-and-forgotten promise chain to settle. */
 function startScan(lib: DeviceLibrary, folderName = 'Library', options: { resetExistingFiles?: boolean } = {}) {
 	lib.startLibraryScan(folderName, options);
+	return waitForScanToSettle(lib);
+}
+
+/** Wait until the already-started scan's promise chain has settled. */
+function waitForScanToSettle(lib: DeviceLibrary) {
 	return vi.waitFor(() => {
 		if (lib.libraryScanPromise) throw new Error('scan still running');
 	});
@@ -275,28 +280,44 @@ describe('startLibraryScan', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('rescanCurrentLibraryIndex', () => {
-	it('deletes the device cache key and the last-library key before rescanning', async () => {
+	it('does not delete the cache before scanning', async () => {
 		const { lib } = makeDeviceLibrary();
 		lib.nativeTreeUri = 'content://tree';
 
 		await lib.rescanCurrentLibraryIndex();
 
-		expect(mocks.getDeviceLibraryCacheKey).toHaveBeenCalledWith({ treeUri: 'content://tree', folderName: 'Library' });
-		expect(mocks.deleteCachedLibrary.mock.calls.map((c) => c[0])).toEqual(['device:content://tree', 'last-library']);
-		expect(lib.libraryScanPromise).not.toBeNull();
-		await startScan(lib);
+		expect(mocks.deleteCachedLibrary).not.toHaveBeenCalled();
+		expect(mocks.scanNativeAudioFiles).toHaveBeenCalledTimes(1);
+		await waitForScanToSettle(lib);
 	});
 
-	it('deletes the last-library key as well as the folder key', async () => {
+	it('keeps the stored payload when the rescan fails', async () => {
+		const { lib } = makeDeviceLibrary();
+		lib.rootDirHandle = {} as FileSystemDirectoryHandle;
+		mocks.collectStoredFilesFromDirHandle.mockRejectedValue(new Error('walk failed'));
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await lib.rescanCurrentLibraryIndex();
+		await waitForScanToSettle(lib);
+
+		// Nothing removed the key and nothing replaced it, so the previous payload
+		// is still what the next start restores.
+		expect(mocks.deleteCachedLibrary).not.toHaveBeenCalled();
+		expect(mocks.saveCachedLibrary).not.toHaveBeenCalled();
+		consoleError.mockRestore();
+	});
+
+	it('never deletes the last-library key', async () => {
 		const { lib } = makeDeviceLibrary();
 		musicSettings.lastFolderName = '';
 		lib.nativeTreeUri = null;
 
 		await lib.rescanCurrentLibraryIndex();
 
-		// `lastFolderName || 'Library'` is always truthy, so the folder key is
-		// never the last-library key and both deletes always run.
-		expect(mocks.deleteCachedLibrary.mock.calls.map((c) => c[0])).toEqual(['device-folder:Library', 'last-library']);
+		// The derived folder key is no longer computed at all, and the mirror is
+		// never a rescan's business: the completion write replaces the payload.
+		expect(mocks.deleteCachedLibrary).not.toHaveBeenCalledWith('last-library');
+		expect(mocks.deleteCachedLibrary).not.toHaveBeenCalledWith('device-folder:Library');
 		// No tree URI or handle — nothing to scan.
 		expect(lib.libraryScanPromise).toBeNull();
 	});
