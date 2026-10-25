@@ -739,7 +739,19 @@
 		const driveFilter = driveSearch.trim().toLowerCase();
 		browseVersion; // reactive dependency
 		musicSettings.librarySource;
-		void browseNavigation.loadBrowseEntries(path, driveFilter);
+		// The load runs on the next frame, outside this effect's tracking scope, so
+		// every signal `loadBrowseEntries` reads has to be read here. These are the
+		// dependencies the effect had while it called the loader inline: the file
+		// list and sort order it builds from, and the two device handles that pick
+		// its branch. Without them a change to one of those alone (a sort-order
+		// change under a Drive search, say) would no longer reload the list.
+		void allFiles;
+		void musicSettings.sortOrder;
+		void deviceLibrary.nativeTreeUri;
+		void deviceLibrary.rootDirHandle;
+		// Coalesced: a scan batch bumps `browseVersion` once per frame at most, and a
+		// burst of bumps must not rebuild the entries once per bump.
+		browseNavigation.scheduleBrowseEntries(path, driveFilter);
 	});
 
 	$effect(() => {

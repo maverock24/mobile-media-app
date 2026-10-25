@@ -38,7 +38,8 @@
  * Added for the library-delta effort: a warm start with a restored cache now
  * schedules a background walk (`scheduleWarmStartScan`), a delta when the cached
  * directory tree allows one and a full walk otherwise, while Settings' Rescan and
- * the cold start stay full walks.
+ * the cold start stay full walks. A streaming full walk still appends and updates
+ * progress per batch, but bumps the browse version at most once per frame (D8).
  */
 import { Capacitor } from '@capacitor/core';
 import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
@@ -50,6 +51,7 @@ import {
 	saveCachedLibrary
 } from '$lib/browse/libraryCache';
 import { decideScanMode, mergeLibraryDelta, type LibraryScanMode } from '$lib/browse/libraryDelta';
+import { createFrameCoalescer } from '$lib/browse/reloadFrame';
 import {
 	createStoredAudioFile,
 	isSupportedAudioFile,
@@ -186,6 +188,16 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 		localPickerLoading: false
 	});
 
+	/**
+	 * One browse reload per frame for a streaming walk. The batch callback appends
+	 * each batch as it arrives, but a bump per 500-file batch made the view rebuild
+	 * the whole entry list (`buildBrowseEntries` over the growing array) per batch,
+	 * which is quadratic on a large library (D8). By the time the frame lands every
+	 * batch appended so far is already in `view.allFiles`, so one rebuild publishes
+	 * them all.
+	 */
+	const requestBrowseReload = createFrameCoalescer(() => opts.bumpBrowseVersion());
+
 	function activateDeviceLibrary(folderName: string): void {
 		musicSettings.librarySource = 'device';
 		musicSettings.lastFolderName = folderName;
@@ -270,7 +282,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 					: async (mappedBatch: StoredAudioFile[], state: ScanBatchState) => {
 						if (scanPromise && libraryScanPromise === scanPromise) {
 							view.allFiles = [...view.allFiles, ...mappedBatch];
-							opts.bumpBrowseVersion();
+							requestBrowseReload();
 							const total = state.foldersScanned + state.foldersQueued;
 							const pct = total > 0 ? Math.min(99, Math.round((state.foldersScanned / total) * 100)) : 1;
 							s.scanProgress = { pct, filesFound: view.allFiles.length };

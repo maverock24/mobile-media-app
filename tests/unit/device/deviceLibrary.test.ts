@@ -292,33 +292,57 @@ describe('startLibraryScan', () => {
 		expect(lib.libraryScanPromise).toBeNull();
 	});
 
-	it('streams a native scan batch by batch, bumping the browse version and progress', async () => {
-		let lib!: DeviceLibrary;
-		const progressAtFirstBatch: Array<{ pct: number; filesFound: number } | null> = [];
-		mocks.scanNativeLibrary.mockImplementation(async (_treeUri, _path, _size, _opts, onBatch) => {
-			const batch = [nativeFile('a.mp3')];
-			// The real plugin awaits a native call before its first batch; yield once
-			// so the view's `libraryScanPromise` is assigned before onBatch runs.
-			await Promise.resolve();
-			await onBatch?.(batch, { done: true, foldersScanned: 1, foldersQueued: 0, totalFiles: 1 });
-			progressAtFirstBatch.push(lib.scanProgress);
-			return walkResult(batch, [{ path: '', mtime: 9 }]);
-		});
-		const made = makeDeviceLibrary();
-		lib = made.lib;
-		lib.nativeTreeUri = 'content://tree';
+	it('streams a native scan batch by batch, bumping the browse version once per frame', async () => {
+		vi.useFakeTimers();
+		try {
+			let made!: ReturnType<typeof makeDeviceLibrary>;
+			const progressPerBatch: Array<{ pct: number; filesFound: number } | null> = [];
+			const bumpsPerBatch: number[] = [];
+			mocks.scanNativeLibrary.mockImplementation(async (_treeUri, _path, _size, _opts, onBatch) => {
+				const batch = [nativeFile('a.mp3')];
+				// The real plugin awaits a native call before its first batch; yield once
+				// so the view's `libraryScanPromise` is assigned before onBatch runs.
+				await Promise.resolve();
+				// Three batches, all inside one frame.
+				await onBatch?.(batch, { done: false, foldersScanned: 1, foldersQueued: 0, totalFiles: 3 });
+				progressPerBatch.push(made.lib.scanProgress);
+				bumpsPerBatch.push(made.bumpBrowseVersion.mock.calls.length);
+				for (const name of ['b.mp3', 'c.mp3']) {
+					await onBatch?.([nativeFile(name)], { done: false, foldersScanned: 1, foldersQueued: 0, totalFiles: 3 });
+					progressPerBatch.push(made.lib.scanProgress);
+					bumpsPerBatch.push(made.bumpBrowseVersion.mock.calls.length);
+				}
+				return walkResult([nativeFile('a.mp3'), nativeFile('b.mp3'), nativeFile('c.mp3')], [{ path: '', mtime: 9 }]);
+			});
+			made = makeDeviceLibrary();
+			made.lib.nativeTreeUri = 'content://tree';
+			const writes = trackAllFiles(made.view);
 
-		await startScan(lib);
+			made.lib.startLibraryScan('Library');
+			// Drains the walk's microtasks and then the frame the bump waits for.
+			await vi.advanceTimersByTimeAsync(20);
+			expect(made.lib.libraryScanPromise).toBeNull();
 
-		expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, {}, expect.any(Function));
-		expect(progressAtFirstBatch[0]).toEqual({ pct: 99, filesFound: 1 });
-		expect(made.view.allFiles.map((f) => f.name)).toEqual(['a.mp3']);
-		expect(made.hydrateTracksFromLibrary).toHaveBeenCalled();
-		expect(made.bumpBrowseVersion).toHaveBeenCalled();
-		// The walk's own directory rows are stored, so the next start can skip them.
-		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
-			'content://tree', 'Library', made.view.allFiles, undefined, [{ path: '', mtime: 9 }], { allowEmpty: true }
-		);
+			expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, {}, expect.any(Function));
+			// The files still land per batch, and so does the progress: only the bump moved.
+			expect(writes.slice(0, 3).map((files) => files.map((f) => f.name))).toEqual([['a.mp3'], ['a.mp3', 'b.mp3'], ['a.mp3', 'b.mp3', 'c.mp3']]);
+			expect(progressPerBatch).toEqual([
+				{ pct: 99, filesFound: 1 },
+				{ pct: 99, filesFound: 2 },
+				{ pct: 99, filesFound: 3 },
+			]);
+			// No bump per batch (D8: the old shape), one bump for the whole frame.
+			expect(bumpsPerBatch).toEqual([0, 0, 0]);
+			expect(made.bumpBrowseVersion).toHaveBeenCalledTimes(1);
+			expect(made.view.allFiles.map((f) => f.name)).toEqual(['a.mp3', 'b.mp3', 'c.mp3']);
+			expect(made.hydrateTracksFromLibrary).toHaveBeenCalled();
+			// The walk's own directory rows are stored, so the next start can skip them.
+			expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+				'content://tree', 'Library', made.view.allFiles, undefined, [{ path: '', mtime: 9 }], { allowEmpty: true }
+			);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('clears the existing list first when resetExistingFiles is set', async () => {

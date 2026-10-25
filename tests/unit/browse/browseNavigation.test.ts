@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { StoredAudioFile } from '$lib/models/music';
 
 // The module lists native folders through DirectoryReader. It is replaced with
@@ -271,6 +271,71 @@ describe('loadBrowseEntries — load-id bail', () => {
 		second.resolve({ folderName: '', entries: [nativeEntry('b.mp3')] });
 		await loadB;
 		expect(b.nav.browseEntries.map((e) => e.name)).toEqual(['b.mp3']);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────
+// scheduleBrowseEntries — the coalescing boundary
+// ─────────────────────────────────────────────────────────────
+
+describe('scheduleBrowseEntries', () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	// `allFiles` empty + a tree URI makes every load go through
+	// `DirectoryReader.listEntries`, so the call count is the rebuild count.
+	const treeNav = () => makeNav({ nativeTreeUri: 'content://tree' });
+	const loadedPaths = () => mocks.listEntries.mock.calls.map((call) => call[0].path);
+
+	it('collapses three requests in one frame into one load', async () => {
+		vi.useFakeTimers();
+		const { nav } = treeNav();
+
+		nav.scheduleBrowseEntries(['a']);
+		nav.scheduleBrowseEntries(['b']);
+		nav.scheduleBrowseEntries(['c']);
+		// Nothing loads synchronously: the requests wait for the frame.
+		expect(mocks.listEntries).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(20);
+
+		expect(mocks.listEntries).toHaveBeenCalledTimes(1);
+		// The last request wins; the earlier paths are already stale.
+		expect(loadedPaths()).toEqual(['c']);
+	});
+
+	it('does not collapse across frames', async () => {
+		vi.useFakeTimers();
+		const { nav } = treeNav();
+
+		nav.scheduleBrowseEntries(['a']);
+		expect(mocks.listEntries).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(20);
+		expect(loadedPaths()).toEqual(['a']);
+		nav.scheduleBrowseEntries(['b']);
+		// The second frame's request waits for its own frame.
+		expect(loadedPaths()).toEqual(['a']);
+		await vi.advanceTimersByTimeAsync(20);
+
+		expect(loadedPaths()).toEqual(['a', 'b']);
+	});
+
+	it('loads through the setTimeout fallback when requestAnimationFrame is absent', async () => {
+		// jsdom does not always expose rAF; a scheduler that throws on it would
+		// break every test that drives this boundary. Faked first, then removed:
+		// `useFakeTimers` installs its own rAF and would overwrite the stub.
+		vi.useFakeTimers();
+		vi.stubGlobal('requestAnimationFrame', undefined);
+		const { nav } = treeNav();
+
+		nav.scheduleBrowseEntries(['a']);
+		// Deferred to the fallback timer, not loaded inline.
+		expect(mocks.listEntries).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+
+		expect(loadedPaths()).toEqual(['a']);
 	});
 });
 
