@@ -76,7 +76,7 @@
 		collectStoredFilesFromSnapshot
 	} from '$lib/browse/libraryCache';
 	import {
-		scanNativeAudioFiles,
+		scanNativeLibrary,
 		collectAllFromPath
 	} from '$lib/browse/folderScan';
 	import {
@@ -1139,7 +1139,9 @@
 		});
 
 		const collectedFiles: StoredAudioFile[] = [];
-		void scanNativeAudioFiles(
+		// The library walk, not the file-only wrapper: a folder play from the root
+		// writes the library cache, and that write needs the tree the walk observed.
+		void scanNativeLibrary(
 			deviceLibrary.nativeTreeUri,
 			path,
 			FOLDER_PLAY_SCAN_BATCH_SIZE,
@@ -1173,7 +1175,7 @@
 				activePlaybackQueueSessionId
 			);
 			queuedFileCount = collectedFiles.length;
-		}).then(async () => {
+		}).then(async (walk) => {
 			if (!playbackStarted && collectedFiles.length > 0) {
 				beginQueue(folderLabel);
 				activePlaybackQueueSessionId = queueSessionId;
@@ -1191,7 +1193,22 @@
 			if (path.length === 0 && collectedFiles.length > 0) {
 				allFiles = collectedFiles;
 				browseVersion += 1;
-				await saveCachedLibrary(deviceLibrary.nativeTreeUri, folderLabel, collectedFiles);
+				// This walk started at the root and was given no previous tree, so the rows
+				// it observed are the tree the next start deltas against. Writing the files
+				// alone dropped `dirs` and made every later start walk in full (D6, D12).
+				// `completedAt` is claimed only by a walk that reached its last batch and
+				// read every directory: a partial one writes no stamp (`null`) and no tree,
+				// the rule `startLibraryScan` applies, so the payload it leaves is one the
+				// next start reads as unverified and walks in full (D7).
+				const verifiedTree = walk.completed && walk.unreadableDirs === 0;
+				await saveCachedLibrary(
+					deviceLibrary.nativeTreeUri,
+					folderLabel,
+					collectedFiles,
+					undefined,
+					verifiedTree ? walk.dirs : [],
+					{ completedAt: verifiedTree ? Date.now() : null }
+				);
 			}
 			if (!hasResolvedStart) {
 				hasResolvedStart = true;
@@ -1551,7 +1568,11 @@
 				// the mount restore left the index exactly as it was cached until the user
 				// rescaned by hand. `refreshWarmLibrary` is idempotent, so the header
 				// button's own restore cannot start a second walk over the same tree.
-				if (deviceLibrary.nativeTreeUri && cachedLibrary && cachedLibrary.files.length > 0) {
+				// Gated on a restored payload, not on that payload listing files: a library
+				// the user emptied writes a completed empty payload on purpose (D6
+				// amendment), and requiring a file left it never refreshing, so a folder
+				// refilled on the device stayed invisible until a manual rescan.
+				if (deviceLibrary.nativeTreeUri && cachedLibrary) {
 					deviceLibrary.refreshWarmLibrary(cachedLibrary.folderName, cachedLibrary, allFiles);
 				}
 				if (!('showDirectoryPicker' in window) || !handle) return;

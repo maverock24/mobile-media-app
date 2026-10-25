@@ -158,9 +158,10 @@ export async function scanNativeLibrary(
 }
 
 /**
- * The file list only, for callers that do not care about the directory tree.
- * Kept as a thin wrapper so the folder-play path and the index scan keep their
- * existing shape.
+ * The file list only, for callers that do not care about the directory tree and
+ * for the tests that pin the batch loop's file shape. A caller that writes a
+ * cache payload after the walk needs the tree as well, so it calls
+ * {@link scanNativeLibrary} and takes `walk.dirs` with the files.
  */
 export async function scanNativeAudioFiles(
 	nativeTreeUri: string | null,
