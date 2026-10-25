@@ -29,3 +29,16 @@ One task per plan phase. One commit per task. Blocked-by edges below are acyclic
 - **Wave 3**: T5.
 - **Wave 4**: T6.
 - **Wave 5**: T7 and T8 (disjoint), then T10 (shares `Mp3PlayerView.svelte` and `deviceLibrary.svelte.ts` with T8).
+
+## Review-fix tasks (after the first PR review)
+
+The PR review found one blocker and three correctness/safety problems, so the branch was not handed over. These tasks come after T1 to T10.
+
+| Task | Finding | Files | Blocked by |
+|---|---|---|---|
+| T11 | the warm-start delta never runs on the real mount path; a flat library can never delta because the scan root is never a row | `device/deviceLibrary.svelte.ts`, `views/Mp3PlayerView.svelte`, `DirectoryReaderPlugin.java`, `browse/folderScan.ts` | none |
+| T12 | the delta merges against the restored snapshot instead of the live index; a walk that reports a skipped count but no paths prunes anyway; `completed` is hardcoded | `device/deviceLibrary.svelte.ts`, `browse/folderScan.ts`, `browse/libraryDelta.ts` | T11 |
+| T13 | deleting the last file deletes the cache keys instead of writing a completed empty payload, and a rewrite re-stamps `completedAt` | `files/fileOps.ts`, `browse/libraryCache.ts` | none |
+| T14 | standards: `NativeDirectoryFile` still duplicated (D13), `libraryDelta.ts` header still describes P2 as future work, `sortOrder` missing from the search index identity | `models/music.ts`, `native/directory-reader.ts`, `browse/libraryDelta.ts`, `browse/searchIndex.ts` | T12 |
+
+A2, A4, A5 and A6 passed review; A3 holds by construction; A1 failed before T11.
