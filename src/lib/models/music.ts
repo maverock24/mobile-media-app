@@ -3,6 +3,12 @@
  * Extracted from Mp3PlayerView.svelte to reduce file size and enable reuse.
  */
 
+// `NativeDirectoryFile` used to be declared a second time here, so that this module
+// could accept an entry from the native walk without importing the bridge (D13).
+// The bridge owns the declaration; a type-only import adds no runtime dependency on
+// Capacitor, so the second copy is gone.
+import type { NativeDirectoryFile } from '$lib/native/directory-reader';
+
 // ─── StoredAudioFile — unified representation of an MP3 file from any source ───
 
 export type StoredAudioFile =
@@ -148,16 +154,6 @@ export function createStoredWebAudioFile(file: File, relativePath: string): Stor
 		relativePath: relativePath && relativePath.length > 0 ? relativePath : file.name,
 		file,
 	};
-}
-
-export interface NativeDirectoryFile {
-	kind: 'file';
-	name: string;
-	path: string;
-	relativePath: string;
-	mimeType?: string;
-	modifiedAt?: number;
-	sizeBytes?: number;
 }
 
 export function createStoredNativeAudioFile(entry: NativeDirectoryFile): StoredAudioFile {

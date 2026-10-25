@@ -15,6 +15,11 @@
  *
  * The append check compares against `files`, the list the entries were built
  * from, so it sees the published rows rather than the sorted entries.
+ *
+ * `sortOrder` is part of the identity too. The entries are stored pre-sorted, so an
+ * index built under one order is wrong under another even when the list and the
+ * revision are untouched (the user changed the order in Settings). A changed order
+ * rebuilds: the existing entries are in the old order, so there is nothing to merge.
  */
 import { parseFilename, sortFiles, type StoredAudioFile } from '$lib/models/music';
 
@@ -28,10 +33,13 @@ export type SearchIndex = {
 	entries: SearchIndexEntry[];
 	revision: number;
 	files: StoredAudioFile[];
+	/** The order `entries` is sorted under. `null` on an empty index, so the first
+	 *  update always builds instead of trusting an order it never applied. */
+	sortOrder: SearchIndexSortOrder | null;
 };
 
 export function createSearchIndex(): SearchIndex {
-	return { entries: [], revision: -1, files: [] };
+	return { entries: [], revision: -1, files: [], sortOrder: null };
 }
 
 /** Sort the whole array and build a haystack per file. */
@@ -92,10 +100,12 @@ function isStrictAppend(next: StoredAudioFile[], prev: StoredAudioFile[]): boole
 /**
  * Advance the index to `allFiles` as published under `revision`.
  *
- *  - the revision did not move and the list is the same array: no-op;
- *  - a strict append: sort only the tail past the previous list and merge it;
+ *  - the revision did not move, the list is the same array and `sortOrder` is the
+ *    one the entries were built under: no-op;
+ *  - a strict append under an unchanged `sortOrder`: sort only the tail past the
+ *    previous list and merge it;
  *  - anything else (a shrink, an equal-length replacement, an in-place
- *    replacement): sort the whole list again.
+ *    replacement, a changed sort order): sort the whole list again.
  *
  * The `allFiles === index.files` half of the no-op check covers the sources that
  * publish the list without a revision sink (the Drive library and the file ops),
@@ -108,14 +118,15 @@ export function updateSearchIndex(
 	revision: number,
 	sortOrder: SearchIndexSortOrder,
 ): SearchIndex {
-	if (revision === index.revision && allFiles === index.files) return index;
+	const sortOrderChanged = sortOrder !== index.sortOrder;
+	if (!sortOrderChanged && revision === index.revision && allFiles === index.files) return index;
 	const previous = index.files;
-	if (isStrictAppend(allFiles, previous)) {
+	if (!sortOrderChanged && isStrictAppend(allFiles, previous)) {
 		const newSlice = allFiles.slice(previous.length);
-		return { entries: mergeSearchIndex(index.entries, newSlice, sortOrder), revision, files: allFiles };
+		return { entries: mergeSearchIndex(index.entries, newSlice, sortOrder), revision, files: allFiles, sortOrder };
 	}
 	// A shrink (a delete) lands here too: the previous rows are no longer the
 	// prefix of the list, and slicing past the new end would keep the deleted
-	// file forever.
-	return { entries: buildSearchIndex(allFiles, sortOrder), revision, files: allFiles };
+	// file forever. So does a changed sort order: the entries are in the old one.
+	return { entries: buildSearchIndex(allFiles, sortOrder), revision, files: allFiles, sortOrder };
 }

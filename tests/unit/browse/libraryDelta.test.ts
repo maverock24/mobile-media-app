@@ -6,13 +6,12 @@
 // ─────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from 'vitest';
-import { getStoredFileKey, type CachedLibrary, type StoredAudioFile } from '$lib/models/music';
+import { getStoredFileKey, type CachedLibrary, type CachedLibraryDir, type StoredAudioFile } from '$lib/models/music';
 import {
 	decideScanMode,
 	mergeLibraryDelta,
 	DELTA_TREE_MAX_BYTES,
 	FULL_WALK_MAX_AGE_MS,
-	type LibraryDeltaDirRow,
 } from '$lib/browse/libraryDelta';
 
 // ── helpers ──────────────────────────────────────────────────
@@ -33,7 +32,7 @@ const nativeFile = (
 
 const keys = (files: readonly StoredAudioFile[]): string[] => files.map((file) => getStoredFileKey(file));
 
-const paths = (rows: readonly LibraryDeltaDirRow[]): string[] => rows.map((row) => row.path);
+const paths = (rows: readonly CachedLibraryDir[]): string[] => rows.map((row) => row.path);
 
 describe('mergeLibraryDelta', () => {
 	// Rule 1 — fingerprint

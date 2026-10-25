@@ -106,6 +106,33 @@ describe('search index', () => {
 		expect(shrunk.entries.length).toBe(1);
 	});
 
+	it('a sort order change rebuilds the index', () => {
+		// The list, the array identity and the revision are all unchanged; only the
+		// order moved, which is what a Settings change does. The entries are stored
+		// pre-sorted, so an identity of (revision, allFiles) alone would call this a
+		// no-op and search would keep the old order.
+		const files = [native('aaa - zzz.mp3'), native('bbb - aaa.mp3')];
+		const first = build(files, 1);
+		expect(names(first)).toEqual(['aaa - zzz.mp3', 'bbb - aaa.mp3']);
+
+		const byTitle = updateSearchIndex(first, files, 1, 'title');
+
+		// Filename order is `aaa - zzz` first; title order is `aaa` before `zzz`, so
+		// the same two files come back reversed.
+		expect(names(byTitle)).toEqual(['bbb - aaa.mp3', 'aaa - zzz.mp3']);
+		expect(byTitle.sortOrder).toBe('title');
+		expect(byTitle.revision).toBe(1);
+		// A rebuild, not a merge of the old entries: they are in the old order.
+		expect(byTitle.entries[0]).not.toBe(first.entries[0]);
+	});
+
+	it('an unchanged sort order keeps the no-op fast path', () => {
+		const files = [native('a.mp3'), native('b.mp3')];
+		const first = build(files, 1);
+
+		expect(updateSearchIndex(first, files, 1, 'filename')).toBe(first);
+	});
+
 	it('buildSearchIndex sorts a single batch on its own', () => {
 		const entries = buildSearchIndex([native('b.mp3'), native('a.mp3')], 'filename');
 

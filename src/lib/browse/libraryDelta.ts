@@ -13,26 +13,20 @@
  * state, no IndexedDB. Every input arrives as a parameter and the result is a new
  * value; no input array or object is mutated.
  *
- * Identity is `getStoredFileKey` (`src/lib/models/music.ts:114-117`), i.e.
- * `relativePath` for native and web files. A rename is therefore one removal plus
- * one addition, not an update (D1, out of scope in `tree.md`). The change
- * fingerprint is the (mtime, size) pair of D5, both already on `StoredAudioFile`.
+ * Identity is `getStoredFileKey` ({@link getStoredFileKey}), i.e. `relativePath` for
+ * native and web files. A rename is therefore one removal plus one addition, not an
+ * update (D1, out of scope in `tree.md`). The change fingerprint is the (mtime, size)
+ * pair of D5, both already on `StoredAudioFile`.
+ *
+ * The directory rows this module takes and returns are `CachedLibraryDir`, the row a
+ * `CachedLibrary.dirs` payload persists (D6, `src/lib/models/music.ts`). The same
+ * shape used to be declared here as `LibraryDeltaDirRow`, because this phase owned no
+ * cache type; the cache type has landed, so the two are one type now and cannot drift.
+ * No import cycle: `models/music.ts` imports nothing from this module.
  */
 
 import { hasUsableDirectoryTree } from '$lib/browse/libraryCache';
-import { getStoredFileKey, type CachedLibrary, type StoredAudioFile } from '$lib/models/music';
-
-/**
- * One row of the persisted directory tree (D6): the directory's path relative to
- * the tree root, and the mtime the walk trusted when it skipped it.
- *
- * Declared here because this phase owns no cache type; P2 moves the same shape
- * into `CachedLibrary.dirs`, and the two must stay structurally identical.
- */
-export interface LibraryDeltaDirRow {
-	path: string;
-	mtime: number;
-}
+import { getStoredFileKey, type CachedLibrary, type CachedLibraryDir, type StoredAudioFile } from '$lib/models/music';
 
 /** Everything the merge needs to know about one walk. */
 export interface MergeLibraryDeltaInput {
@@ -46,9 +40,9 @@ export interface MergeLibraryDeltaInput {
 	/** The files this walk observed. Never a full tree unless the walk was full. */
 	walked: readonly StoredAudioFile[];
 	/** The directory rows this walk observed. */
-	dirs: readonly LibraryDeltaDirRow[];
+	dirs: readonly CachedLibraryDir[];
 	/** The previous tree, so a skipped directory keeps its row (D4 amendment). */
-	previousDirs?: readonly LibraryDeltaDirRow[];
+	previousDirs?: readonly CachedLibraryDir[];
 	/** The relative paths of the directories the walk did not descend into. */
 	skippedPaths: readonly string[];
 	/**
@@ -69,7 +63,7 @@ export interface MergeLibraryDeltaInput {
 /** The merged index: observed files first, then what the walk could not verify. */
 export interface MergeLibraryDeltaResult {
 	files: StoredAudioFile[];
-	dirs: LibraryDeltaDirRow[];
+	dirs: CachedLibraryDir[];
 }
 
 /**
@@ -166,12 +160,12 @@ function isUnderSkippedDir(path: string, skippedPaths: readonly string[]): boole
  * again instead of descending it. A re-observed row always wins over the old one.
  */
 function mergeDirRows(
-	dirs: readonly LibraryDeltaDirRow[],
-	previousDirs: readonly LibraryDeltaDirRow[],
+	dirs: readonly CachedLibraryDir[],
+	previousDirs: readonly CachedLibraryDir[],
 	skippedPaths: readonly string[]
-): LibraryDeltaDirRow[] {
+): CachedLibraryDir[] {
 	const observed = new Set(dirs.map((row) => row.path));
-	const merged: LibraryDeltaDirRow[] = [...dirs];
+	const merged: CachedLibraryDir[] = [...dirs];
 
 	for (const row of previousDirs) {
 		if (observed.has(row.path)) continue;
