@@ -269,6 +269,24 @@ describe('scanNativeLibrary', () => {
 		expect(onBatch.mock.calls[0][0]).toEqual([]);
 	});
 
+	it('the root directory is reported as a row', async () => {
+		// `DirectoryReaderPlugin.startAudioScan` puts the scan root's own row in the first
+		// batch: path `''` (the walk's origin), mtime from the single document query that
+		// also resolves the folder name. Its path is empty, so this pins that the relay
+		// keeps the row instead of treating an empty path as "no row".
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		mocks.getAudioScanBatch
+			.mockResolvedValueOnce(batch(['a.mp3'], false, 1, 1, { dirs: [{ path: '', mtime: 9 }] }))
+			.mockResolvedValueOnce(batch([], true, 2, 0, { dirs: [{ path: 'Music/Live', mtime: 17 }] }));
+
+		const result = await scanNativeLibrary('content://tree', [], 10);
+
+		expect(result.dirs).toEqual([
+			{ path: '', mtime: 9 },
+			{ path: 'Music/Live', mtime: 17 },
+		]);
+	});
+
 	it('counts an unreadable directory across batches', async () => {
 		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
 		// The native counters are cumulative, so a second batch repeating the

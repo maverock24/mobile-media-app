@@ -36,7 +36,7 @@
  *  - `downloadToLocalFolder`'s transfer phases.
  *
  * Added for the library-delta effort: a warm start with a restored cache now
- * schedules a background walk (`scheduleWarmStartScan`), a delta when the cached
+ * schedules a background walk (`refreshWarmLibrary`), a delta when the cached
  * directory tree allows one and a full walk otherwise, while Settings' Rescan and
  * the cold start stay full walks. A streaming full walk still appends and updates
  * progress per batch, but bumps the browse version at most once per frame (D8).
@@ -162,6 +162,7 @@ export interface DeviceLibrary {
 	rescanCurrentLibraryIndex(): Promise<void>;
 	openLocalSourceButton(): Promise<void>;
 	restoreLocalLibrary(): Promise<boolean>;
+	refreshWarmLibrary(folderName: string, cached: CachedLibrary, restoredFiles: StoredAudioFile[]): void;
 	openFolder(): Promise<void>;
 	handleFolderInput(e: Event): void;
 	handleNativeFileInput(e: Event): void;
@@ -182,6 +183,13 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 	// did not have.
 	let libraryScanPromise: Promise<StoredAudioFile[]> | null = null;
 	let trackListLockedByUser = false;
+	/**
+	 * True between a `refreshWarmLibrary` call and its walk reaching
+	 * `startLibraryScan`, which lands on the next microtask. The scan promise is only
+	 * set once the walk exists, so without this flag two calls in one tick would both
+	 * start a walk.
+	 */
+	let warmRefreshScheduled = false;
 
 	const s = $state({
 		rootDirHandle: null as FileSystemDirectoryHandle | null,
@@ -363,10 +371,23 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 	}
 
 	/**
-	 * D1's second trigger: a warm start with a restored cache refreshes the index in
-	 * the background instead of doing no walk at all, which is what this app did
-	 * before. `decideScanMode` picks the walk (D3): a usable tree inside the window
-	 * gets a delta, everything else gets one full walk.
+	 * D1's second trigger, on every warm start: the restored cache is refreshed in the
+	 * background instead of being left untouched until the user rescans, which is
+	 * what this app did before. `decideScanMode` picks the walk (D3): a usable tree
+	 * inside the window gets a delta, everything else gets one full walk.
+	 *
+	 * Idempotent by design, because two callers reach it on one start: the on-mount
+	 * restore and the header folder button's `restoreLocalLibrary`. A call while a
+	 * walk is running, or while one is already scheduled, is a no-op — a second walk
+	 * over the same tree would double the bridge traffic and race the first one's
+	 * cache write. `libraryScanPromise` alone is not enough for that guard: a
+	 * scheduled refresh reaches `startLibraryScan` on the next microtask, so two
+	 * calls in one tick would both pass it; the flag covers that window.
+	 *
+	 * Only a native SAF tree is refreshed: it is the one source whose cache carries a
+	 * directory tree to delta against. A web directory handle has no tree, so a warm
+	 * start there would be a full recursive walk on every mount, which is not what
+	 * this change is for.
 	 *
 	 * Scheduled off the caller's stack so restoring the library never waits for a
 	 * walk, and failures are swallowed so a broken cache or a revoked tree URI
@@ -374,7 +395,9 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 	 * merged one is published; the full fallback is the same quiet shape, published
 	 * once so the restored list is neither cleared nor doubled.
 	 */
-	function scheduleWarmStartScan(folderName: string, cached: CachedLibrary, restoredFiles: StoredAudioFile[]): void {
+	function refreshWarmLibrary(folderName: string, cached: CachedLibrary, restoredFiles: StoredAudioFile[]): void {
+		if (!s.nativeTreeUri || libraryScanPromise || warmRefreshScheduled) return;
+		warmRefreshScheduled = true;
 		void Promise.resolve()
 			.then(() => {
 				const mode = decideScanMode({
@@ -397,6 +420,9 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 			})
 			.catch((error) => {
 				console.warn('Background library refresh skipped.', error);
+			})
+			.finally(() => {
+				warmRefreshScheduled = false;
 			});
 	}
 
@@ -424,7 +450,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 					opts.hydrateTracksFromLibrary(restoredFiles);
 					opts.bumpBrowseVersion();
 					opts.bumpLibraryRevision();
-					scheduleWarmStartScan(folderName || 'Library', cachedLibrary, restoredFiles);
+					refreshWarmLibrary(folderName || 'Library', cachedLibrary, restoredFiles);
 				} else {
 					startLibraryScan(folderName || 'Library', { mode: 'full', resetExistingFiles: true });
 				}
@@ -844,6 +870,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 		rescanCurrentLibraryIndex,
 		openLocalSourceButton,
 		restoreLocalLibrary,
+		refreshWarmLibrary,
 		openFolder,
 		handleFolderInput,
 		handleNativeFileInput,

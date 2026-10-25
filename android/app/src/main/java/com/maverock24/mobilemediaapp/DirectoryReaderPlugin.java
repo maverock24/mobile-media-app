@@ -77,10 +77,29 @@ public class DirectoryReaderPlugin extends Plugin {
 		}
 	}
 
+	/** The two facts read from a single document: its display name and its mtime. */
+	private static final class DocumentInfo {
+		private final String displayName;
+		private final long lastModified;
+
+		private DocumentInfo(String displayName, long lastModified) {
+			this.displayName = displayName;
+			this.lastModified = lastModified;
+		}
+	}
+
 	private static final class AudioScanSession {
 		private final ArrayDeque<DirNode> pendingDirs = new ArrayDeque<>();
 		private final Uri treeUri;
 		private final String folderName;
+		/**
+		 * The scan root's own mtime, from the query that resolves its display name.
+		 * The child loop only ever sees children, so without this row a library whose
+		 * files all sit in the root reports an empty tree.
+		 */
+		private final long rootMtime;
+		/** True once the root's row has been put in a batch. */
+		private boolean rootRowEmitted = false;
 		/** Cached directory mtimes from a previous walk, keyed by relative path. 0 or absent means unknown. */
 		private final Map<String, Long> previousDirMtimes = new HashMap<>();
 		/** Directory rows this walk visited, keyed by relative path. */
@@ -91,9 +110,10 @@ public class DirectoryReaderPlugin extends Plugin {
 		private final List<String> skippedDirPaths = new ArrayList<>();
 		private int unreadableDirs = 0;
 
-		private AudioScanSession(Uri treeUri, String startDocumentId, String basePath, String folderName) {
+		private AudioScanSession(Uri treeUri, String startDocumentId, String basePath, String folderName, long rootMtime) {
 			this.treeUri = treeUri;
 			this.folderName = folderName;
+			this.rootMtime = rootMtime;
 			this.pendingDirs.addLast(new DirNode(startDocumentId, basePath == null ? "" : basePath));
 		}
 	}
@@ -137,12 +157,16 @@ public class DirectoryReaderPlugin extends Plugin {
 				return;
 			}
 
-			String folderName = queryDisplayName(treeUri, startDocId);
+			// One query for the root's name and its mtime, so reporting the root as a
+			// directory row costs no extra round trip.
+			DocumentInfo startInfo = queryDocumentInfo(treeUri, startDocId);
+			long rootMtime = startInfo == null ? 0L : startInfo.lastModified;
+			String folderName = startInfo == null ? null : startInfo.displayName;
 			if (folderName == null || folderName.isEmpty()) {
 				folderName = "Selected Folder";
 			}
 
-			AudioScanSession session = new AudioScanSession(treeUri, startDocId, basePath, folderName);
+			AudioScanSession session = new AudioScanSession(treeUri, startDocId, basePath, folderName, rootMtime);
 
 			// Optional previous directory tree: { path, mtime } rows. Elements arrive
 			// as plain JSONObject (the bridge parses the call data with org.json), so
@@ -195,6 +219,18 @@ public class DirectoryReaderPlugin extends Plugin {
 		JSArray files = new JSArray();
 		JSArray dirs = new JSArray();
 		int filesAdded = 0;
+
+		// The scan root is a row too. The child loop below only emits rows for child
+		// directories, so a library whose files all sit in the root used to walk with
+		// an empty tree, which `hasUsableDirectoryTree` reads as "never delta". Its
+		// path is the walk's own origin, so it is the empty string.
+		if (!session.rootRowEmitted) {
+			session.rootRowEmitted = true;
+			JSObject rootRow = new JSObject();
+			rootRow.put("path", "");
+			rootRow.put("mtime", session.rootMtime);
+			dirs.put(rootRow);
+		}
 
 		// Process whole directories (one cursor query each) until we've emitted
 		// at least batchSize files or the queue is drained. A directory's files
@@ -335,7 +371,8 @@ public class DirectoryReaderPlugin extends Plugin {
 				}
 			}
 
-			String folderName = queryDisplayName(treeUri, dirDocId);
+			DocumentInfo dirInfo = queryDocumentInfo(treeUri, dirDocId);
+			String folderName = dirInfo == null ? null : dirInfo.displayName;
 			JSObject result = new JSObject();
 			result.put("folderName", folderName != null && !folderName.isEmpty() ? folderName : "Selected Folder");
 			result.put("entries", entries);
@@ -396,7 +433,8 @@ public class DirectoryReaderPlugin extends Plugin {
 				}
 			}
 
-			String folderName = queryDisplayName(treeUri, startDocId);
+			DocumentInfo startInfo = queryDocumentInfo(treeUri, startDocId);
+			String folderName = startInfo == null ? null : startInfo.displayName;
 			JSObject result = new JSObject();
 			result.put("folderName", folderName != null && !folderName.isEmpty() ? folderName : "Selected Folder");
 			result.put("files", files);
@@ -453,13 +491,24 @@ public class DirectoryReaderPlugin extends Plugin {
 		return docId;
 	}
 
-	/** Fetch the display name of a single document (one query). */
-	private String queryDisplayName(Uri treeUri, String documentId) {
+	/**
+	 * Fetch one document's display name and mtime in a single query. The two are
+	 * read together because the callers that need a name also need the mtime of the
+	 * same document (the walk's root row, D6), and a second query would double that
+	 * cost for nothing.
+	 */
+	private DocumentInfo queryDocumentInfo(Uri treeUri, String documentId) {
 		Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId);
-		try (Cursor cursor = getContext().getContentResolver().query(docUri,
-			new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+		try (Cursor cursor = getContext().getContentResolver().query(docUri, new String[] {
+			DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+			DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+		}, null, null, null)) {
 			if (cursor != null && cursor.moveToFirst()) {
-				return cursor.getString(0);
+				String displayName = cursor.getString(0);
+				// A provider that does not maintain the column leaves it null or 0;
+				// both mean "unknown", which the delta walk reads as "descend".
+				long lastModified = cursor.isNull(1) ? 0L : cursor.getLong(1);
+				return new DocumentInfo(displayName, lastModified);
 			}
 		} catch (Exception ignored) {
 			// Fall through

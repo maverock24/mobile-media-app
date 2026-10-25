@@ -88,6 +88,7 @@ import {
 	type LibraryScanOptions,
 } from '$lib/device/deviceLibrary.svelte';
 import type { DriveSession } from '$lib/drive/driveSession.svelte';
+import { hasUsableDirectoryTree } from '$lib/browse/libraryCache';
 import { musicSettings } from '$lib/stores/settings.svelte';
 
 beforeEach(() => {
@@ -249,6 +250,48 @@ async function waitForWarmStartScan(lib: DeviceLibrary) {
 		if (mocks.scanNativeLibrary.mock.calls.length === 0) throw new Error('warm start scan not started');
 	});
 	await waitForScanToSettle(lib);
+}
+
+/** A cached native entry, the shape a payload carries, rebuilt from a scanned file. */
+function toCachedNative(file: StoredAudioFile) {
+	if (file.source !== 'native') throw new Error(`not a native file: ${file.name}`);
+	return {
+		source: 'native' as const,
+		name: file.name,
+		relativePath: file.relativePath,
+		path: file.path,
+		mimeType: file.mimeType,
+		modifiedAt: file.modifiedAt,
+		sizeBytes: file.sizeBytes,
+	};
+}
+
+/**
+ * The payload a completed walk writes, read back from the real write path: run one
+ * scan whose native walk reports `dirs`, then hand back the files and the tree the
+ * module stored. A hand-written `{ path: '', mtime }` row is what hid the walker
+ * never emitting one, so the fixtures that care about the root row build it here.
+ */
+async function cachedPayloadFromRealWalk(
+	files: StoredAudioFile[],
+	dirs: Array<{ path: string; mtime: number }>,
+	folderName = 'Music'
+) {
+	const walk = makeDeviceLibrary({ isNativeApp: true });
+	walk.lib.nativeTreeUri = 'content://tree';
+	mocks.scanNativeLibrary.mockResolvedValue(walkResult(files, dirs));
+	await startScan(walk.lib, folderName);
+	const written = mocks.saveCachedLibrary.mock.calls.at(-1);
+	if (!written) throw new Error('the walk wrote no cache payload');
+
+	return {
+		folderName: written[1] as string,
+		files: (written[2] as StoredAudioFile[]).map(toCachedNative),
+		savedAt: 1,
+		schemaVersion: 1,
+		completedAt: Date.now(),
+		dirs: written[4] as Array<{ path: string; mtime: number }>
+	};
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -677,6 +720,92 @@ describe('restoreLocalLibrary', () => {
 
 		expect(view.allFiles).toEqual([]);
 		expect(lib.deckFolderLabel).toBe('Web');
+	});
+});
+
+describe('refreshWarmLibrary', () => {
+	it('a mount restore starts a background delta', async () => {
+		// The payload is what a completed walk wrote, so its tree is the one the walker
+		// reports (the scan root row plus the directories it descended into).
+		const cached = await cachedPayloadFromRealWalk(
+			[nativeFile('a.mp3')],
+			[{ path: '', mtime: 5 }, { path: 'Alpha', mtime: 6 }]
+		);
+		vi.clearAllMocks();
+		mocks.loadDeviceCachedLibrary.mockResolvedValue(cached);
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3'), nativeFile('b.mp3')], cached.dirs)
+		);
+
+		// The mount effect's sequence, which is the path the real app takes: restore
+		// the cache into the view, adopt the tree URI, then refresh. Nothing here calls
+		// `restoreLocalLibrary`, which is only the header button's entry point.
+		const made = makeDeviceLibrary({ isNativeApp: true });
+		musicSettings.nativeTreeUri = 'content://tree';
+		musicSettings.lastFolderName = 'Music';
+		const loaded = await mocks.loadDeviceCachedLibrary('content://tree', 'Music');
+		made.view.allFiles = mocks.restoreStoredFilesFromCache(loaded);
+		made.lib.nativeTreeUri = musicSettings.nativeTreeUri;
+		const writes = trackAllFiles(made.view);
+
+		made.lib.refreshWarmLibrary(loaded.folderName, loaded, made.view.allFiles);
+		await waitForWarmStartScan(made.lib);
+
+		// A delta, not the full fallback: the restored file list survives untouched and
+		// the walk is told what it may skip.
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, { prevDirs: cached.dirs });
+		expect(writes.map((files) => files.map((f) => f.name))).toEqual([['a.mp3', 'b.mp3']]);
+	});
+
+	it('a second warm refresh while a scan runs does not start another walk', async () => {
+		const cached = await cachedPayloadFromRealWalk([nativeFile('a.mp3')], [{ path: '', mtime: 5 }]);
+		vi.clearAllMocks();
+		mocks.loadDeviceCachedLibrary.mockResolvedValue(cached);
+
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		mocks.scanNativeLibrary.mockImplementation(async () => {
+			await gate;
+			return walkResult([nativeFile('a.mp3')], cached.dirs);
+		});
+
+		const made = makeDeviceLibrary({ isNativeApp: true });
+		made.lib.nativeTreeUri = 'content://tree';
+		const restored = mocks.restoreStoredFilesFromCache(cached);
+
+		// Two calls in one tick: the first is still a scheduled microtask here, so the
+		// scan promise the guard also reads does not exist yet.
+		made.lib.refreshWarmLibrary('Music', cached, restored);
+		made.lib.refreshWarmLibrary('Music', cached, restored);
+		await vi.waitFor(() => {
+			if (!made.lib.libraryScanPromise) throw new Error('warm scan not started');
+		});
+		// And a third while the walk is in flight.
+		made.lib.refreshWarmLibrary('Music', cached, restored);
+		release();
+		await waitForScanToSettle(made.lib);
+
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledTimes(1);
+	});
+
+	it('a library with only root files gets a usable tree', async () => {
+		// Every file in the library sits in the tree root, so the walk sees the root and
+		// no child directory. The row is what a real walk wrote, not a hand-written one.
+		const cached = await cachedPayloadFromRealWalk([nativeFile('a.mp3')], [{ path: '', mtime: 9 }]);
+		expect(cached.dirs).toEqual([{ path: '', mtime: 9 }]);
+		expect(hasUsableDirectoryTree(cached)).toBe(true);
+
+		vi.clearAllMocks();
+		mocks.scanNativeLibrary.mockResolvedValue(walkResult([nativeFile('a.mp3')], cached.dirs));
+		const made = makeDeviceLibrary({ isNativeApp: true });
+		made.lib.nativeTreeUri = 'content://tree';
+		made.view.allFiles = mocks.restoreStoredFilesFromCache(cached);
+
+		made.lib.refreshWarmLibrary(cached.folderName, cached, made.view.allFiles);
+		await waitForWarmStartScan(made.lib);
+
+		// A root-only tree is a delta: the root row alone is enough to open the gate.
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, { prevDirs: [{ path: '', mtime: 9 }] });
 	});
 });
 

@@ -46,7 +46,11 @@ export interface AudioScanBatchResult {
 	foldersScanned: number;
 	foldersQueued: number;
 	done: boolean;
-	/** Directory rows observed during this batch. Absent on an APK older than the delta walk. */
+	/**
+	 * Directory rows observed during this batch. Absent on an APK older than the delta
+	 * walk. The first batch always carries the scan root as `{ path: '', mtime }`, so a
+	 * library whose files all sit in the root still reports a non-empty tree.
+	 */
 	dirs?: NativeDirectoryDir[];
 	/** Directories skipped because their cached mtime matched. Cumulative over the scan. */
 	skippedDirs?: number;

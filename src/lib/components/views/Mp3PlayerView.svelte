@@ -1547,6 +1547,13 @@
 					showQueue = true;
 					browseVersion++;
 				}
+				// D1's second trigger on the path the app actually takes: without this,
+				// the mount restore left the index exactly as it was cached until the user
+				// rescaned by hand. `refreshWarmLibrary` is idempotent, so the header
+				// button's own restore cannot start a second walk over the same tree.
+				if (deviceLibrary.nativeTreeUri && cachedLibrary && cachedLibrary.files.length > 0) {
+					deviceLibrary.refreshWarmLibrary(cachedLibrary.folderName, cachedLibrary, allFiles);
+				}
 				if (!('showDirectoryPicker' in window) || !handle) return;
 				type FSHandle = { queryPermission(o: object): Promise<string> };
 				// queryPermission is safe to call without a user gesture.
