@@ -55,13 +55,19 @@ export function getDeviceLibraryCacheKey(options: { treeUri?: string | null; fol
  * that walk's tree. A writer that cannot know a tree (the hidden-input paths, or
  * any caller that passes none) gets an empty one, which
  * {@link hasUsableDirectoryTree} reads as "no usable tree".
+ *
+ * An empty file list is skipped by default, which is how a stale payload survives
+ * a folder the user emptied. A completed delta that removed every file is the one
+ * case that must be written anyway, so the caller passes `{ allowEmpty: true }`
+ * and the empty payload lands with its tree and its `completedAt` (D6 amendment).
  */
 export async function saveCachedLibrary(
 	treeUri: string | null,
 	folderName: string,
 	files: StoredAudioFile[],
 	cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName }),
-	dirs: CachedLibraryDir[] = []
+	dirs: CachedLibraryDir[] = [],
+	options: { allowEmpty?: boolean } = {}
 ) {
 	const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
 		if (file.source === 'web') {
@@ -89,7 +95,7 @@ export async function saveCachedLibrary(
 		return accumulator;
 	}, []);
 
-	if (cachedFiles.length === 0) return;
+	if (cachedFiles.length === 0 && !options.allowEmpty) return;
 	try {
 		const db = await openIDB();
 		const payload = {
@@ -128,7 +134,8 @@ export async function loadDeviceCachedLibrary(treeUri: string | null, folderName
  * True when a cached payload carries a directory tree a delta walk can trust: it
  * was written by a versioned writer and it holds at least one row. A legacy
  * payload (no `schemaVersion`), an unknown version, and a missing or empty tree
- * all mean "walk in full". Nothing consumes this yet; the delta walk gates on it.
+ * all mean "walk in full". `libraryDelta.decideScanMode` gates the delta walk on
+ * it.
  */
 export function hasUsableDirectoryTree(cached: CachedLibrary | null | undefined): boolean {
 	if (!cached) return false;

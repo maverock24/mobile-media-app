@@ -4,7 +4,10 @@
  * The one piece of correctness risk in the library-delta effort: deciding which
  * cached files survive a walk that only visited part of the tree. Extracted into
  * a pure module so the prune policy can be tested without a device, a component
- * or the bridge. Nothing calls it yet.
+ * or the bridge.
+ *
+ * It also owns {@link decideScanMode}, the pure decision between a delta walk and
+ * a full walk (D1, D3). `deviceLibrary.svelte.ts` is the only caller of both.
  *
  * Pure by contract, like `libraryCache.ts`: no runes, no stores, no component
  * state, no IndexedDB. Every input arrives as a parameter and the result is a new
@@ -16,7 +19,8 @@
  * fingerprint is the (mtime, size) pair of D5, both already on `StoredAudioFile`.
  */
 
-import { getStoredFileKey, type StoredAudioFile } from '$lib/models/music';
+import { hasUsableDirectoryTree } from '$lib/browse/libraryCache';
+import { getStoredFileKey, type CachedLibrary, type StoredAudioFile } from '$lib/models/music';
 
 /**
  * One row of the persisted directory tree (D6): the directory's path relative to
@@ -52,6 +56,52 @@ export interface MergeLibraryDeltaInput {
 export interface MergeLibraryDeltaResult {
 	files: StoredAudioFile[];
 	dirs: LibraryDeltaDirRow[];
+}
+
+/**
+ * D3: the size cap on a tree this app is willing to hand back to the native
+ * walker, measured as `JSON.stringify(dirs).length`. A tree over the cap still
+ * describes a library worth walking in full; it is just not worth shipping
+ * across the bridge on every start.
+ */
+export const DELTA_TREE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * D1: the verification window. A cached walk older than this gets one full walk
+ * instead of a delta, because a directory mtime is only optionally maintained by
+ * the provider and the skips have to be re-proved eventually.
+ */
+export const FULL_WALK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Which walk the index asks the native side to run. */
+export type LibraryScanMode = 'full' | 'delta';
+
+/** Everything `decideScanMode` needs: the cache, a clock, and the tree's size. */
+export interface DecideScanModeInput {
+	/** The payload restored from IndexedDB, or null on a cold start. */
+	cached: CachedLibrary | null | undefined;
+	/** The clock, passed in so the decision stays pure. */
+	now: number;
+	/** `JSON.stringify(cached.dirs).length`, measured once by the caller. */
+	encodedTreeBytes: number;
+}
+
+/**
+ * Choose between a delta walk and a full walk (D1, D3).
+ *
+ * A delta is allowed only when every safety condition holds: the payload has a
+ * usable directory tree, that tree fits under {@link DELTA_TREE_MAX_BYTES}, its
+ * completed walk is stamped, and that stamp is inside
+ * {@link FULL_WALK_MAX_AGE_MS}. Every other case — a cold cache, a legacy
+ * payload, an over-cap tree, a missing stamp, a stale walk — walks in full.
+ */
+export function decideScanMode({ cached, now, encodedTreeBytes }: DecideScanModeInput): LibraryScanMode {
+	if (!cached || !hasUsableDirectoryTree(cached)) return 'full';
+	if (encodedTreeBytes > DELTA_TREE_MAX_BYTES) return 'full';
+	const completedAt = cached.completedAt;
+	if (typeof completedAt !== 'number') return 'full';
+	if (now - completedAt > FULL_WALK_MAX_AGE_MS) return 'full';
+	return 'delta';
 }
 
 /** The (mtime, size) fingerprint of D5. */

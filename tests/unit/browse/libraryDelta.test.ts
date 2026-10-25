@@ -6,8 +6,14 @@
 // ─────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from 'vitest';
-import { getStoredFileKey, type StoredAudioFile } from '$lib/models/music';
-import { mergeLibraryDelta, type LibraryDeltaDirRow } from '$lib/browse/libraryDelta';
+import { getStoredFileKey, type CachedLibrary, type StoredAudioFile } from '$lib/models/music';
+import {
+	decideScanMode,
+	mergeLibraryDelta,
+	DELTA_TREE_MAX_BYTES,
+	FULL_WALK_MAX_AGE_MS,
+	type LibraryDeltaDirRow,
+} from '$lib/browse/libraryDelta';
 
 // ── helpers ──────────────────────────────────────────────────
 
@@ -234,5 +240,80 @@ describe('mergeLibraryDelta', () => {
 		expect(result.files[0]).toBe(prevA);
 		expect(result.files[1]).toBe(prevB);
 		expect(result.files[2]).toBe(prevC);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────
+// decideScanMode — which walk the index asks for (D1, D3)
+// The four fallbacks the slice names, plus the one delta case.
+// ─────────────────────────────────────────────────────────────
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/** A payload that would earn a delta on every count, overridable per test. */
+const usableCache = (overrides: Partial<CachedLibrary> = {}): CachedLibrary => ({
+	folderName: 'Music',
+	files: [],
+	savedAt: 1,
+	schemaVersion: 1,
+	completedAt: 1_000_000,
+	dirs: [{ path: '', mtime: 5 }],
+	...overrides,
+});
+
+describe('decideScanMode', () => {
+	it('runs a delta when the tree is usable, inside the cap and inside the window', () => {
+		const cached = usableCache();
+
+		expect(decideScanMode({
+			cached,
+			now: 1_000_000 + DAY,
+			encodedTreeBytes: JSON.stringify(cached.dirs).length,
+		})).toBe('delta');
+	});
+
+	it('a cold cache walks in full', () => {
+		expect(decideScanMode({ cached: null, now: 1_000_000, encodedTreeBytes: 0 })).toBe('full');
+	});
+
+	it('a payload without schemaVersion walks in full', () => {
+		// Every device's payload before the tree existed: files, no version, no rows.
+		const legacy: CachedLibrary = { folderName: 'Music', files: [], savedAt: 1, completedAt: 1_000_000 };
+
+		expect(decideScanMode({ cached: legacy, now: 1_000_000, encodedTreeBytes: 0 })).toBe('full');
+	});
+
+	it('a tree over the size cap walks in full', () => {
+		const cached = usableCache();
+
+		expect(decideScanMode({
+			cached,
+			now: 1_000_000,
+			encodedTreeBytes: DELTA_TREE_MAX_BYTES + 1,
+		})).toBe('full');
+	});
+
+	it('a cached walk older than the window walks in full', () => {
+		const cached = usableCache();
+
+		// Exactly at the window is still inside it; one millisecond past is not.
+		expect(decideScanMode({
+			cached,
+			now: 1_000_000 + FULL_WALK_MAX_AGE_MS,
+			encodedTreeBytes: 10,
+		})).toBe('delta');
+		expect(decideScanMode({
+			cached,
+			now: 1_000_000 + FULL_WALK_MAX_AGE_MS + 1,
+			encodedTreeBytes: 10,
+		})).toBe('full');
+	});
+
+	it('a payload with no completedAt walks in full', () => {
+		// The stamp is the only thing the window can read, so without it the walk
+		// cannot be verified as recent.
+		const cached = usableCache({ completedAt: undefined });
+
+		expect(decideScanMode({ cached, now: 1_000_000, encodedTreeBytes: 10 })).toBe('full');
 	});
 });

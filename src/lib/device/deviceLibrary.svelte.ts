@@ -34,17 +34,29 @@
  *  - `reconnectFolder`'s `requestPermission` flow;
  *  - the native picker flows through `FilePicker` / `DirectoryReader`;
  *  - `downloadToLocalFolder`'s transfer phases.
+ *
+ * Added for the library-delta effort: a warm start with a restored cache now
+ * schedules a background walk (`scheduleWarmStartScan`), a delta when the cached
+ * directory tree allows one and a full walk otherwise, while Settings' Rescan and
+ * the cold start stay full walks.
  */
 import { Capacitor } from '@capacitor/core';
 import { DirectoryReader, type NativeDirectoryFile, type NativeDirectoryFolder } from '$lib/native/directory-reader';
-import { pickNativeAudioDirectory, scanNativeAudioFiles } from '$lib/browse/folderScan';
+import { pickNativeAudioDirectory, scanNativeLibrary, type ScanBatchState } from '$lib/browse/folderScan';
 import {
 	collectStoredFilesFromDirHandle,
 	loadDeviceCachedLibrary,
 	restoreStoredFilesFromCache,
 	saveCachedLibrary
 } from '$lib/browse/libraryCache';
-import { createStoredAudioFile, isSupportedAudioFile, type StoredAudioFile } from '$lib/models/music';
+import { decideScanMode, mergeLibraryDelta, type LibraryScanMode } from '$lib/browse/libraryDelta';
+import {
+	createStoredAudioFile,
+	isSupportedAudioFile,
+	type CachedLibrary,
+	type CachedLibraryDir,
+	type StoredAudioFile
+} from '$lib/models/music';
 import { loadHandleFromIDB, saveHandleToIDB } from '$lib/utils/idb';
 import { downloadGoogleDriveFile } from '$lib/google-drive';
 import { musicSettings } from '$lib/stores/settings.svelte';
@@ -53,6 +65,30 @@ import type { DriveSession } from '$lib/drive/driveSession.svelte';
 
 /** Batch size for the background full-library SAF scan. */
 const BACKGROUND_LIBRARY_SCAN_BATCH_SIZE = 500;
+
+/** The cached index a delta walk merges into: what the previous completed walk left. */
+export interface LibraryScanPrevious {
+	files: StoredAudioFile[];
+	dirs: CachedLibraryDir[];
+	/** When that walk finished, or null when the payload carries no stamp. */
+	completedAt: number | null;
+}
+
+/** How `startLibraryScan` should walk, and what it should merge into. */
+export interface LibraryScanOptions {
+	/** Clear the visible list before a streaming full walk, as the first scan and a rescan do. */
+	resetExistingFiles?: boolean;
+	/** Defaults to a full walk; a delta is only run when `previous` is supplied too. */
+	mode?: LibraryScanMode;
+	/** Required for `delta`: the payload the merge prunes against. */
+	previous?: LibraryScanPrevious;
+	/**
+	 * Collect the walk and publish it once instead of streaming batches into the
+	 * view. A delta always publishes once; a background full walk (the warm start's
+	 * fallback) asks for it so the restored list is never cleared and never doubled.
+	 */
+	publishOnce?: boolean;
+}
 
 /**
  * The view-owned state the device library reads and writes. Every field is the
@@ -114,7 +150,7 @@ export interface DeviceLibrary {
 	localPickerLoading: boolean;
 
 	activateDeviceLibrary(folderName: string): void;
-	startLibraryScan(folderName: string, options?: { resetExistingFiles?: boolean }): void;
+	startLibraryScan(folderName: string, options?: LibraryScanOptions): void;
 	rescanCurrentLibraryIndex(): Promise<void>;
 	openLocalSourceButton(): Promise<void>;
 	restoreLocalLibrary(): Promise<boolean>;
@@ -157,12 +193,46 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 		view.driveSearch = '';
 	}
 
-	function startLibraryScan(folderName: string, options: { resetExistingFiles?: boolean } = {}): void {
-		if (options.resetExistingFiles) {
+	/**
+	 * Walk the library and publish the result.
+	 *
+	 * `full` (the default) is today's streaming walk: the list is cleared when
+	 * `resetExistingFiles` is set, every batch is appended and published as it
+	 * arrives, and the cache is rewritten once on completion.
+	 *
+	 * `delta` (the warm start, D1) merges into `previous` instead: nothing is
+	 * cleared, no batch is published, and the merged index is published once and
+	 * written once. A skipped directory protects its subtree (D2 amendment); the
+	 * native walker reports the count, so the skipped paths are the previous rows
+	 * the walk did not re-observe.
+	 *
+	 * `publishOnce` gives a full walk that same quiet shape, which is what the warm
+	 * start's full fallback uses: the restored list stays visible until the walk
+	 * replaces it in one publish.
+	 */
+	function startLibraryScan(folderName: string, options: LibraryScanOptions = {}): void {
+		const previous = options.previous;
+		const mode: LibraryScanMode = options.mode === 'delta' && previous ? 'delta' : 'full';
+		const isDelta = mode === 'delta';
+		const publishOnce = isDelta || options.publishOnce === true;
+
+		// A once-published walk never clears the list: the restored index stays
+		// visible until the walk replaces it.
+		if (options.resetExistingFiles && !publishOnce) {
 			view.allFiles = [];
 			opts.bumpBrowseVersion();
 		}
-		s.scanProgress = { pct: 0, filesFound: 0 };
+		// Progress is a streaming full-walk shape (directories found out of
+		// directories queued); a once-published walk leaves progress alone.
+		if (!publishOnce) s.scanProgress = { pct: 0, filesFound: 0 };
+
+		// The rows the walk observed, widened by the merge for a delta. Written with
+		// the files on completion so the next start has a tree to skip against.
+		let walkedDirs: CachedLibraryDir[] = [];
+		// False when a delta merged to exactly what was already published (D10):
+		// the queue is left alone rather than re-hydrated with the same list.
+		let indexChanged = !isDelta;
+
 		let scanPromise: Promise<StoredAudioFile[]> | null = null;
 		scanPromise = (async (): Promise<StoredAudioFile[]> => {
 			if (s.rootDirHandle) {
@@ -172,15 +242,43 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 			}
 
 			if (s.nativeTreeUri) {
-				return scanNativeAudioFiles(s.nativeTreeUri, [], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {}, async (mappedBatch: StoredAudioFile[], state) => {
-					if (scanPromise && libraryScanPromise === scanPromise) {
-						view.allFiles = [...view.allFiles, ...mappedBatch];
-						opts.bumpBrowseVersion();
-						const total = state.foldersScanned + state.foldersQueued;
-						const pct = total > 0 ? Math.min(99, Math.round((state.foldersScanned / total) * 100)) : 1;
-						s.scanProgress = { pct, filesFound: view.allFiles.length };
-					}
-				});
+				if (isDelta && previous) {
+					const walk = await scanNativeLibrary(s.nativeTreeUri, [], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {
+						prevDirs: previous.dirs
+					});
+					const observed = new Set(walk.dirs.map((row) => row.path));
+					const skippedPaths = previous.dirs
+						.filter((row) => !observed.has(row.path))
+						.map((row) => row.path);
+					const merged = mergeLibraryDelta({
+						previous: previous.files,
+						walked: walk.files,
+						dirs: walk.dirs,
+						previousDirs: previous.dirs,
+						skippedDirs: skippedPaths,
+						unreadableDirs: walk.unreadableDirs,
+						completed: true
+					});
+					walkedDirs = merged.dirs;
+					indexChanged = merged.files.length !== previous.files.length
+						|| merged.files.some((file, index) => file !== previous.files[index]);
+					return merged.files;
+				}
+
+				const onBatch = publishOnce
+					? undefined
+					: async (mappedBatch: StoredAudioFile[], state: ScanBatchState) => {
+						if (scanPromise && libraryScanPromise === scanPromise) {
+							view.allFiles = [...view.allFiles, ...mappedBatch];
+							opts.bumpBrowseVersion();
+							const total = state.foldersScanned + state.foldersQueued;
+							const pct = total > 0 ? Math.min(99, Math.round((state.foldersScanned / total) * 100)) : 1;
+							s.scanProgress = { pct, filesFound: view.allFiles.length };
+						}
+					};
+				const walk = await scanNativeLibrary(s.nativeTreeUri, [], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {}, onBatch);
+				walkedDirs = walk.dirs;
+				return walk.files;
 			}
 
 			return view.allFiles;
@@ -192,8 +290,12 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 				if (libraryScanPromise !== scanPromise) return;
 				view.allFiles = scannedFiles;
 				s.scanProgress = null;
-				if (!trackListLockedByUser) opts.hydrateTracksFromLibrary(scannedFiles);
-				await saveCachedLibrary(s.nativeTreeUri, folderName, scannedFiles);
+				// A once-published walk was never published per batch, so this is its one publish.
+				if (publishOnce) opts.bumpBrowseVersion();
+				if (!trackListLockedByUser && indexChanged) opts.hydrateTracksFromLibrary(scannedFiles);
+				await saveCachedLibrary(s.nativeTreeUri, folderName, scannedFiles, undefined, walkedDirs, {
+					allowEmpty: isDelta
+				});
 			})
 			.catch((error) => {
 				console.error('Failed to scan selected library.', error);
@@ -216,8 +318,10 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 
 		// No pre-scan delete: the cached payload survives a cancelled or failed
 		// walk, and `startLibraryScan`'s completion write replaces it on success.
+		// Always a full walk, whatever the cache looks like: Rescan is the manual
+		// "verify everything" affordance the human chose (D1 amendment).
 		if (s.nativeTreeUri || s.rootDirHandle) {
-			startLibraryScan(folderName, { resetExistingFiles: true });
+			startLibraryScan(folderName, { mode: 'full', resetExistingFiles: true });
 		}
 	}
 
@@ -230,6 +334,44 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 			return;
 		}
 		await openFolder();
+	}
+
+	/**
+	 * D1's second trigger: a warm start with a restored cache refreshes the index in
+	 * the background instead of doing no walk at all, which is what this app did
+	 * before. `decideScanMode` picks the walk (D3): a usable tree inside the window
+	 * gets a delta, everything else gets one full walk.
+	 *
+	 * Scheduled off the caller's stack so restoring the library never waits for a
+	 * walk, and failures are swallowed so a broken cache or a revoked tree URI
+	 * cannot break the start. A delta leaves the restored list in place until the
+	 * merged one is published; the full fallback is the same quiet shape, published
+	 * once so the restored list is neither cleared nor doubled.
+	 */
+	function scheduleWarmStartScan(folderName: string, cached: CachedLibrary, restoredFiles: StoredAudioFile[]): void {
+		void Promise.resolve()
+			.then(() => {
+				const mode = decideScanMode({
+					cached,
+					now: Date.now(),
+					encodedTreeBytes: JSON.stringify(cached.dirs ?? []).length
+				});
+				if (mode === 'delta') {
+					startLibraryScan(folderName, {
+						mode,
+						previous: {
+							files: restoredFiles,
+							dirs: cached.dirs ?? [],
+							completedAt: cached.completedAt ?? null
+						}
+					});
+					return;
+				}
+				startLibraryScan(folderName, { mode: 'full', publishOnce: true });
+			})
+			.catch((error) => {
+				console.warn('Background library refresh skipped.', error);
+			});
 	}
 
 	async function restoreLocalLibrary(): Promise<boolean> {
@@ -251,11 +393,13 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 				opts.bumpBrowseVersion();
 				const cachedLibrary = await loadDeviceCachedLibrary(musicSettings.nativeTreeUri, folderName || 'Library');
 				if (cachedLibrary && cachedLibrary.files.length > 0) {
-					view.allFiles = restoreStoredFilesFromCache(cachedLibrary);
-					opts.hydrateTracksFromLibrary(view.allFiles);
+					const restoredFiles = restoreStoredFilesFromCache(cachedLibrary);
+					view.allFiles = restoredFiles;
+					opts.hydrateTracksFromLibrary(restoredFiles);
 					opts.bumpBrowseVersion();
+					scheduleWarmStartScan(folderName || 'Library', cachedLibrary, restoredFiles);
 				} else {
-					startLibraryScan(folderName || 'Library', { resetExistingFiles: true });
+					startLibraryScan(folderName || 'Library', { mode: 'full', resetExistingFiles: true });
 				}
 				return true;
 			}

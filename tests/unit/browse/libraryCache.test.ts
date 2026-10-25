@@ -257,6 +257,19 @@ describe('saveCachedLibrary / loadDeviceCachedLibrary', () => {
 		expect(await loadDeviceCachedLibrary('content://tree/1', 'Music')).toBeNull();
 	});
 
+	it('writes a completed empty payload when allowEmpty is set', async () => {
+		// A completed delta that removed every file must land, or the stale payload
+		// resurrects the library on the next start (D6 amendment, A5).
+		const before = Date.now();
+		await saveCachedLibrary('content://tree/1', 'Music', [], undefined, [{ path: '', mtime: 9 }], { allowEmpty: true });
+
+		const loaded = await loadDeviceCachedLibrary('content://tree/1', 'Music');
+		expect(loaded?.files).toEqual([]);
+		expect(loaded?.schemaVersion).toBe(1);
+		expect(loaded?.completedAt).toBeGreaterThanOrEqual(before);
+		expect(loaded?.dirs).toEqual([{ path: '', mtime: 9 }]);
+	});
+
 	it('drops drive entries, so a drive-only library writes nothing', async () => {
 		const drive: StoredAudioFile = { source: 'drive', name: 'd.mp3', relativePath: 'd.mp3', fileId: 'f1' };
 		await saveCachedLibrary('content://tree/1', 'Music', [drive]);
