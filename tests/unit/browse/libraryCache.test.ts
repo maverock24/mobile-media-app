@@ -281,6 +281,21 @@ describe('saveCachedLibrary / loadDeviceCachedLibrary', () => {
 		expect(loaded?.dirs).toEqual([{ path: '', mtime: 4 }]);
 	});
 
+	it('writes no completion stamp for a walk that did not verify the tree', async () => {
+		// A walk that stopped early or could not read a directory keeps the files it saw,
+		// but the payload must not look like a completed walk: `decideScanMode` gates the
+		// delta on the stamp, so its absence is what forces the next full walk.
+		await saveCachedLibrary('content://tree/1', 'Music', [native('a.mp3')], undefined, [], {
+			allowEmpty: true,
+			completedAt: null
+		});
+
+		const loaded = await loadDeviceCachedLibrary('content://tree/1', 'Music');
+		expect(loaded?.files).toHaveLength(1);
+		expect(loaded?.schemaVersion).toBe(1);
+		expect(loaded?.completedAt).toBeUndefined();
+	});
+
 	it('drops drive entries, so a drive-only library writes nothing', async () => {
 		const drive: StoredAudioFile = { source: 'drive', name: 'd.mp3', relativePath: 'd.mp3', fileId: 'f1' };
 		await saveCachedLibrary('content://tree/1', 'Music', [drive]);

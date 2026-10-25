@@ -260,6 +260,17 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 		// The rows the walk observed, widened by the merge for a delta. Written with
 		// the files on completion so the next start has a tree to skip against.
 		let walkedDirs: CachedLibraryDir[] = [];
+		/**
+		 * Whether the walk verified the whole tree: it reached a `done` batch and could
+		 * read every directory it descended into (D2, D3). False means the payload must
+		 * not look verified, because the walker emits a directory's row when its parent
+		 * lists it, before descending: a directory it could not read still carries a row
+		 * with the mtime the provider reported, a later delta would skip that subtree on
+		 * the match, and the files behind it would never come back. The unreadable
+		 * directories arrive as a count and not as paths, so there is no row to drop by
+		 * name: the whole tree goes and the next start walks in full.
+		 */
+		let walkVerified = true;
 		// False when a delta merged to exactly what was already published (D10):
 		// the queue is left alone rather than re-hydrated with the same list.
 		let indexChanged = !isDelta;
@@ -298,7 +309,8 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 						unreadableDirs: walk.unreadableDirs,
 						completed: walk.completed
 					});
-					walkedDirs = merged.dirs;
+					walkVerified = walk.completed && walk.unreadableDirs === 0;
+					walkedDirs = walkVerified ? merged.dirs : [];
 					// Measured against the restored list, not the live one: the restored list
 					// is what the queue was hydrated from, so a difference from it is a change
 					// the queue has not seen. A live row that arrived after the restore has
@@ -321,7 +333,8 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 						}
 					};
 				const walk = await scanNativeLibrary(s.nativeTreeUri, [], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {}, onBatch);
-				walkedDirs = walk.dirs;
+				walkVerified = walk.completed && walk.unreadableDirs === 0;
+				walkedDirs = walkVerified ? walk.dirs : [];
 				return walk.files;
 			}
 
@@ -340,12 +353,14 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 					opts.bumpLibraryRevision();
 				}
 				if (!trackListLockedByUser && indexChanged) opts.hydrateTracksFromLibrary(scannedFiles);
-				await saveCachedLibrary(s.nativeTreeUri, folderName, scannedFiles, undefined, walkedDirs, {
-					// A completed walk owns the payload, whatever it found: an empty library
-					// is a result, and skipping the write would let a stale payload outlive
-					// an emptied folder until the next completed walk.
-					allowEmpty: true
-				});
+				// A completed walk owns the payload, whatever it found: an empty library
+				// is a result, and skipping the write would let a stale payload outlive
+				// an emptied folder until the next completed walk. A walk that did not
+				// verify the tree still writes the files it saw — a partial listing beats
+				// an empty library — but carries no `completedAt`, so the next start reads
+				// the payload as unverified and walks in full (D3).
+				const cacheWrite = walkVerified ? { allowEmpty: true } : { allowEmpty: true, completedAt: null };
+				await saveCachedLibrary(s.nativeTreeUri, folderName, scannedFiles, undefined, walkedDirs, cacheWrite);
 			})
 			.catch((error) => {
 				console.error('Failed to scan selected library.', error);

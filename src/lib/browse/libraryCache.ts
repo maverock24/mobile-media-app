@@ -69,6 +69,11 @@ export function getDeviceLibraryCacheKey(options: { treeUri?: string | null; fol
  * verification that never happened, and the next start could trust a tree that
  * changed since it was read. Leaving it absent writes `Date.now()`, which is
  * correct only for a writer that really just completed a walk.
+ *
+ * `completedAt: null` is the third case: a walk that ran but did not verify the
+ * tree (it stopped early, or could not read a directory). It still writes the
+ * files it observed, but with no stamp at all, so `libraryDelta.decideScanMode`
+ * reads the payload as never verified and the next start walks in full.
  */
 export async function saveCachedLibrary(
 	treeUri: string | null,
@@ -76,7 +81,7 @@ export async function saveCachedLibrary(
 	files: StoredAudioFile[],
 	cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName }),
 	dirs: CachedLibraryDir[] = [],
-	options: { allowEmpty?: boolean; completedAt?: number } = {}
+	options: { allowEmpty?: boolean; completedAt?: number | null } = {}
 ) {
 	const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
 		if (file.source === 'web') {
@@ -113,7 +118,9 @@ export async function saveCachedLibrary(
 			savedAt: Date.now(),
 			cacheKey,
 			schemaVersion: 1,
-			completedAt: options.completedAt ?? Date.now(),
+			// `null` means "this walk did not verify the tree": no stamp, so the next
+			// start cannot take the payload for a completed walk.
+			completedAt: options.completedAt === null ? undefined : (options.completedAt ?? Date.now()),
 			dirs
 		} satisfies CachedLibrary;
 		await idbPut(db, 'libraries', payload, cacheKey);

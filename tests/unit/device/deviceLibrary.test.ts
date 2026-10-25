@@ -667,6 +667,90 @@ describe('startLibraryScan', () => {
 			'content://tree', 'Music', [], undefined, [{ path: '', mtime: 7 }], { allowEmpty: true }
 		);
 	});
+
+	it('a full walk with an unreadable directory writes no completion time', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		// The provider refused one directory (revoked permission, removed media): the
+		// walk saw part of the tree and says so in `unreadableDirs`.
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3')], [{ path: '', mtime: 7 }, { path: 'Locked', mtime: 8 }], [], { unreadableDirs: 1 })
+		);
+
+		await startScan(made.lib, 'Music');
+
+		// The files it did observe are published: a partial listing beats an empty library.
+		expect(made.view.allFiles.map((f) => f.name)).toEqual(['a.mp3']);
+		// But the payload is not stamped as a completed walk. `completedAt: null` writes no
+		// stamp at all, so `decideScanMode` reads the payload as unverified and the next
+		// start walks in full instead of delta-ing against a tree this walk could not check.
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [nativeFile('a.mp3')], undefined, [], { allowEmpty: true, completedAt: null }
+		);
+	});
+
+	it('a full walk that did not complete writes no completion time', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		// No batch ever reported `done`, so the walk saw an unknown part of the tree. Its
+		// output is not a verdict on the files it never reported (D3).
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3')], [{ path: '', mtime: 7 }], [], { completed: false })
+		);
+
+		await startScan(made.lib, 'Music');
+
+		expect(made.view.allFiles.map((f) => f.name)).toEqual(['a.mp3']);
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [nativeFile('a.mp3')], undefined, [], { allowEmpty: true, completedAt: null }
+		);
+	});
+
+	it('an unreadable directory is not recorded as walked', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		// The walker emits a child directory's row when its parent's listing names it,
+		// before descending, so `Locked` is in the walk output with the mtime the provider
+		// reported even though nobody read a byte of it. Written as-is, the next delta
+		// would skip the subtree on that mtime match and its files would never come back.
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3')], [{ path: '', mtime: 7 }, { path: 'Locked', mtime: 8 }], [], { unreadableDirs: 1 })
+		);
+
+		await startScan(made.lib, 'Music');
+
+		const written = mocks.saveCachedLibrary.mock.calls.at(-1);
+		const rows = written?.[4] as Array<{ path: string; mtime: number }>;
+		// No row at all, not `Locked`'s and not the ones that were readable: the unreadable
+		// directories arrive as a count, not as paths, so no row can be dropped by name.
+		expect(rows).toEqual([]);
+		// Which is what sends the next start into a full walk: no usable tree, so
+		// `decideScanMode` cannot pick a delta that skips `Locked` again.
+		expect(hasUsableDirectoryTree({
+			folderName: 'Music', files: [], savedAt: 1, schemaVersion: 1, completedAt: undefined, dirs: rows
+		})).toBe(false);
+	});
+
+	it('a delta that could not read a directory records no tree either', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		const keptFile = nativeFile('Alpha/a.mp3');
+		made.view.allFiles = [keptFile];
+		// The same rule as the full walk: a delta that could not read a directory has no
+		// verified tree to hand on, so the next start falls back to a full walk (D2, D3).
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([keptFile], [{ path: 'Alpha', mtime: 10 }, { path: 'Locked', mtime: 11 }], [], { unreadableDirs: 1 })
+		);
+
+		await startScan(made.lib, 'Music', {
+			mode: 'delta',
+			previous: { files: [keptFile], dirs: [{ path: 'Alpha', mtime: 10 }], completedAt: Date.now() },
+		});
+
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [keptFile], undefined, [], { allowEmpty: true, completedAt: null }
+		);
+	});
 });
 
 // ─────────────────────────────────────────────────────────────
