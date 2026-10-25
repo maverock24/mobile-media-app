@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.DocumentsContract;
+import android.util.Log;
 
 import androidx.core.content.FileProvider;
 import androidx.documentfile.provider.DocumentFile;
@@ -43,6 +44,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @CapacitorPlugin(name = "DirectoryReader")
 public class DirectoryReaderPlugin extends Plugin {
+	private static final String TAG = "DirectoryReaderPlugin";
 	private static final int DEFAULT_SCAN_BATCH_SIZE = 250;
 	private static final Map<String, AudioScanSession> AUDIO_SCAN_SESSIONS = new ConcurrentHashMap<>();
 
@@ -223,6 +225,10 @@ public class DirectoryReaderPlugin extends Plugin {
 						if (previousMtime != null && previousMtime.longValue() > 0L && previousMtime.longValue() == modified) {
 							session.skippedDirs += 1;
 							session.skippedDirPaths.add(childPath);
+							// Probe for docs/device-verification.md 21: the mtime this skip
+							// trusts, so a device run can show whether the provider moved it.
+							Log.i(TAG, "Skipped " + childPath + " (cached mtime=" + previousMtime.longValue()
+								+ ", row mtime=" + modified + ")");
 							continue;
 						}
 						session.pendingDirs.addLast(new DirNode(docId, childPath));

@@ -336,6 +336,48 @@ logcat.
 Code: `src/lib/stores/mediaEngine.svelte.ts:41`, `Mp3PlayerView.svelte:690`
 (`claimMusicControls` gate), `:617`.
 
+## 21. A directory's mtime after a child changes
+
+Goal: settle whether the provider maintains a directory's modification time when
+something inside it changes. The delta walk skips a whole subtree when a cached
+directory mtime still matches the row the provider returns, and no Android
+document promises that mtime tracks its children; this case is the observation
+behind that trust.
+Steps: install the APK and open the local library once, letting the index finish
+(the first walk has nothing to skip, so it prints no probe lines). Force-stop
+the app (`adb shell am force-stop com.maverock24.mobilemediaapp`) and relaunch
+it: the restored cache sends the warm start into a delta walk, and logcat shows
+one `Skipped` line per directory whose subtree was skipped. Note the line for
+one subfolder. From a file manager add an MP3 directly inside that subfolder.
+Force-stop, relaunch again, and read the lines again.
+Expected: one line per skipped directory, never one per file, in the shape
+`Skipped Music/Album (cached mtime=1699999999000, row mtime=1699999999000)`,
+logcat tag `DirectoryReaderPlugin` at level I.
+Outcome 1, the mtime moved: the subfolder's line is gone, or returns with a
+different `row mtime`; the walk entered the subtree and the added MP3 is in the
+library after the relaunch. That is a finding: subtree skipping is sound on this
+provider, mtime is a usable freshness signal, and a skip cannot hide a new file.
+Outcome 2, the mtime did not move: the subfolder is still skipped and the new
+MP3 stays out of the library until a full walk. That is also a finding, not a
+failure of the check: this provider does not maintain directory mtimes, the
+skips are unsafe on it, and the only things standing between a new file and the
+list are the verification window (`FULL_WALK_MAX_AGE_MS`, seven days) and a
+manual Rescan, which is always a full walk.
+Record the provider (internal storage, SD card, USB) beside every outcome; they
+need not agree. A Rescan from Settings (**Rescan Current Library Index**) always
+walks in full and never prints these lines, so it cannot be used to re-read the
+probe.
+Evidence: the logcat excerpt from both runs, before and after the file was
+added, and the library list showing whether the new MP3 appears.
+Code: `DirectoryReaderPlugin.java:230` (the probe),
+`src/lib/browse/libraryDelta.ts:74` (`FULL_WALK_MAX_AGE_MS`),
+`src/lib/device/deviceLibrary.svelte.ts:314` (`rescanCurrentLibraryIndex` is
+always full).
+
+```sh
+adb logcat -v time | grep -Ei "DirectoryReaderPlugin"
+```
+
 ## What is most likely to fail, and why
 
 Drawn from the code and the follow-ups in `docs/refactoring-plan.md`. None is
