@@ -18,9 +18,10 @@
  * and PR 3.6 seams pointed at the view instead of churning them.
  *
  * It reaches the deck's `deviceLibrary` for the SAF tree URI, the folder open
- * flow and the local picker listing, and the deck's `browseNavigation` for the
- * post-op reload. Only `openLocalDestinationPicker` runs on a native deck in
- * order to open; on the web it toasts and returns.
+ * flow and the local picker listing, the deck's `browseNavigation` for the
+ * post-op reload, and the deck's library index (`view.allFiles`) to drop a
+ * successfully deleted file out of it. Only `openLocalDestinationPicker` runs
+ * on a native deck in order to open; on the web it toasts and returns.
  *
  * Behaviour preserved from the view:
  *  - the `pendingFileOp` lifecycle: set by the handler / confirm, read by the
@@ -32,14 +33,25 @@
  *    folder selected." and `runPendingFileOp`'s per-op failure toast);
  *  - the three handlers setting `pendingFileOp` before the destination picker
  *    opens (via `openDestinationForOp` / `confirmAndDelete`);
- *  - `reloadCurrentBrowse`'s exact `loadBrowseEntries(browsePath, 'drive' |
- *    undefined)` arguments and its synchronous call from the runner;
+ *  - `reloadCurrentBrowse`'s synchronous call from the runner. Its second
+ *    argument is deliberately not preserved: the view passed the literal
+ *    `'drive'` there, which `loadBrowseEntries` reads as a search query, so
+ *    every op in Drive mode replaced the listing with files matching "drive".
+ *    It now re-runs the deck's live `driveSearch` instead;
  *  - `folderOpNotice`'s toast text and type.
+ *
+ * A delete also prunes the deck's library index. The browse list is rebuilt
+ * from it (`browseNavigation.loadBrowseEntries`), so a reload that ran against
+ * an unpruned index put the deleted row straight back and the row never
+ * disappeared. See `forgetDeletedFile` for what each source does about its
+ * cache.
  */
 import { DirectoryReader } from '$lib/native/directory-reader';
 import { musicSettings } from '$lib/stores/settings.svelte';
 import { addToast } from '$lib/stores/toastStore.svelte';
-import type { StoredAudioFile } from '$lib/models/music';
+import { LAST_LIBRARY_CACHE_KEY, getDeviceLibraryCacheKey, saveCachedLibrary } from '$lib/browse/libraryCache';
+import { deleteCachedLibrary } from '$lib/utils/idb';
+import { getStoredFileKey, type StoredAudioFile } from '$lib/models/music';
 import type { DeviceLibrary } from '$lib/device/deviceLibrary.svelte';
 import type { BrowseNavigation } from '$lib/browse/browseNavigation.svelte';
 
@@ -70,6 +82,10 @@ export interface FileOpsView {
 	isFileOpRunning: boolean;
 	showLocalFolderPicker: boolean;
 	readonly browsePath: string[];
+	/** The deck's Drive search box; the post-op reload re-runs it. */
+	readonly driveSearch: string;
+	/** The deck's library index; a delete drops the file out of it. */
+	allFiles: StoredAudioFile[];
 }
 
 export interface FileOpsOptions {
@@ -161,6 +177,7 @@ export function createFileOps(opts: FileOpsOptions): FileOps {
 			if (!source || source.source !== 'drive') throw new Error('Missing Google Drive file.');
 			if (!opts.deleteDriveFile) throw new Error('Google Drive delete is not available.');
 			await opts.deleteDriveFile(source);
+			await forgetDeletedFile(source);
 			addToast({ message: `Deleted "${op.name}" from Google Drive.`, type: 'info' });
 			return;
 		}
@@ -175,7 +192,38 @@ export function createFileOps(opts: FileOpsOptions): FileOps {
 			path,
 			name: op.name,
 		});
+		if (op.source) await forgetDeletedFile(op.source);
 		addToast({ message: `Deleted "${op.name}".`, type: 'info' });
+	}
+
+	/**
+	 * Take a deleted file out of the deck's library index, then out of the cache
+	 * that index is restored from. The browse list is built from `allFiles`, so
+	 * without the first step the reload after the op restores the deleted row.
+	 *
+	 * Drive needs no cache step: a cached Drive listing expires on its own
+	 * (`DRIVE_CACHE_TTL`) and a cached restore re-streams the folder in the
+	 * background, replacing the list. The device cache is restored as-is, so it
+	 * has to be rewritten here or the file returns on the next launch.
+	 */
+	async function forgetDeletedFile(source: StoredAudioFile): Promise<void> {
+		const key = getStoredFileKey(source);
+		const remaining = view.allFiles.filter((file) => getStoredFileKey(file) !== key);
+		if (remaining.length === view.allFiles.length) return; // not in the index
+		view.allFiles = remaining;
+		if (source.source === 'drive') return;
+
+		const treeUri = opts.deviceLibrary.nativeTreeUri;
+		const folderName = musicSettings.lastFolderName || 'Library';
+		if (remaining.length > 0) {
+			await saveCachedLibrary(treeUri, folderName, remaining);
+			return;
+		}
+		// `saveCachedLibrary` no-ops on an empty list, which would leave the old
+		// cache in place, so drop the keys instead.
+		const cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName });
+		await deleteCachedLibrary(cacheKey);
+		if (cacheKey !== LAST_LIBRARY_CACHE_KEY) await deleteCachedLibrary(LAST_LIBRARY_CACHE_KEY);
 	}
 
 	async function moveOrCopyFileOp(op: PendingFileOp, destination: { localPath?: string }): Promise<void> {
@@ -199,7 +247,15 @@ export function createFileOps(opts: FileOpsOptions): FileOps {
 	}
 
 	async function reloadCurrentBrowse(): Promise<void> {
-		void opts.browseNavigation.loadBrowseEntries(view.browsePath, musicSettings.librarySource === 'drive' ? 'drive' : undefined);
+		// The second argument is the Drive *search query*, not a source flag. The
+		// old `librarySource === 'drive' ? 'drive' : undefined` therefore put the
+		// browse into search mode filtering for the word "drive" after every op.
+		// Re-run the deck's live query instead, so a Drive user stays where they
+		// were and a local user gets the plain listing.
+		void opts.browseNavigation.loadBrowseEntries(
+			view.browsePath,
+			musicSettings.librarySource === 'drive' ? view.driveSearch.trim().toLowerCase() : undefined
+		);
 	}
 
 	return {

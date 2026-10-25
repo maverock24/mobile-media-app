@@ -34,6 +34,8 @@ import {
 } from '$lib/files/fileOps';
 import { musicSettings } from '$lib/stores/settings.svelte';
 import type { StoredAudioFile } from '$lib/models/music';
+import { LAST_LIBRARY_CACHE_KEY, saveCachedLibrary } from '$lib/browse/libraryCache';
+import { loadCachedLibrary } from '$lib/utils/idb';
 
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -52,6 +54,8 @@ function makeView() {
 		isFileOpRunning: false,
 		showLocalFolderPicker: false,
 		browsePath: ['Albums'] as string[],
+		driveSearch: '' as string,
+		allFiles: [] as StoredAudioFile[],
 	};
 }
 
@@ -255,6 +259,80 @@ describe('deleteFileOp', () => {
 	});
 });
 
+// ─────────────────────────────────────────────────────────────
+// deleteFileOp — library index and cache
+// ─────────────────────────────────────────────────────────────
+
+describe('deleteFileOp (library index)', () => {
+	const song: StoredAudioFile = {
+		source: 'native', name: 'song.mp3', relativePath: 'Albums/song.mp3', path: '/x/song.mp3',
+	};
+	const keeper: StoredAudioFile = {
+		source: 'native', name: 'keep.mp3', relativePath: 'Albums/keep.mp3', path: '/x/keep.mp3',
+	};
+	const driveSong: StoredAudioFile = {
+		source: 'drive', name: 'song.mp3', relativePath: 'song.mp3', fileId: 'drive-1',
+	};
+
+	beforeEach(() => {
+		musicSettings.lastFolderName = 'Library';
+	});
+
+	it('drops the deleted file from the index so the reload cannot restore the row', async () => {
+		const { fileOps, view } = makeFileOps();
+		view.allFiles = [song, keeper];
+
+		await fileOps.deleteFileOp({ ...op('delete'), source: song });
+
+		expect(view.allFiles).toEqual([keeper]);
+	});
+
+	it('rewrites the device cache without the deleted file', async () => {
+		const { fileOps, view } = makeFileOps();
+		view.allFiles = [song, keeper];
+
+		await fileOps.deleteFileOp({ ...op('delete'), source: song });
+
+		const cached = await loadCachedLibrary('device:content://tree');
+		expect(cached?.files.map((file) => file.name)).toEqual(['keep.mp3']);
+	});
+
+	it('drops both cache keys when the deleted file was the last one', async () => {
+		await saveCachedLibrary('content://tree', 'Library', [song]);
+		expect(await loadCachedLibrary('device:content://tree')).not.toBeNull();
+		expect(await loadCachedLibrary(LAST_LIBRARY_CACHE_KEY)).not.toBeNull();
+		const { fileOps, view } = makeFileOps();
+		view.allFiles = [song];
+
+		await fileOps.deleteFileOp({ ...op('delete'), source: song });
+
+		expect(await loadCachedLibrary('device:content://tree')).toBeNull();
+		expect(await loadCachedLibrary(LAST_LIBRARY_CACHE_KEY)).toBeNull();
+	});
+
+	it('leaves the index alone when the file was never indexed', async () => {
+		const { fileOps, view } = makeFileOps();
+		view.allFiles = [keeper];
+
+		await fileOps.deleteFileOp({ ...op('delete'), source: song });
+
+		expect(view.allFiles).toEqual([keeper]);
+	});
+
+	it('drops a Drive row from the index and leaves the device cache alone', async () => {
+		await saveCachedLibrary('content://tree', 'Library', [song]);
+		const deleteDriveFile = vi.fn().mockResolvedValue(undefined);
+		const { fileOps, view } = makeFileOps({ deleteDriveFile });
+		view.allFiles = [driveSong, song];
+
+		await fileOps.deleteFileOp({ ...op('delete'), isDrive: true, fileId: 'drive-1', source: driveSong });
+
+		expect(view.allFiles).toEqual([song]);
+		const cached = await loadCachedLibrary('device:content://tree');
+		expect(cached?.files.map((file) => file.name)).toEqual(['song.mp3']);
+	});
+});
+
 describe('moveOrCopyFileOp', () => {
 	it('throws without a SAF tree URI', async () => {
 		const { fileOps, deviceLibrary } = makeFileOps();
@@ -361,13 +439,24 @@ describe('folderOpNotice', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('reloadCurrentBrowse', () => {
-	it('reloads with the drive filter when the Drive source is active', async () => {
+	it('re-runs the live Drive search query when the Drive source is active', async () => {
 		const { fileOps, view, browseNavigation } = makeFileOps();
 		musicSettings.librarySource = 'drive';
+		view.driveSearch = '  Bach  ';
 
 		await fileOps.reloadCurrentBrowse();
 
-		expect(browseNavigation.loadBrowseEntries).toHaveBeenCalledWith(view.browsePath, 'drive');
+		expect(browseNavigation.loadBrowseEntries).toHaveBeenCalledWith(view.browsePath, 'bach');
+	});
+
+	it('reloads the Drive folder listing when the Drive source has no query', async () => {
+		const { fileOps, view, browseNavigation } = makeFileOps();
+		musicSettings.librarySource = 'drive';
+		view.driveSearch = '';
+
+		await fileOps.reloadCurrentBrowse();
+
+		expect(browseNavigation.loadBrowseEntries).toHaveBeenCalledWith(view.browsePath, '');
 	});
 
 	it('reloads with an undefined filter for any other source', async () => {

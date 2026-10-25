@@ -243,6 +243,10 @@
 	let _searchIndexSorted: Array<{ file: StoredAudioFile; haystack: string }> = [];
 	$effect(() => {
 		const total = allFiles.length;
+		// A delete shrinks the index. Without this reset the merge branch below
+		// slices past the new end, finds nothing "new", and keeps the deleted
+		// file in the search index forever.
+		if (total < _searchIndexSortedLength) _searchIndexSortedLength = 0;
 		if (total === _searchIndexSortedLength) return;
 		if (total === 0) {
 			_searchIndexSorted = [];
@@ -540,6 +544,9 @@
 			get showLocalFolderPicker() { return showLocalFolderPicker; },
 			set showLocalFolderPicker(v) { showLocalFolderPicker = v; },
 			get browsePath() { return browsePath; },
+			get driveSearch() { return driveSearch; },
+			get allFiles() { return allFiles; },
+			set allFiles(v) { allFiles = v; },
 		},
 	});
 
