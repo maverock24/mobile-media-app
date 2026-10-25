@@ -4,6 +4,7 @@ import {
 	getDeviceLibraryCacheKey,
 	saveCachedLibrary,
 	loadDeviceCachedLibrary,
+	hasUsableDirectoryTree,
 	restoreStoredFilesFromCache,
 	collectStoredFilesFromSnapshot,
 	pathToString,
@@ -12,7 +13,7 @@ import {
 	resolveDirAtPath,
 } from '$lib/browse/libraryCache';
 import type { CachedLibrary, CachedLibraryFile, StoredAudioFile } from '$lib/models/music';
-import { loadCachedLibrary } from '$lib/utils/idb';
+import { idbPut, loadCachedLibrary, openIDB } from '$lib/utils/idb';
 
 beforeEach(async () => {
 	// Wipe the db between tests so the last-library mirror cannot leak across.
@@ -272,6 +273,62 @@ describe('saveCachedLibrary / loadDeviceCachedLibrary', () => {
 		expect(await loadCachedLibrary('device:content://tree/1')).toBeNull();
 		// The last-library mirror is written alongside any non-last key.
 		expect(await loadCachedLibrary(LAST_LIBRARY_CACHE_KEY)).not.toBeNull();
+	});
+
+	it('writes schemaVersion 1 with completedAt and the directory rows', async () => {
+		const before = Date.now();
+		const dirs = [{ path: '', mtime: 11 }, { path: 'sub', mtime: 12 }];
+
+		await saveCachedLibrary('content://tree/1', 'Music', [native('a.mp3')], undefined, dirs);
+
+		const loaded = await loadDeviceCachedLibrary('content://tree/1', 'Music');
+		expect(loaded?.schemaVersion).toBe(1);
+		expect(loaded?.completedAt).toBeGreaterThanOrEqual(before);
+		expect(loaded?.dirs).toEqual(dirs);
+	});
+
+	it('restores a legacy payload that has no schemaVersion', async () => {
+		// Written straight to IDB, the shape every device has on disk today.
+		const db = await openIDB();
+		await idbPut(db, 'libraries', {
+			folderName: 'Music',
+			savedAt: 1,
+			files: [{ source: 'native', name: 'a.mp3', relativePath: 'sub/a.mp3', path: '/sdcard/sub/a.mp3', mimeType: 'audio/mpeg', modifiedAt: 7 }],
+		}, 'device:content://tree/1');
+		db.close();
+
+		const loaded = await loadDeviceCachedLibrary('content://tree/1', 'Music');
+		expect(loaded?.schemaVersion).toBeUndefined();
+		expect(loaded?.dirs).toBeUndefined();
+		expect(loaded?.completedAt).toBeUndefined();
+		expect(restoreStoredFilesFromCache(loaded!).map((file) => file.name)).toEqual(['a.mp3']);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────
+// hasUsableDirectoryTree
+// ─────────────────────────────────────────────────────────────
+
+describe('hasUsableDirectoryTree', () => {
+	const files: CachedLibraryFile[] = [{ source: 'native', name: 'a.mp3', relativePath: 'a.mp3', path: '/sdcard/a.mp3' }];
+
+	it('reports no usable tree for a payload without schemaVersion', () => {
+		expect(hasUsableDirectoryTree({ folderName: 'Music', files, savedAt: 1 })).toBe(false);
+		// Even with rows present: an unversioned payload's tree is not trusted.
+		expect(hasUsableDirectoryTree({ folderName: 'Music', files, savedAt: 1, dirs: [{ path: '', mtime: 1 }] })).toBe(false);
+	});
+
+	it('reports no usable tree for another schema version, an empty tree, or no payload', () => {
+		expect(hasUsableDirectoryTree({ folderName: 'Music', files, savedAt: 1, schemaVersion: 2, dirs: [{ path: '', mtime: 1 }] })).toBe(false);
+		expect(hasUsableDirectoryTree({ folderName: 'Music', files, savedAt: 1, schemaVersion: 1, dirs: [] })).toBe(false);
+		expect(hasUsableDirectoryTree({ folderName: 'Music', files, savedAt: 1, schemaVersion: 1 })).toBe(false);
+		expect(hasUsableDirectoryTree(null)).toBe(false);
+	});
+
+	it('reports a usable tree for a versioned payload that carries rows', async () => {
+		await saveCachedLibrary('content://tree/1', 'Music', [native('a.mp3')], undefined, [{ path: '', mtime: 3 }]);
+
+		expect(hasUsableDirectoryTree(await loadDeviceCachedLibrary('content://tree/1', 'Music'))).toBe(true);
 	});
 });
 

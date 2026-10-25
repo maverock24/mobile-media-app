@@ -49,7 +49,7 @@
 import { DirectoryReader } from '$lib/native/directory-reader';
 import { musicSettings } from '$lib/stores/settings.svelte';
 import { addToast } from '$lib/stores/toastStore.svelte';
-import { LAST_LIBRARY_CACHE_KEY, getDeviceLibraryCacheKey, saveCachedLibrary } from '$lib/browse/libraryCache';
+import { LAST_LIBRARY_CACHE_KEY, getDeviceLibraryCacheKey, loadDeviceCachedLibrary, saveCachedLibrary } from '$lib/browse/libraryCache';
 import { deleteCachedLibrary } from '$lib/utils/idb';
 import { getStoredFileKey, type StoredAudioFile } from '$lib/models/music';
 import type { DeviceLibrary } from '$lib/device/deviceLibrary.svelte';
@@ -205,6 +205,10 @@ export function createFileOps(opts: FileOpsOptions): FileOps {
 	 * (`DRIVE_CACHE_TTL`) and a cached restore re-streams the folder in the
 	 * background, replacing the list. The device cache is restored as-is, so it
 	 * has to be rewritten here or the file returns on the next launch.
+	 *
+	 * The rewrite carries the loaded payload's directory tree forward: a delete
+	 * walks nothing, so rebuilding the payload from the file list alone would drop
+	 * `dirs` and force the next start into a full walk.
 	 */
 	async function forgetDeletedFile(source: StoredAudioFile): Promise<void> {
 		const key = getStoredFileKey(source);
@@ -216,7 +220,8 @@ export function createFileOps(opts: FileOpsOptions): FileOps {
 		const treeUri = opts.deviceLibrary.nativeTreeUri;
 		const folderName = musicSettings.lastFolderName || 'Library';
 		if (remaining.length > 0) {
-			await saveCachedLibrary(treeUri, folderName, remaining);
+			const cached = await loadDeviceCachedLibrary(treeUri, folderName);
+			await saveCachedLibrary(treeUri, folderName, remaining, undefined, cached?.dirs ?? []);
 			return;
 		}
 		// `saveCachedLibrary` no-ops on an empty list, which would leave the old

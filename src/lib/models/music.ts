@@ -66,7 +66,21 @@ export type CachedNativeLibraryFile = {
 	sizeBytes?: number;
 };
 export type CachedLibraryFile = CachedWebLibraryFile | CachedNativeLibraryFile;
-export type CachedLibrary = { folderName: string; files: CachedLibraryFile[]; savedAt: number; cacheKey?: string };
+/** One row of the persisted directory tree: a directory's path relative to the
+ *  tree root, and the mtime the walk that stored it trusted. */
+export type CachedLibraryDir = { path: string; mtime: number };
+export type CachedLibrary = {
+	folderName: string;
+	files: CachedLibraryFile[];
+	savedAt: number;
+	cacheKey?: string;
+	/** Payload version. Absent on a payload written before the tree existed. */
+	schemaVersion?: number;
+	/** When the walk that produced this payload finished. */
+	completedAt?: number;
+	/** The directory tree that walk observed. Empty or absent means "walk in full". */
+	dirs?: CachedLibraryDir[];
+};
 
 // ─── EQ Constants ────────────────────────────────────────────────────────────
 

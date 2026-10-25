@@ -24,6 +24,7 @@ import { getRelativePath } from '$lib/models/browse';
 import {
 	type StoredAudioFile,
 	type CachedLibrary,
+	type CachedLibraryDir,
 	type CachedLibraryFile,
 	createStoredWebAudioFile,
 	isSupportedAudioFile,
@@ -48,12 +49,19 @@ export function getDeviceLibraryCacheKey(options: { treeUri?: string | null; fol
  * Persist a cooked library under its key, and under {@link LAST_LIBRARY_CACHE_KEY}
  * as well unless it is already that key. Write failures are swallowed: a full or
  * blocked IndexedDB must not break folder opening.
+ *
+ * The payload is versioned: `schemaVersion: 1` marks it as carrying a directory
+ * tree, `completedAt` is when the walk that produced it finished, and `dirs` is
+ * that walk's tree. A writer that cannot know a tree (the hidden-input paths, or
+ * any caller that passes none) gets an empty one, which
+ * {@link hasUsableDirectoryTree} reads as "no usable tree".
  */
 export async function saveCachedLibrary(
 	treeUri: string | null,
 	folderName: string,
 	files: StoredAudioFile[],
-	cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName })
+	cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName }),
+	dirs: CachedLibraryDir[] = []
 ) {
 	const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
 		if (file.source === 'web') {
@@ -84,7 +92,15 @@ export async function saveCachedLibrary(
 	if (cachedFiles.length === 0) return;
 	try {
 		const db = await openIDB();
-		const payload = { folderName, files: cachedFiles, savedAt: Date.now(), cacheKey } satisfies CachedLibrary;
+		const payload = {
+			folderName,
+			files: cachedFiles,
+			savedAt: Date.now(),
+			cacheKey,
+			schemaVersion: 1,
+			completedAt: Date.now(),
+			dirs
+		} satisfies CachedLibrary;
 		await idbPut(db, 'libraries', payload, cacheKey);
 		if (cacheKey !== LAST_LIBRARY_CACHE_KEY) {
 			await idbPut(db, 'libraries', payload, LAST_LIBRARY_CACHE_KEY);
@@ -106,6 +122,18 @@ export async function loadDeviceCachedLibrary(treeUri: string | null, folderName
 	if (cacheKey === LAST_LIBRARY_CACHE_KEY) return null;
 	const fallback = await loadCachedLibrary(LAST_LIBRARY_CACHE_KEY);
 	return fallback?.folderName === folderName ? fallback : null;
+}
+
+/**
+ * True when a cached payload carries a directory tree a delta walk can trust: it
+ * was written by a versioned writer and it holds at least one row. A legacy
+ * payload (no `schemaVersion`), an unknown version, and a missing or empty tree
+ * all mean "walk in full". Nothing consumes this yet; the delta walk gates on it.
+ */
+export function hasUsableDirectoryTree(cached: CachedLibrary | null | undefined): boolean {
+	if (!cached) return false;
+	if (cached.schemaVersion !== 1) return false;
+	return Array.isArray(cached.dirs) && cached.dirs.length > 0;
 }
 
 /**

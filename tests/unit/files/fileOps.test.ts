@@ -297,6 +297,20 @@ describe('deleteFileOp (library index)', () => {
 		expect(cached?.files.map((file) => file.name)).toEqual(['keep.mp3']);
 	});
 
+	it('keeps the directory rows when a delete rewrites the cache', async () => {
+		const dirs = [{ path: '', mtime: 5 }, { path: 'Albums', mtime: 6 }];
+		await saveCachedLibrary('content://tree', 'Library', [song, keeper], undefined, dirs);
+		const { fileOps, view } = makeFileOps();
+		view.allFiles = [song, keeper];
+
+		await fileOps.deleteFileOp({ ...op('delete'), source: song });
+
+		const cached = await loadCachedLibrary('device:content://tree');
+		expect(cached?.files.map((file) => file.name)).toEqual(['keep.mp3']);
+		expect(cached?.dirs).toEqual(dirs);
+		expect(cached?.schemaVersion).toBe(1);
+	});
+
 	it('drops both cache keys when the deleted file was the last one', async () => {
 		await saveCachedLibrary('content://tree', 'Library', [song]);
 		expect(await loadCachedLibrary('device:content://tree')).not.toBeNull();
