@@ -36,7 +36,12 @@ export interface LibraryDeltaDirRow {
 
 /** Everything the merge needs to know about one walk. */
 export interface MergeLibraryDeltaInput {
-	/** The cached file list: what the previous completed walk left in the index. */
+	/**
+	 * The index as it stands when the merge runs: the restored cache plus whatever a
+	 * download, a folder playback scan or a delete added or removed since. A row here
+	 * that the walk did not observe is a prune candidate, so this must be the live
+	 * list and not a snapshot taken before the walk started.
+	 */
 	previous: readonly StoredAudioFile[];
 	/** The files this walk observed. Never a full tree unless the walk was full. */
 	walked: readonly StoredAudioFile[];
@@ -44,8 +49,17 @@ export interface MergeLibraryDeltaInput {
 	dirs: readonly LibraryDeltaDirRow[];
 	/** The previous tree, so a skipped directory keeps its row (D4 amendment). */
 	previousDirs?: readonly LibraryDeltaDirRow[];
-	/** Directories the walk did not descend into. Their subtrees are unverified. */
-	skippedDirs: readonly string[];
+	/** The relative paths of the directories the walk did not descend into. */
+	skippedPaths: readonly string[];
+	/**
+	 * How many directories the walk reports as skipped. The count and the paths are
+	 * two independent fields in the native payload, so the count can be larger than
+	 * the list: `skippedPaths` is empty on an APK that predates it, and the
+	 * aggregation in `folderScan.ts` cannot invent a path it was not given. Every
+	 * skipped directory the walk did not name is a subtree whose files look deleted
+	 * to this merge, which is why the count is an input and not a comment.
+	 */
+	skippedDirs: number;
 	/** Directories the walk tried and could not read (D2). */
 	unreadableDirs: number;
 	/** Whether the walk ran to the end. Anything else may not prune (D3). */
@@ -142,8 +156,8 @@ function isUnderOrEqual(path: string, dir: string): boolean {
 }
 
 /** True when `path` is unverified because the walk skipped the directory above it. */
-function isUnderSkippedDir(path: string, skippedDirs: readonly string[]): boolean {
-	return skippedDirs.some((dir) => isUnderOrEqual(path, dir));
+function isUnderSkippedDir(path: string, skippedPaths: readonly string[]): boolean {
+	return skippedPaths.some((dir) => isUnderOrEqual(path, dir));
 }
 
 /**
@@ -154,14 +168,14 @@ function isUnderSkippedDir(path: string, skippedDirs: readonly string[]): boolea
 function mergeDirRows(
 	dirs: readonly LibraryDeltaDirRow[],
 	previousDirs: readonly LibraryDeltaDirRow[],
-	skippedDirs: readonly string[]
+	skippedPaths: readonly string[]
 ): LibraryDeltaDirRow[] {
 	const observed = new Set(dirs.map((row) => row.path));
 	const merged: LibraryDeltaDirRow[] = [...dirs];
 
 	for (const row of previousDirs) {
 		if (observed.has(row.path)) continue;
-		if (!isUnderSkippedDir(row.path, skippedDirs)) continue;
+		if (!isUnderSkippedDir(row.path, skippedPaths)) continue;
 		merged.push(row);
 	}
 
@@ -173,16 +187,16 @@ function mergeDirRows(
  *
  * - A walked file whose fingerprint matches the previous entry keeps the previous
  *   object; every other walked file replaces it.
- * - A previous file the walk did not observe is pruned only when the walk completed
- *   with no unreadable directory and the file is not inside a skipped subtree.
- *   Otherwise it is carried over unchanged.
+ * - A previous file the walk did not observe is pruned only when the walk completed,
+ *   could read every directory, named every directory it skipped, and the file is
+ *   not inside a skipped subtree. Otherwise it is carried over unchanged.
  * - Files observed first, then carried-over files, both in their input order.
  *
  * There is deliberately no "the result has the same length as before" shortcut:
  * one addition plus one removal is a change (D9).
  */
 export function mergeLibraryDelta(input: MergeLibraryDeltaInput): MergeLibraryDeltaResult {
-	const { previous, walked, dirs, previousDirs = [], skippedDirs, unreadableDirs, completed } = input;
+	const { previous, walked, dirs, previousDirs = [], skippedPaths, skippedDirs, unreadableDirs, completed } = input;
 
 	const previousByKey = new Map<string, StoredAudioFile>();
 	for (const file of previous) {
@@ -198,12 +212,17 @@ export function mergeLibraryDelta(input: MergeLibraryDeltaInput): MergeLibraryDe
 		files.push(previousFile && isUnchanged(previousFile, file) ? previousFile : file);
 	}
 
-	const mayPrune = completed && unreadableDirs === 0;
+	// The skip bookkeeping is only usable when the walk named every directory it
+	// counted. A count above the paths means some skipped subtrees are invisible
+	// here, so their files would be pruned as if the user had deleted them. Take
+	// the whole walk as unverified and prune nothing.
+	const skipsNamed = skippedDirs <= skippedPaths.length;
+	const mayPrune = completed && unreadableDirs === 0 && skipsNamed;
 	for (const file of previous) {
 		if (walkedKeys.has(getStoredFileKey(file))) continue;
-		if (mayPrune && !isUnderSkippedDir(file.relativePath, skippedDirs)) continue;
+		if (mayPrune && !isUnderSkippedDir(file.relativePath, skippedPaths)) continue;
 		files.push(file);
 	}
 
-	return { files, dirs: mergeDirRows(dirs, previousDirs, skippedDirs) };
+	return { files, dirs: mergeDirRows(dirs, previousDirs, skippedPaths) };
 }

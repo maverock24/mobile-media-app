@@ -226,7 +226,7 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 	 * `resetExistingFiles` is set, every batch is appended and published as it
 	 * arrives, and the cache is rewritten once on completion.
 	 *
-	 * `delta` (the warm start, D1) merges into `previous` instead: nothing is
+	 * `delta` (the warm start, D1) merges into the live index instead: nothing is
 	 * cleared, no batch is published, and the merged index is published once and
 	 * written once. A skipped directory protects its subtree (D2 amendment), and the
 	 * protected set is the walk's own `skippedPaths`. The count alone is not enough:
@@ -277,16 +277,32 @@ export function createDeviceLibrary(opts: DeviceLibraryOptions): DeviceLibrary {
 					const walk = await scanNativeLibrary(s.nativeTreeUri, [], BACKGROUND_LIBRARY_SCAN_BATCH_SIZE, {
 						prevDirs: previous.dirs
 					});
+					// Merge against the live index, read here rather than at the restore. The
+					// restored snapshot is stale by the time the walk finishes: a Drive
+					// download appending its native copy, a folder playback scan appending, or
+					// a `fileOps` delete removing all mutate `view.allFiles` while the walk
+					// runs. Such a row is in neither the snapshot nor the walk output, so
+					// merging against the snapshot and then publishing the merge drops a file
+					// that is still on the device, or resurrects one the user just deleted.
+					// Reading the live list at merge time carries whatever the index holds
+					// now, and a row the walk never verified is decided by the walk's skip
+					// report, exactly like a restored row.
+					const liveFiles = view.allFiles;
 					const merged = mergeLibraryDelta({
-						previous: previous.files,
+						previous: liveFiles,
 						walked: walk.files,
 						dirs: walk.dirs,
 						previousDirs: previous.dirs,
-						skippedDirs: walk.skippedPaths,
+						skippedPaths: walk.skippedPaths,
+						skippedDirs: walk.skippedDirs,
 						unreadableDirs: walk.unreadableDirs,
-						completed: true
+						completed: walk.completed
 					});
 					walkedDirs = merged.dirs;
+					// Measured against the restored list, not the live one: the restored list
+					// is what the queue was hydrated from, so a difference from it is a change
+					// the queue has not seen. A live row that arrived after the restore has
+					// not reached the queue either, and this comparison counts it as a change.
 					indexChanged = merged.files.length !== previous.files.length
 						|| merged.files.some((file, index) => file !== previous.files[index]);
 					return merged.files;

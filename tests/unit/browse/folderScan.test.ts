@@ -321,6 +321,25 @@ describe('scanNativeLibrary', () => {
 		expect(result.skippedPaths).toEqual(['Music/Live', 'Music/Studio']);
 	});
 
+	it('reports an incomplete walk', async () => {
+		// No tree URI: the batch loop never runs, so the walk never reaches a `done`
+		// batch. `completed` is the only signal a caller gets that the output is not a
+		// verdict on the tree, and it must be false there.
+		const neverRan = await scanNativeLibrary(null, [], 10);
+
+		expect(neverRan.completed).toBe(false);
+
+		// The same field is true only for a loop that ended on a batch saying `done`.
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		mocks.getAudioScanBatch
+			.mockResolvedValueOnce(batch(['a.mp3'], false, 1, 1))
+			.mockResolvedValueOnce(batch([], true, 2, 0));
+
+		const walked = await scanNativeLibrary('content://tree', [], 10);
+
+		expect(walked.completed).toBe(true);
+	});
+
 	it('defaults the delta counters to zero when an older APK omits them', async () => {
 		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
 		mocks.getAudioScanBatch.mockResolvedValueOnce(batch(['a.mp3'], true));
@@ -337,6 +356,7 @@ describe('scanNativeLibrary', () => {
 			skippedDirs: 0,
 			skippedPaths: [],
 			unreadableDirs: 0,
+			completed: false,
 		});
 		expect(mocks.startAudioScan).not.toHaveBeenCalled();
 	});

@@ -56,6 +56,12 @@ export interface NativeLibraryScanResult {
 	 */
 	skippedPaths: string[];
 	unreadableDirs: number;
+	/**
+	 * Whether the batch loop reached a batch that reported `done`. A walk that never
+	 * got there saw an unknown part of the tree, so its output is not a verdict on
+	 * the files it did not report and the caller must not prune on it (D3).
+	 */
+	completed: boolean;
 }
 
 /** Yield to the event loop so the UI can paint between scan batches. */
@@ -79,7 +85,9 @@ export async function scanNativeLibrary(
 	options: NativeLibraryScanOptions = {},
 	onBatch?: (batch: StoredAudioFile[], state: ScanBatchState) => Promise<void> | void,
 ): Promise<NativeLibraryScanResult> {
-	const result: NativeLibraryScanResult = { files: [], dirs: [], skippedDirs: 0, skippedPaths: [], unreadableDirs: 0 };
+	const result: NativeLibraryScanResult = {
+		files: [], dirs: [], skippedDirs: 0, skippedPaths: [], unreadableDirs: 0, completed: false
+	};
 	if (!nativeTreeUri) return result;
 
 	// The native payload repeats every skipped path on each batch (it is cumulative,
@@ -141,6 +149,10 @@ export async function scanNativeLibrary(
 			}
 		}
 	}
+
+	// Set from the loop's own exit condition, never from "we got here": only a batch
+	// that said `done` ends the loop, so this is false exactly when no batch did.
+	result.completed = scanCompleted;
 
 	return result;
 }

@@ -49,7 +49,8 @@ describe('mergeLibraryDelta', () => {
 			previous: [prevSame, prevNewMtime, prevNewSize],
 			walked: [walkedSame, walkedNewMtime, walkedNewSize],
 			dirs: [],
-			skippedDirs: [],
+			skippedPaths: [],
+			skippedDirs: 0,
 			unreadableDirs: 0,
 			completed: true,
 		});
@@ -71,7 +72,8 @@ describe('mergeLibraryDelta', () => {
 			previous: [before],
 			walked: [after],
 			dirs: [],
-			skippedDirs: [],
+			skippedPaths: [],
+			skippedDirs: 0,
 			unreadableDirs: 0,
 			completed: true,
 		});
@@ -91,7 +93,8 @@ describe('mergeLibraryDelta', () => {
 			previous: [prevUpdated, prevUnseen],
 			walked: [walkedUpdated, walkedNew],
 			dirs: [],
-			skippedDirs: [],
+			skippedPaths: [],
+			skippedDirs: 0,
 			unreadableDirs: 0,
 		};
 
@@ -117,7 +120,8 @@ describe('mergeLibraryDelta', () => {
 			previous: [prevUpdated, prevInsideUnreadable, prevElsewhere],
 			walked: [walkedUpdated, walkedNew],
 			dirs: [{ path: 'Alpha', mtime: 10 }],
-			skippedDirs: [],
+			skippedPaths: [],
+			skippedDirs: 0,
 			unreadableDirs: 1,
 			completed: true,
 		});
@@ -156,7 +160,8 @@ describe('mergeLibraryDelta', () => {
 				{ path: 'Alpha/Sub', mtime: 15 },
 				{ path: 'Beta', mtime: 20 },
 			],
-			skippedDirs: ['Alpha'],
+			skippedPaths: ['Alpha'],
+			skippedDirs: 1,
 			unreadableDirs: 0,
 			completed: true,
 		});
@@ -178,6 +183,61 @@ describe('mergeLibraryDelta', () => {
 		expect(paths(result.dirs)).toEqual(['Beta', 'Gamma', 'Alpha', 'Alpha/Sub']);
 	});
 
+	// Rule 5, unnamed skips — a count with no paths verifies nothing
+	it('prunes nothing when the walk reports skips without paths', () => {
+		// The native payload counts skipped directories and names them in two separate
+		// fields, so an APK that predates `skippedPaths` reports `skippedDirs: 2` with
+		// an empty list. The two subtrees behind that count are unverified, and every
+		// file under them would otherwise look deleted.
+		const prevLibrary = nativeFile('Music/Live/a.mp3', 100, 1000);
+		const prevLibraryNested = nativeFile('Music/Studio/b.mp3', 150, 1500);
+		const prevObserved = nativeFile('Music/Other/c.mp3', 200, 2000);
+		const walkedObserved = nativeFile('Music/Other/c.mp3', 200, 2000);
+
+		const result = mergeLibraryDelta({
+			previous: [prevLibrary, prevLibraryNested, prevObserved],
+			walked: [walkedObserved],
+			dirs: [{ path: 'Music/Other', mtime: 20 }],
+			previousDirs: [
+				{ path: 'Music/Live', mtime: 10 },
+				{ path: 'Music/Studio', mtime: 15 },
+			],
+			skippedPaths: [],
+			skippedDirs: 2,
+			unreadableDirs: 0,
+			completed: true,
+		});
+
+		// Nothing is pruned, not even a file outside the unnamed skips: the walk as a
+		// whole is unverified, which is the same bargain an unreadable directory gets.
+		expect(keys(result.files)).toEqual([
+			'n:Music/Other/c.mp3',
+			'n:Music/Live/a.mp3',
+			'n:Music/Studio/b.mp3',
+		]);
+		expect(result.files[0]).toBe(prevObserved);
+		expect(result.files[1]).toBe(prevLibrary);
+		expect(result.files[2]).toBe(prevLibraryNested);
+	});
+
+	// Rule 5, the other half of the same check — a named skip is enough
+	it('prunes normally when the walk names every directory it skipped', () => {
+		const prevSkipped = nativeFile('Music/Live/a.mp3', 100, 1000);
+		const prevGone = nativeFile('Music/Old/gone.mp3', 200, 2000);
+
+		const result = mergeLibraryDelta({
+			previous: [prevSkipped, prevGone],
+			walked: [],
+			dirs: [],
+			skippedPaths: ['Music/Live'],
+			skippedDirs: 1,
+			unreadableDirs: 0,
+			completed: true,
+		});
+
+		expect(keys(result.files)).toEqual(['n:Music/Live/a.mp3']);
+	});
+
 	// Rule 6 — prefixes are /-delimited
 	it('matches prefixes on / boundaries, so Alpha2 is not under Alpha', () => {
 		const prevVisited = nativeFile('Alpha/keep.mp3', 100, 1000);
@@ -188,7 +248,8 @@ describe('mergeLibraryDelta', () => {
 			previous: [prevVisited, prevLookalike, prevOther],
 			walked: [],
 			dirs: [],
-			skippedDirs: ['Alpha'],
+			skippedPaths: ['Alpha'],
+			skippedDirs: 1,
 			unreadableDirs: 0,
 			completed: true,
 		});
@@ -207,7 +268,8 @@ describe('mergeLibraryDelta', () => {
 			previous: [prevKept, prevGone],
 			walked: [walkedKept, walkedAdded],
 			dirs: [],
-			skippedDirs: [],
+			skippedPaths: [],
+			skippedDirs: 0,
 			unreadableDirs: 0,
 			completed: true,
 		});
@@ -231,7 +293,8 @@ describe('mergeLibraryDelta', () => {
 			previous: [prevA, prevB, prevC],
 			walked: [walkedA],
 			dirs: [{ path: 'Alpha', mtime: 10 }],
-			skippedDirs: [],
+			skippedPaths: [],
+			skippedDirs: 0,
 			unreadableDirs: 0,
 			completed: false,
 		});
