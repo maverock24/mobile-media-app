@@ -20,7 +20,10 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONObject;
+
 import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -74,7 +77,13 @@ public class DirectoryReaderPlugin extends Plugin {
 		private final ArrayDeque<DirNode> pendingDirs = new ArrayDeque<>();
 		private final Uri treeUri;
 		private final String folderName;
+		/** Cached directory mtimes from a previous walk, keyed by relative path. 0 or absent means unknown. */
+		private final Map<String, Long> previousDirMtimes = new HashMap<>();
+		/** Directory rows this walk visited, keyed by relative path. */
+		private final Map<String, Long> observedDirMtimes = new HashMap<>();
 		private int foldersScanned = 0;
+		private int skippedDirs = 0;
+		private int unreadableDirs = 0;
 
 		private AudioScanSession(Uri treeUri, String startDocumentId, String basePath, String folderName) {
 			this.treeUri = treeUri;
@@ -128,6 +137,21 @@ public class DirectoryReaderPlugin extends Plugin {
 			}
 
 			AudioScanSession session = new AudioScanSession(treeUri, startDocId, basePath, folderName);
+
+			// Optional previous directory tree: { path, mtime } rows. Elements arrive
+			// as plain JSONObject (the bridge parses the call data with org.json), so
+			// they are read with optString/optLong rather than the JSObject accessors.
+			JSArray prevDirs = call.getArray("prevDirs");
+			if (prevDirs != null) {
+				for (int index = 0; index < prevDirs.length(); index += 1) {
+					JSONObject row = prevDirs.optJSONObject(index);
+					if (row == null) continue;
+					String rowPath = row.optString("path");
+					if (rowPath == null || rowPath.isEmpty()) continue;
+					session.previousDirMtimes.put(rowPath, row.optLong("mtime"));
+				}
+			}
+
 			String scanId = UUID.randomUUID().toString();
 			AUDIO_SCAN_SESSIONS.put(scanId, session);
 
@@ -163,6 +187,7 @@ public class DirectoryReaderPlugin extends Plugin {
 
 		ContentResolver resolver = getContext().getContentResolver();
 		JSArray files = new JSArray();
+		JSArray dirs = new JSArray();
 		int filesAdded = 0;
 
 		// Process whole directories (one cursor query each) until we've emitted
@@ -174,7 +199,10 @@ public class DirectoryReaderPlugin extends Plugin {
 
 			Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(session.treeUri, dir.documentId);
 			try (Cursor cursor = resolver.query(childrenUri, CHILD_PROJECTION, null, null, null)) {
-				if (cursor == null) continue;
+				if (cursor == null) {
+					session.unreadableDirs += 1;
+					continue;
+				}
 				while (cursor.moveToNext()) {
 					String docId = cursor.getString(0);
 					String name = cursor.getString(1);
@@ -184,7 +212,20 @@ public class DirectoryReaderPlugin extends Plugin {
 					if (docId == null || name == null || name.isEmpty()) continue;
 
 					if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
-						session.pendingDirs.addLast(new DirNode(docId, buildRelativePath(dir.relativePath, name)));
+						String childPath = buildRelativePath(dir.relativePath, name);
+						Long previousMtime = session.previousDirMtimes.get(childPath);
+						// Skip the subtree only when the cached mtime is known and matches
+						// this row; a 0 or missing cached value means unknown, so descend.
+						if (previousMtime != null && previousMtime.longValue() > 0L && previousMtime.longValue() == modified) {
+							session.skippedDirs += 1;
+							continue;
+						}
+						session.pendingDirs.addLast(new DirNode(docId, childPath));
+						session.observedDirMtimes.put(childPath, modified);
+						JSObject dirRow = new JSObject();
+						dirRow.put("path", childPath);
+						dirRow.put("mtime", modified);
+						dirs.put(dirRow);
 						continue;
 					}
 
@@ -196,7 +237,9 @@ public class DirectoryReaderPlugin extends Plugin {
 					filesAdded += 1;
 				}
 			} catch (Exception ignored) {
-				// Unreadable directory (revoked permission, removed media) — skip it.
+				// Unreadable directory (revoked permission, removed media) — skip it,
+				// but report it so the caller can refuse to prune this walk.
+				session.unreadableDirs += 1;
 			}
 		}
 
@@ -207,8 +250,11 @@ public class DirectoryReaderPlugin extends Plugin {
 
 		JSObject result = new JSObject();
 		result.put("files", files);
+		result.put("dirs", dirs);
 		result.put("foldersScanned", session.foldersScanned);
 		result.put("foldersQueued", session.pendingDirs.size());
+		result.put("skippedDirs", session.skippedDirs);
+		result.put("unreadableDirs", session.unreadableDirs);
 		result.put("done", done);
 		call.resolve(result);
 	}

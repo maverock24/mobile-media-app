@@ -16,6 +16,12 @@ export interface NativeDirectoryFolder {
 	relativePath: string;
 }
 
+/** One directory row reported by a delta-aware native walk. */
+export interface NativeDirectoryDir {
+	path: string;
+	mtime: number;
+}
+
 export interface ListDirectoryEntriesResult {
 	folderName: string;
 	entries: Array<NativeDirectoryFolder | NativeDirectoryFile>;
@@ -40,13 +46,19 @@ export interface AudioScanBatchResult {
 	foldersScanned: number;
 	foldersQueued: number;
 	done: boolean;
+	/** Directory rows observed during this batch. Absent on an APK older than the delta walk. */
+	dirs?: NativeDirectoryDir[];
+	/** Directories skipped because their cached mtime matched. Cumulative over the scan. */
+	skippedDirs?: number;
+	/** Directories this walk could not read. Cumulative over the scan. */
+	unreadableDirs?: number;
 }
 
 interface DirectoryReaderPlugin {
 	rememberTreeUri(options: { treeUri: string }): Promise<void>;
 	listEntries(options: { treeUri: string; path?: string }): Promise<ListDirectoryEntriesResult>;
 	listAudioFiles(options: { treeUri: string; path?: string }): Promise<ListDirectoryFilesResult>;
-	startAudioScan(options: { treeUri: string; path?: string }): Promise<StartAudioScanResult>;
+	startAudioScan(options: { treeUri: string; path?: string; prevDirs?: NativeDirectoryDir[] }): Promise<StartAudioScanResult>;
 	getAudioScanBatch(options: { scanId: string; batchSize?: number }): Promise<AudioScanBatchResult>;
 	cancelAudioScan(options: { scanId: string }): Promise<void>;
 	writeFile(options: { treeUri: string; path?: string; fileName: string; mimeType?: string; data: string }): Promise<{ path: string }>;

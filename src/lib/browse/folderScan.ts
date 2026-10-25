@@ -16,7 +16,7 @@
  * unchanged.
  */
 import { FilePicker } from '@capawesome/capacitor-file-picker';
-import { DirectoryReader, type NativeDirectoryFile } from '$lib/native/directory-reader';
+import { DirectoryReader, type NativeDirectoryDir, type NativeDirectoryFile } from '$lib/native/directory-reader';
 import {
 	type StoredAudioFile,
 	createStoredAudioFile,
@@ -37,6 +37,21 @@ export interface ScanBatchState {
 	totalFiles: number;
 }
 
+/** Options for a native SAF library scan. */
+export interface NativeLibraryScanOptions {
+	initialBatchSize?: number;
+	/** The directory tree a previous completed walk observed, so unchanged subtrees can be skipped. */
+	prevDirs?: NativeDirectoryDir[];
+}
+
+/** A whole native SAF library walk: every file, plus what the walk skipped or could not read. */
+export interface NativeLibraryScanResult {
+	files: StoredAudioFile[];
+	dirs: NativeDirectoryDir[];
+	skippedDirs: number;
+	unreadableDirs: number;
+}
+
 /** Yield to the event loop so the UI can paint between scan batches. */
 export async function yieldScanToUi(): Promise<void> {
 	if (typeof window === 'undefined') return;
@@ -45,26 +60,32 @@ export async function yieldScanToUi(): Promise<void> {
 
 /**
  * Stream a native SAF audio scan batch by batch, collecting every mapped file
- * and reporting each non-empty batch to `onBatch`. A scan that never completes
- * is cancelled in the `finally`, so an aborted caller cannot leak a running
- * native scan.
+ * and the directory rows the walk observed, and reporting each batch that
+ * carries anything to `onBatch`. Passing `prevDirs` lets the native walker skip
+ * subtrees whose cached mtime still matches; it reports what it skipped and how
+ * many directories it could not read. A scan that never completes is cancelled
+ * in the `finally`, so an aborted caller cannot leak a running native scan.
  */
-export async function scanNativeAudioFiles(
+export async function scanNativeLibrary(
 	nativeTreeUri: string | null,
 	path: string[],
 	batchSize: number,
-	options: { initialBatchSize?: number } = {},
+	options: NativeLibraryScanOptions = {},
 	onBatch?: (batch: StoredAudioFile[], state: ScanBatchState) => Promise<void> | void,
-): Promise<StoredAudioFile[]> {
-	if (!nativeTreeUri) return [];
+): Promise<NativeLibraryScanResult> {
+	const result: NativeLibraryScanResult = { files: [], dirs: [], skippedDirs: 0, unreadableDirs: 0 };
+	if (!nativeTreeUri) return result;
 
-	const collectedFiles: StoredAudioFile[] = [];
 	let scanCompleted = false;
 	let scanId = '';
 	let isFirstBatch = true;
 
 	try {
-		const startedScan = await DirectoryReader.startAudioScan({ treeUri: nativeTreeUri, path: pathToString(path) });
+		const startedScan = await DirectoryReader.startAudioScan({
+			treeUri: nativeTreeUri,
+			path: pathToString(path),
+			prevDirs: options.prevDirs,
+		});
 		scanId = startedScan.scanId;
 
 		while (!scanCompleted) {
@@ -74,13 +95,22 @@ export async function scanNativeAudioFiles(
 			const batch = await DirectoryReader.getAudioScanBatch({ scanId, batchSize: effectiveBatchSize });
 			isFirstBatch = false;
 			const mappedBatch = batch.files.map((file: NativeDirectoryFile) => createStoredNativeAudioFile(file));
+			const batchDirs = batch.dirs ?? [];
+			result.dirs.push(...batchDirs);
+			// The native counters are cumulative over the session, so assign them.
+			result.skippedDirs = batch.skippedDirs ?? result.skippedDirs;
+			result.unreadableDirs = batch.unreadableDirs ?? result.unreadableDirs;
 			if (mappedBatch.length > 0) {
-				collectedFiles.push(...mappedBatch);
+				result.files.push(...mappedBatch);
+			}
+			// A batch can carry directory rows and no files; skipping the callback
+			// there would lose every row of a files-free batch.
+			if (mappedBatch.length > 0 || batchDirs.length > 0) {
 				await onBatch?.(mappedBatch, {
 					done: batch.done,
 					foldersScanned: batch.foldersScanned,
 					foldersQueued: batch.foldersQueued,
-					totalFiles: collectedFiles.length,
+					totalFiles: result.files.length,
 				});
 			}
 			scanCompleted = batch.done;
@@ -98,7 +128,23 @@ export async function scanNativeAudioFiles(
 		}
 	}
 
-	return collectedFiles;
+	return result;
+}
+
+/**
+ * The file list only, for callers that do not care about the directory tree.
+ * Kept as a thin wrapper so the folder-play path and the index scan keep their
+ * existing shape.
+ */
+export async function scanNativeAudioFiles(
+	nativeTreeUri: string | null,
+	path: string[],
+	batchSize: number,
+	options: NativeLibraryScanOptions = {},
+	onBatch?: (batch: StoredAudioFile[], state: ScanBatchState) => Promise<void> | void,
+): Promise<StoredAudioFile[]> {
+	const result = await scanNativeLibrary(nativeTreeUri, path, batchSize, options, onBatch);
+	return result.files;
 }
 
 /**
