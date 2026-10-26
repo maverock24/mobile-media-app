@@ -6,7 +6,7 @@
 	import { Filesystem } from '@capacitor/filesystem';
 	import Input from '$lib/components/ui/Input.svelte';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
-	import { createPlayer, type PlayerTrack } from '$lib/audio/player.svelte';
+	import { createPlayer, type PlayerLoopMode, type PlayerTrack } from '$lib/audio/player.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import { bytesFromBase64, arrayBufferFromBytes } from '$lib/audio/fileResolver';
 	import type { MediaItem } from '$lib/models/media';
@@ -90,6 +90,12 @@
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
 	import { LIBRARY_RESCAN_EVENT, musicFavorites, registerMusicPlayerView } from '$lib/stores/musicView.svelte';
+	import { getDeckCommands, registerDeckCommands, type DeckApplyOptions } from '$lib/stores/deckCommands.svelte';
+	import { resolvePairingTrack } from '$lib/pairs/resolve';
+	import { activeSceneHeldByDeckA, reconcileActiveScene, setActivePositionSec } from '$lib/pairs/activeScene';
+	import { createPositionWriter, type PositionWriter } from '$lib/pairs/positionWriter';
+	import { pairings, setActivePair } from '$lib/pairs/pairings';
+	import type { PairingTrackRef } from '$lib/pairs/types';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
@@ -549,6 +555,13 @@
 		musicSettings.librarySource === 'drive' ? 'Google Drive' : deviceLibrary.deckFolderLabel
 	);
 
+	// ── the active scene's position writer (D3, S8) ──
+	// Deck A owns the moving half of a saved scene: its audiobook is what a resume
+	// continues, so this deck writes that row's position while it plays. Declared
+	// here because the cross-source stop below has to flush it before it stops;
+	// the writer itself is built by the effect further down.
+	let positionWriter: PositionWriter | null = null;
+
 	// ── register stop-callback for cross-view audio exclusivity ──
 	$effect(() => {
 		if (musicSettings.lastTrackTimestamp !== 0) {
@@ -559,6 +572,12 @@
 	$effect(() => {
 		const srcId = deck === 'A' ? 'musicA' as const : 'musicB' as const;
 		registerAudioSource(srcId, () => {
+			// Before `player.stop()`: `haltPlayback()` zeroes `state.currentTime`
+			// (`$lib/audio/player.svelte.ts:303-310`), so a flush afterwards would
+			// persist 0 over the scene's real position. This is the cross-source
+			// steal path (a podcast or radio claim), and it is the write that keeps a
+			// stolen scene resumable. A deck with no writer pays one null check.
+			positionWriter?.flushNow();
 			// Fully reset so the browser releases the audio channel —
 			// pause() alone can leave residual decoder state that
 			// causes brief overlap when a new source starts immediately.
@@ -572,6 +591,130 @@
 		// tab is already active, so "Return to music player" needs this.
 		return registerMusicPlayerView(() => {
 			showQueue = false;
+		});
+	});
+
+	// ── the Pairs tab's command seam (D1) ──
+	// Nothing outside this component can reach `player` (Q1/Q2), and the engine's
+	// handler slots are single-owner and gated on `displayedSource` (Q5), so a
+	// hidden deck cannot be driven through them. This deck therefore lends the
+	// panel four closures, keyed by its own deck id. None of them moves player
+	// state across the boundary: `capture` copies what it needs and `apply`
+	// answers with a status.
+	$effect(() => {
+		return registerDeckCommands(deck, {
+			capture() {
+				const index = player.state.currentIndex;
+				const track = player.state.tracks[index];
+				if (index < 0 || !track) return null;
+				return {
+					source: track.source,
+					positionSec: player.state.currentTime,
+					durationSec: player.state.duration,
+				};
+			},
+
+			async apply(ref: PairingTrackRef, positionSec: number, options: DeckApplyOptions = {}) {
+				// Resolution belongs to the deck because the library index lives here
+				// (D1 amendment). The live queue is a candidate too: a file can be playing
+				// after the library index dropped it (a rescan that has not run yet, a
+				// Drive ref materialised only for playback), and the queued object is the
+				// one whose URL is already resolved.
+				const file = resolvePairingTrack(ref, [
+					...allFiles,
+					...player.state.tracks.map((t) => t.source),
+				]);
+				if (!file) return 'missing';
+
+				// The same two calls a favourite or a folder tap makes, in the same order:
+				// `beginQueue` first so the session guard and the selection-loop flag are
+				// right, then `startPlayback`, which claims this deck's audio channel (D8)
+				// and returns false when the file will not play. No folder is named: a
+				// scene is not a library folder, and labelling the persisted library
+				// "Pairings" would outlive the listen (Settings, the reconnect banner, the
+				// rescan and cache labels all read `lastFolderName`).
+				// `suppressAlert` because the panel toasts, and a blocking `alert()` on a
+				// hidden tab would be unusable (D5).
+				beginQueue();
+				const started = await startPlayback([file], 0, {
+					preserveOrder: true,
+					loop: options.loop,
+					startAtSec: positionSec,
+					suppressAlert: true,
+				});
+				return started ? 'started' : 'missing';
+			},
+
+			stop() {
+				// The Pairs tab's "no background track" case: B has to go quiet when a
+				// scene without music starts. The same call the cross-source stop
+				// callback above makes, so the element is released rather than left
+				// paused with residual decoder state. The mirror effect below clears
+				// `mediaEngine.musicPlayingB` from the player's own `isPlaying`.
+				player.stop();
+			},
+
+			setLoop(mode: PlayerLoopMode | null) {
+				player.setLoop(mode);
+			},
+		});
+	});
+
+	// ── the position writer, deck A only (D3, S8) ──
+	// One writer for the deck that started the scene. Deck B returns before
+	// building anything, so it gains no timer and no visibility listener. The
+	// body reads no reactive state on purpose: it runs once on mount and the
+	// writer pulls what it needs at write time.
+	$effect(() => {
+		if (deck !== 'A') return;
+
+		const writer = createPositionWriter({
+			// The marker *and* the deck: a marker naming a scene whose audiobook deck A
+			// no longer holds is not a scene to write to. The store keeps the marker
+			// for its own reasons, so the deck confirms the track itself.
+			isActive: () =>
+				activeSceneHeldByDeckA({
+					activePairId: pairings.activePairId,
+					pairs: pairings.pairs,
+					deckA: getDeckCommands('A'),
+				}),
+			// The five-second tick writes while playing only; a deck that stopped
+			// would otherwise persist the 0 that `haltPlayback()` leaves behind.
+			isPlaying: () => player.state.isPlaying,
+			// A queue that ended halts the transport at 0, and the cross-source stop
+			// seam below flushes right after that. Only the player can tell that zero
+			// from a rewind to the start, and this is where it answers.
+			isHalted: () => player.isHalted(),
+			read: () => ({
+				positionSec: player.state.currentTime,
+				durationSec: player.state.duration,
+			}),
+			write: setActivePositionSec,
+		});
+
+		positionWriter = writer;
+		writer.start();
+
+		return () => {
+			writer.stop();
+			positionWriter = null;
+		};
+	});
+
+	// ── when the marker stops meaning anything (D3) ──
+	// The rule itself is in `$lib/pairs/activeScene.ts` so it is unit tested with
+	// fake deck commands; this effect is only the reactive wiring. Deck A drives
+	// it because deck A is the deck whose track decides whether the scene is
+	// still there at all.
+	$effect(() => {
+		if (deck !== 'A') return;
+
+		reconcileActiveScene({
+			activePairId: pairings.activePairId,
+			pairs: pairings.pairs,
+			deckA: getDeckCommands('A'),
+			deckB: getDeckCommands('B'),
+			setActivePair,
 		});
 	});
 
@@ -1069,10 +1212,17 @@
 	// ─────────────────────────────────────────────────────────────
 	/** Per-queue bookkeeping the module cannot know about: the session guard that
 	 *  stops a still-streaming folder scan from appending to a replaced queue, the
-	 *  folder label, the selection-loop flag and the user-picked-queue lock. */
-	function beginQueue(folder: string, options: { selectionLoop?: boolean } = {}) {
+	 *  folder label, the selection-loop flag and the user-picked-queue lock.
+	 *
+	 *  `folder` is the library folder this queue came from, and it is persisted as
+	 *  `musicSettings.lastFolderName`: Settings shows it, the reconnect banner
+	 *  names it, and the rescan and cache paths use it as the scan label. A queue
+	 *  that came from no folder (the Pairs panel's `apply`, which starts one file
+	 *  from a saved scene) therefore passes none, so the library keeps its real
+	 *  label instead of being renamed after the queue. */
+	function beginQueue(folder?: string, options: { selectionLoop?: boolean } = {}) {
 		queueSessionId += 1;
-		musicSettings.lastFolderName = folder;
+		if (folder !== undefined) musicSettings.lastFolderName = folder;
 			deviceLibrary.trackListLockedByUser = true;
 		mediaEngine.musicSelectionLoopActive = options.selectionLoop ?? false;
 	}
@@ -1082,12 +1232,22 @@
 	async function startPlayback(
 		files: StoredAudioFile[],
 		index: number,
-		options: { selectionLoop?: boolean; preserveOrder?: boolean; suppressAlert?: boolean } = {}
+		options: {
+			selectionLoop?: boolean;
+			preserveOrder?: boolean;
+			suppressAlert?: boolean;
+			/** Loop mode for the queue this starts. Absent keeps the global behaviour. */
+			loop?: PlayerLoopMode;
+			/** Position, in seconds, to start the queue's first track at. */
+			startAtSec?: number;
+		} = {}
 	): Promise<boolean> {
 		if (files.length === 0) return false;
 		await player.play(files, index, {
 			selectionLoop: options.selectionLoop,
 			preserveOrder: options.preserveOrder,
+			loop: options.loop,
+			startAtSec: options.startAtSec,
 		});
 		if (player.state.error) {
 			if (!options.suppressAlert) alert('Unable to load this track.');
@@ -1329,6 +1489,11 @@
 			void triggerPlaybackHaptic(false);
 			markUserPaused();
 			player.pause();
+			// D3: a pause is the moment the listener stopped, so the active scene
+			// takes the position now instead of at the next five-second tick. The
+			// marker is deliberately left in place: a paused scene is still the
+			// scene, and resuming must keep tracking it.
+			positionWriter?.flushNow();
 		} catch { /* haptics or player failure */ }
 	}
 
@@ -1430,6 +1595,10 @@
 
 	function handleSeekSeconds(seconds: number) {
 		player.seek(seconds);
+		// D3: a seek is a deliberate new position, so it is written at once. A
+		// slider drag fires this per pixel; the writer collapses the burst into one
+		// trailing write rather than rewriting the store on every event.
+		positionWriter?.flush();
 	}
 	function handleVolume(e: Event) {
 		const input = e.target as HTMLInputElement;

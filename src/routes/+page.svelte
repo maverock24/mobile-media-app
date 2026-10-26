@@ -5,6 +5,7 @@
 	import RadioView from '$lib/components/views/RadioView.svelte';
 	import WeatherView from '$lib/components/views/WeatherView.svelte';
 	import SettingsView from '$lib/components/views/SettingsView.svelte';
+	import PairsView from '$lib/components/views/PairsView.svelte';
 	import MiniPlayer from '$lib/components/ui/MiniPlayer.svelte';
 	import YoutubePanel from '$lib/components/ui/YoutubePanel.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
@@ -43,15 +44,20 @@
 		setActiveTab(tab);
 	}
 
-	// ── Music view sub-tabs (A / B / YouTube) ───────────────────
-	// The music view owns three tabs: Deck A, Deck B and the YouTube panel.
-	// Deck A is the default selection. The selection is *derived* from the
-	// engine's active deck and the YouTube panel's open state, so the
-	// MiniPlayer deck toggle and external YouTube requests (favorites,
-	// now-playing taps) stay reflected here without a second source of truth.
-	type MusicSubTab = 'A' | 'B' | 'youtube';
+	// ── Music view sub-tabs (A / B / Pairs / YouTube) ──────────
+	// The music view owns four tabs: Deck A, Deck B, the saved Pairs scenes
+	// and the YouTube panel. Deck A is the default selection. Deck selection
+	// is *derived* from the engine's active deck and the YouTube panel's open
+	// state, so the MiniPlayer deck toggle and external YouTube requests
+	// (favorites, now-playing taps) stay reflected here without a second
+	// source of truth. The Pairs tab is a separate flag because it is not a
+	// deck: `activeMusicDeck` keeps meaning "which deck the music controls
+	// act on", so selecting Pairs must not move it. YouTube wins by
+	// precedence, so every non-YouTube branch closes the panel.
+	type MusicSubTab = 'A' | 'B' | 'pairs' | 'youtube';
+	let musicPairsTab = $state(false);
 	const musicSubTab = $derived<MusicSubTab>(
-		youtubePanel.open ? 'youtube' : mediaEngine.activeMusicDeck
+		youtubePanel.open ? 'youtube' : musicPairsTab ? 'pairs' : mediaEngine.activeMusicDeck
 	);
 
 	function selectMusicSubTab(tab: MusicSubTab) {
@@ -59,7 +65,8 @@
 		if (tab === 'youtube') {
 			openYoutubePanel();
 		} else {
-			mediaEngine.activeMusicDeck = tab;
+			musicPairsTab = tab === 'pairs';
+			if (tab !== 'pairs') mediaEngine.activeMusicDeck = tab;
 			closeYoutubePanel();
 		}
 		void triggerTabHaptic();
@@ -204,7 +211,7 @@
 			YouTube requests stay in sync.
 		-->
 		<div class="absolute inset-0 overflow-hidden flex flex-col" class:hidden={activeTab !== 'music'}>
-			<!-- A / B / YouTube sub-tabs — Deck A is the default selection -->
+			<!-- A / B / Pairs / YouTube sub-tabs — Deck A is the default selection -->
 			<div class="flex shrink-0 border-b bg-background/95 backdrop-blur-sm" role="tablist" aria-label="Music player">
 				<button
 					role="tab"
@@ -220,6 +227,12 @@
 				>B</button>
 				<button
 					role="tab"
+					aria-selected={musicSubTab === 'pairs'}
+					class="flex-1 py-2.5 text-xs font-semibold tracking-wide transition-colors {musicSubTab === 'pairs' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => selectMusicSubTab('pairs')}
+				>Pairs</button>
+				<button
+					role="tab"
 					aria-selected={musicSubTab === 'youtube'}
 					class="flex-1 py-2.5 text-xs font-semibold tracking-wide transition-colors {musicSubTab === 'youtube' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'}"
 					onclick={() => selectMusicSubTab('youtube')}
@@ -233,6 +246,10 @@
 				</div>
 				<div class="absolute inset-0" class:hidden={musicSubTab !== 'B'}>
 					<Mp3PlayerView deck="B" {activeTab} />
+				</div>
+				<!-- Always mounted, like the decks, so a future scene list keeps its state. -->
+				<div class="absolute inset-0" class:hidden={musicSubTab !== 'pairs'}>
+					<PairsView />
 				</div>
 
 				<!--
