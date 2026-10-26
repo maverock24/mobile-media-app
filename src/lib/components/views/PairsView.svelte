@@ -1,10 +1,19 @@
 <script lang="ts">
 	import Button from '$lib/components/ui/Button.svelte';
 	import { Layers, Trash2 } from 'lucide-svelte';
-	import { pairings, removePairing, setActivePair } from '$lib/pairs/pairings';
+	import {
+		derivePairingName,
+		pairings,
+		removePairing,
+		setActivePair,
+		upsertPairing,
+	} from '$lib/pairs/pairings';
 	import { startPairing } from '$lib/pairs/startPairing';
 	import { formatPosition, formatVolume } from '$lib/pairs/format';
+	import { toTrackRef } from '$lib/pairs/resolve';
+	import { getDeckCommands } from '$lib/stores/deckCommands.svelte';
 	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
+	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import type { AbPairing } from '$lib/pairs/types';
 
@@ -12,12 +21,43 @@
 	// on deck B, so both can be resumed as one thing. The list renders
 	// `pairings.pairs` in array order, which the store keeps newest first.
 	// Tapping a row starts the scene (S7) and deliberately changes no tab state,
-	// so the human stays on this panel while both decks start behind it. Saving is
-	// not wired up yet (the header button stays disabled).
+	// so the human stays on this panel while both decks start behind it. Save (S9)
+	// reads both decks through their command seam and keeps one row per pair.
+
+	// D6: Save is live only while deck A has a track, and this is reactive because
+	// `capture()` reads the deck's own `$state` (its queue, time and duration).
+	const captureA = $derived(getDeckCommands('A')?.capture() ?? null);
+	const captureB = $derived(getDeckCommands('B')?.capture() ?? null);
 
 	/** The date a scene was last saved, in the user's locale. */
 	function savedOn(savedAt: number): string {
 		return new Date(savedAt).toLocaleDateString();
+	}
+
+	// The save (D6): deck A's file and position, deck B's file when it has one,
+	// and the current background volume and speed. `upsertPairing` decides whether
+	// this updates the existing row or adds one; the panel writes both top-level
+	// keys it returns, because `persisted()` tracks one read per key.
+	function save(): void {
+		const a = captureA;
+		if (!a) return;
+
+		const savedAt = Date.now();
+		const aRef = toTrackRef(a.source);
+		const bRef = captureB ? toTrackRef(captureB.source) : null;
+		const next = upsertPairing(pairings, {
+			a: aRef,
+			b: bRef,
+			positionSec: Math.floor(a.positionSec),
+			durationSec: Math.round(a.durationSec),
+			bVolume: musicSettings.deckBVolume,
+			bSpeed: musicSettings.deckBSpeed,
+			savedAt,
+		});
+		pairings.pairs = next.pairs;
+		pairings.nextId = next.nextId;
+
+		addToast({ message: `Saved "${derivePairingName(aRef, bRef, savedAt)}"`, type: 'info' });
 	}
 
 	// D5's toasts are raised inside `startPairing`, so this is only the tap. The
@@ -60,7 +100,7 @@
 	<!-- ── Header ───────────────────────────────────────────────── -->
 	<div class="shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b">
 		<h2 class="text-sm font-semibold">Pairs</h2>
-		<Button variant="outline" size="sm" disabled>Save</Button>
+		<Button variant="outline" size="sm" disabled={!captureA} onclick={save}>Save</Button>
 	</div>
 
 	<div class="flex-1 overflow-y-auto">

@@ -26,12 +26,12 @@
  *
  * Rune-free and factory-free on purpose (D10): the store object is injected
  * into every helper as a plain value, so the pure parts (`newestFirst`,
- * `trimPairings`) are unit tested without touching localStorage. `removePairing`
- * is the one write this phase owns (S6's delete button); save/upsert semantics
- * land in S9.
+ * `trimPairings`, `derivePairingName`, `upsertPairing`) are unit tested without
+ * touching localStorage. `removePairing` is the delete write (S6) and
+ * `upsertPairing` is the save one (S9), which the panel applies to the store.
  */
 import { persisted } from '$lib/persisted.svelte';
-import type { AbPairing } from './types';
+import type { AbPairing, PairingTrackRef } from './types';
 
 /** The localStorage key. Nothing else asserts this string, so the store test pins it. */
 export const PAIRINGS_KEY = 'ab-pairings';
@@ -67,6 +67,82 @@ export function newestFirst(pairs: readonly AbPairing[]): AbPairing[] {
  */
 export function trimPairings(state: PairingsState): PairingsState {
 	return { ...state, pairs: newestFirst(state.pairs).slice(0, MAX_PAIRINGS) };
+}
+
+/** A saved file's name without its extension: `Book One.m4a` -> `Book One`.
+ *  Deliberately not `parseFilename`: a pair is named by what the file is called,
+ *  not by its `artist - title` split. */
+function withoutExtension(name: string): string {
+	const dot = name.lastIndexOf('.');
+	return dot > 0 ? name.slice(0, dot) : name;
+}
+
+/**
+ * The auto name for a saved scene (D9): deck A's file name, deck B's file name
+ * when there is one, and the date of the save. `toLocaleDateString()` is the
+ * same call the row's date line makes, so the two never disagree.
+ */
+export function derivePairingName(
+	a: PairingTrackRef,
+	b: PairingTrackRef | null,
+	savedAt: number
+): string {
+	const date = new Date(savedAt).toLocaleDateString();
+	const aName = withoutExtension(a.name);
+	return b ? `${aName} + ${withoutExtension(b.name)}, ${date}` : `${aName}, ${date}`;
+}
+
+/** Everything one Save press knows about the scene. `id` is not here: whether a
+ *  row is new or updated is decided by the A and B refs, not by the caller. */
+export interface PairingCandidate {
+	a: PairingTrackRef;
+	b: PairingTrackRef | null;
+	positionSec: number;
+	durationSec: number;
+	bVolume: number;
+	bSpeed: number;
+	savedAt: number;
+}
+
+/** D6's dedupe key: the same audiobook and the same background track (or no
+ *  background track on both) is one row. A different B is a different scene. */
+function sameSources(pair: AbPairing, candidate: PairingCandidate): boolean {
+	return pair.a.key === candidate.a.key && (pair.b?.key ?? null) === (candidate.b?.key ?? null);
+}
+
+/**
+ * The next state after one Save press (D6, D9), newest first, capped at
+ * `MAX_PAIRINGS`.
+ *
+ * A pair with the same A ref and the same B ref is updated in place: it keeps
+ * its id, takes the candidate's position, duration, volume, speed and date, and
+ * moves to the front. Anything else is a new row with `nextId`, prepended, and
+ * `nextId` moves on. The cap is applied in memory as well as by `trim` so a
+ * 51-row list never disagrees with the 50-row blob that reloads it.
+ *
+ * Returns a new object and never mutates `state`, which is the live store when
+ * the panel calls this: the caller reassigns `pairs` and `nextId` itself.
+ */
+export function upsertPairing(state: PairingsState, candidate: PairingCandidate): PairingsState {
+	const index = state.pairs.findIndex((pair) => sameSources(pair, candidate));
+	const existing = index >= 0 ? state.pairs[index] : null;
+	const entry: AbPairing = {
+		id: existing ? existing.id : state.nextId,
+		name: derivePairingName(candidate.a, candidate.b, candidate.savedAt),
+		savedAt: candidate.savedAt,
+		a: candidate.a,
+		b: candidate.b,
+		bVolume: candidate.bVolume,
+		bSpeed: candidate.bSpeed,
+		positionSec: candidate.positionSec,
+		durationSec: candidate.durationSec,
+	};
+	const rest = index >= 0 ? state.pairs.filter((_, i) => i !== index) : state.pairs;
+	return {
+		...state,
+		pairs: newestFirst([entry, ...rest]).slice(0, MAX_PAIRINGS),
+		nextId: existing ? state.nextId : state.nextId + 1,
+	};
 }
 
 export const pairings = persisted(PAIRINGS_KEY, emptyPairings(), { trim: trimPairings });
