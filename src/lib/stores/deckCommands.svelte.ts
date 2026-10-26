@@ -20,12 +20,23 @@
  *    a remount needs.
  *  - **Reactive, unlike `musicView`'s `Set`.** The panel derives state (Save is
  *    disabled while deck A has nothing to capture, D6), so registration has to
- *    be observable. The holder is `$state.raw` rather than `$state`: a deep
+ *    be observable. The slots are `$state.raw` rather than `$state`: a deep
  *    proxy would wrap the registered object, and `getDeckCommands('A')` would
  *    stop being identical to the implementation the deck registered — which both
  *    the "last registration wins" rule and the stale-cleanup guard compare by
  *    identity.
+ *
+ *  - **Registration writes without reading.** One `$state.raw` per deck, not one
+ *    record holding both, because the view registers from an `$effect`: with a
+ *    record, `registerDeckCommands` had to read the record to spread it, and
+ *    Svelte re-runs an effect that writes state it read — at boot that was an
+ *    endless loop (`effect_update_depth_exceeded`, after which the whole app
+ *    stopped reacting). `untrack` around that read is not enough: Svelte tracks
+ *    writes too and still re-runs the writing effect, so the read has to be
+ *    absent altogether. Per-deck slots make the write path read-free; the only
+ *    read is `getDeckCommands`, which is what consumers want to depend on.
  */
+import { untrack } from 'svelte';
 import type { PlayerLoopMode } from '$lib/audio/player.svelte';
 import type { StoredAudioFile } from '$lib/models/music';
 import type { PairingTrackRef } from '$lib/pairs/types';
@@ -70,8 +81,23 @@ export interface DeckCommands {
 }
 
 /** Raw so the registered object keeps its identity; reassigned whole so a
- *  reader of `getDeckCommands` re-runs when a deck mounts or unmounts. */
-let decks = $state.raw<Record<DeckId, DeckCommands | null>>({ A: null, B: null });
+ *  reader of `getDeckCommands` re-runs when a deck mounts or unmounts. One per
+ *  deck so a registration touches only its own slot. */
+let slotA = $state.raw<DeckCommands | null>(null);
+let slotB = $state.raw<DeckCommands | null>(null);
+
+/** The write half of a slot, kept separate from the read half so registration
+ *  never reads the state it writes (see the header). */
+function writeSlot(deck: DeckId, impl: DeckCommands | null): void {
+	if (deck === 'A') slotA = impl;
+	else slotB = impl;
+}
+
+/** The read half. Reactive: reading it inside a `$derived`/`$effect` subscribes
+ *  the reader to that deck mounting or unmounting. */
+function readSlot(deck: DeckId): DeckCommands | null {
+	return deck === 'A' ? slotA : slotB;
+}
 
 /**
  * Claim a deck's slot. Returns the unregister function to hand to an `$effect`
@@ -79,17 +105,24 @@ let decks = $state.raw<Record<DeckId, DeckCommands | null>>({ A: null, B: null }
  * older cleanup then clears nothing — otherwise a remount's cleanup (or a
  * cleanup that fires after the next mount, which is how Svelte orders an
  * unmount/remount of the same component) would leave the deck looking dead.
+ *
+ * Reads nothing on the way in, so it is safe to call from the registration
+ * `$effect` itself; that is what keeps the effect from re-running on its own
+ * write.
  */
 export function registerDeckCommands(deck: DeckId, impl: DeckCommands): () => void {
-	decks = { ...decks, [deck]: impl };
+	writeSlot(deck, impl);
 	return () => {
-		if (decks[deck] !== impl) return;
-		decks = { ...decks, [deck]: null };
+		// The cleanup can run from inside the effect that owns it, so the "is this
+		// still my slot?" check is untracked: a tracked read here would make that
+		// effect depend on the slot it is about to clear.
+		if (untrack(() => readSlot(deck)) !== impl) return;
+		writeSlot(deck, null);
 	};
 }
 
 /** The commands for one deck, or `null` while that deck is not mounted. Read
  *  inside a `$derived`/`$effect` to react to a deck mounting or unmounting. */
 export function getDeckCommands(deck: DeckId): DeckCommands | null {
-	return decks[deck];
+	return readSlot(deck);
 }

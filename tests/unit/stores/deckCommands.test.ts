@@ -8,6 +8,8 @@
  * `tests/unit/pairs/resolve.test.ts`.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { flushSync, tick } from 'svelte';
+import { runInEffect } from './effectHarness.svelte';
 import type { StoredAudioFile } from '$lib/models/music';
 import type { PairingTrackRef } from '$lib/pairs/types';
 import {
@@ -120,5 +122,32 @@ describe('deckCommands registry', () => {
 		// registration; clearing the slot blindly would leave the deck dead.
 		unregisterFirst();
 		expect(getDeckCommands('A')).toBe(second);
+	});
+
+	it('registering from an $effect does not re-run that effect', async () => {
+		// The regression for the boot-time `effect_update_depth_exceeded`. The view
+		// registers its commands from an `$effect` (`Mp3PlayerView.svelte:604`), so
+		// registration must not read the slot it writes: Svelte 5 re-runs an effect
+		// that writes state it read, so a record spread (`{ ...decks, [deck]: impl }`)
+		// ran the effect forever and the app then ignored every click. This is the
+		// loop itself, not a proxy for it.
+		const runs = { n: 0 };
+		const a = fakeDeck('a.mp3');
+
+		const { destroy } = runInEffect(() => {
+			runs.n += 1;
+			return register('A', a);
+		});
+
+		await tick();
+		flushSync();
+
+		expect(runs.n).toBe(1);
+		expect(getDeckCommands('A')).toBe(a);
+
+		// Destroying the effect still runs the unregister: the view hands the slot
+		// back when it unmounts.
+		destroy();
+		expect(getDeckCommands('A')).toBeNull();
 	});
 });
