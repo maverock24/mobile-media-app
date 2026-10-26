@@ -92,7 +92,7 @@
 	import { LIBRARY_RESCAN_EVENT, musicFavorites, registerMusicPlayerView } from '$lib/stores/musicView.svelte';
 	import { getDeckCommands, registerDeckCommands, type DeckApplyOptions } from '$lib/stores/deckCommands.svelte';
 	import { resolvePairingTrack } from '$lib/pairs/resolve';
-	import { reconcileActiveScene, setActivePositionSec } from '$lib/pairs/activeScene';
+	import { activeSceneHeldByDeckA, reconcileActiveScene, setActivePositionSec } from '$lib/pairs/activeScene';
 	import { createPositionWriter, type PositionWriter } from '$lib/pairs/positionWriter';
 	import { pairings, setActivePair } from '$lib/pairs/pairings';
 	import type { PairingTrackRef } from '$lib/pairs/types';
@@ -627,12 +627,15 @@
 				if (!file) return 'missing';
 
 				// The same two calls a favourite or a folder tap makes, in the same order:
-				// `beginQueue` first so the queue label, the session guard and the
-				// selection-loop flag are right, then `startPlayback`, which claims this
-				// deck's audio channel (D8) and returns false when the file will not play.
+				// `beginQueue` first so the session guard and the selection-loop flag are
+				// right, then `startPlayback`, which claims this deck's audio channel (D8)
+				// and returns false when the file will not play. No folder is named: a
+				// scene is not a library folder, and labelling the persisted library
+				// "Pairings" would outlive the listen (Settings, the reconnect banner, the
+				// rescan and cache labels all read `lastFolderName`).
 				// `suppressAlert` because the panel toasts, and a blocking `alert()` on a
 				// hidden tab would be unusable (D5).
-				beginQueue('Pairings');
+				beginQueue();
 				const started = await startPlayback([file], 0, {
 					preserveOrder: true,
 					loop: options.loop,
@@ -666,12 +669,22 @@
 		if (deck !== 'A') return;
 
 		const writer = createPositionWriter({
-			// The store's marker, not "either deck is audible": a paused scene is
-			// still the active one, and only its row is ever written.
-			isActive: () => pairings.activePairId !== null,
+			// The marker *and* the deck: a marker naming a scene whose audiobook deck A
+			// no longer holds is not a scene to write to. The store keeps the marker
+			// for its own reasons, so the deck confirms the track itself.
+			isActive: () =>
+				activeSceneHeldByDeckA({
+					activePairId: pairings.activePairId,
+					pairs: pairings.pairs,
+					deckA: getDeckCommands('A'),
+				}),
 			// The five-second tick writes while playing only; a deck that stopped
 			// would otherwise persist the 0 that `haltPlayback()` leaves behind.
 			isPlaying: () => player.state.isPlaying,
+			// A queue that ended halts the transport at 0, and the cross-source stop
+			// seam below flushes right after that. Only the player can tell that zero
+			// from a rewind to the start, and this is where it answers.
+			isHalted: () => player.isHalted(),
 			read: () => ({
 				positionSec: player.state.currentTime,
 				durationSec: player.state.duration,
@@ -1199,10 +1212,17 @@
 	// ─────────────────────────────────────────────────────────────
 	/** Per-queue bookkeeping the module cannot know about: the session guard that
 	 *  stops a still-streaming folder scan from appending to a replaced queue, the
-	 *  folder label, the selection-loop flag and the user-picked-queue lock. */
-	function beginQueue(folder: string, options: { selectionLoop?: boolean } = {}) {
+	 *  folder label, the selection-loop flag and the user-picked-queue lock.
+	 *
+	 *  `folder` is the library folder this queue came from, and it is persisted as
+	 *  `musicSettings.lastFolderName`: Settings shows it, the reconnect banner
+	 *  names it, and the rescan and cache paths use it as the scan label. A queue
+	 *  that came from no folder (the Pairs panel's `apply`, which starts one file
+	 *  from a saved scene) therefore passes none, so the library keeps its real
+	 *  label instead of being renamed after the queue. */
+	function beginQueue(folder?: string, options: { selectionLoop?: boolean } = {}) {
 		queueSessionId += 1;
-		musicSettings.lastFolderName = folder;
+		if (folder !== undefined) musicSettings.lastFolderName = folder;
 			deviceLibrary.trackListLockedByUser = true;
 		mediaEngine.musicSelectionLoopActive = options.selectionLoop ?? false;
 	}

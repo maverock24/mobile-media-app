@@ -8,7 +8,7 @@
  * the module is evaluated.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { reconcileActiveScene } from '$lib/pairs/activeScene';
+import { reconcileActiveScene, activateSavedScene, activeSceneHeldByDeckA } from '$lib/pairs/activeScene';
 import { toTrackRef } from '$lib/pairs/resolve';
 import type { AbPairing } from '$lib/pairs/types';
 import type { DeckCommands } from '$lib/stores/deckCommands.svelte';
@@ -172,6 +172,70 @@ describe('reconcileActiveScene', () => {
 			})
 		).toBeNull();
 		expect(setActivePair).not.toHaveBeenCalled();
+	});
+});
+
+// ── the marker a save writes ───────────────────────────────────────────────
+// `PairsView.save()` calls `activateSavedScene` after the upsert, so these cases
+// pin the rule that made a scene saved while it played start tracking its
+// position instead of staying inactive until a tap.
+
+describe('activateSavedScene', () => {
+	it('marks a scene saved while it is playing active', () => {
+		const setActivePair = vi.fn();
+
+		// The save resolved deck A's track from its own capture, so the row it wrote
+		// is the scene deck A holds: marking it is what lets the position writer
+		// (whose `isActive` needs the marker) follow the playback.
+		const marked = activateSavedScene({
+			savedPair: pair7,
+			deckA: fakeDeck(BOOK),
+			setActivePair
+		});
+
+		expect(marked).toBe(7);
+		expect(setActivePair).toHaveBeenCalledWith(7);
+	});
+
+	it('leaves a save of a track deck A no longer holds inactive', () => {
+		const setActivePair = vi.fn();
+
+		// Deck A moved on between the capture and the write: the marker would point
+		// at a scene the reconcile rule clears on its next run, so it is not written.
+		expect(
+			activateSavedScene({ savedPair: pair7, deckA: fakeDeck(OTHER_BOOK), setActivePair })
+		).toBeNull();
+
+		// Deck A unmounted, and a save that could not name its row: nothing to mark.
+		expect(activateSavedScene({ savedPair: pair7, deckA: null, setActivePair })).toBeNull();
+		expect(activateSavedScene({ savedPair: null, deckA: fakeDeck(BOOK), setActivePair })).toBeNull();
+
+		expect(setActivePair).not.toHaveBeenCalled();
+	});
+});
+
+// ── the writer's activity check (MINOR 4) ───────────────────────────────────
+
+describe('activeSceneHeldByDeckA', () => {
+	it('is true only while deck A holds the marked scene', () => {
+		expect(
+			activeSceneHeldByDeckA({ activePairId: 7, pairs: [pair7, pair8], deckA: fakeDeck(BOOK) })
+		).toBe(true);
+
+		// A marker on its own is not enough: deck A holds another audiobook, so a
+		// write would land on a row whose book is not loaded here.
+		expect(
+			activeSceneHeldByDeckA({ activePairId: 7, pairs: [pair7, pair8], deckA: fakeDeck(OTHER_BOOK) })
+		).toBe(false);
+		expect(
+			activeSceneHeldByDeckA({ activePairId: 7, pairs: [pair8], deckA: fakeDeck(BOOK) })
+		).toBe(false);
+		expect(
+			activeSceneHeldByDeckA({ activePairId: 7, pairs: [pair7], deckA: fakeDeck(null) })
+		).toBe(false);
+		expect(
+			activeSceneHeldByDeckA({ activePairId: null, pairs: [pair7], deckA: fakeDeck(BOOK) })
+		).toBe(false);
 	});
 });
 

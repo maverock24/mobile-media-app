@@ -135,6 +135,12 @@ export interface Player {
 	 *  or found nothing playable, true when it changed track and began playback. */
 	prev(): Promise<boolean>;
 	seek(toSec: number): void;
+	/** Whether the transport sits at the zero `haltPlayback()` wrote and has not
+	 *  moved since: the end of a queue, `stop()`, `clear()`, or a replaced queue.
+	 *  A zero that came from a halt is not a position, so a caller that persists
+	 *  one (the pairs position writer) asks this before trusting a `0`.
+	 *  A seek, a real position report or playback clears it. */
+	isHalted(): boolean;
 	destroy(): void;
 }
 
@@ -213,6 +219,9 @@ export function createPlayer(opts: PlayerOptions): Player {
 	let lastTimeUpdate = 0;
 	let changingTrack = false;
 	let destroyed = false;
+	/** Set by `haltPlayback()`, cleared by a seek, by playback starting and by a
+	 *  real position report. `isHalted()` reads it. */
+	let halted = false;
 
 	// ── safePlay: retry play() on AbortError / timeout / sync throw, and on
 	//    native force-reload the src after retries are exhausted. ──────────────
@@ -304,6 +313,9 @@ export function createPlayer(opts: PlayerOptions): Player {
 		state.isPlaying = false;
 		state.isBuffering = false;
 		state.currentTime = 0;
+		// The `0` just written is a halt, not a position: remembered until
+		// something produces a real one (see `isHalted`).
+		halted = true;
 		const element = el();
 		element.pause();
 		element.currentTime = 0;
@@ -552,6 +564,8 @@ export function createPlayer(opts: PlayerOptions): Player {
 			if (now - lastTimeUpdate < THROTTLE_MS) return;
 			lastTimeUpdate = now;
 			state.currentTime = element.currentTime;
+			// A real position: whatever zero a halt left behind is gone.
+			if (element.currentTime > 0) halted = false;
 		});
 		element.addEventListener('loadedmetadata', () => {
 			const d = isFinite(element.duration) ? element.duration : 0;
@@ -563,7 +577,12 @@ export function createPlayer(opts: PlayerOptions): Player {
 			// After the duration mirror, so the clamp sees the real duration.
 			applyPendingStart(element);
 		});
-		element.addEventListener('play', () => { state.isPlaying = true; state.isBuffering = false; errorRetries = 0; });
+		element.addEventListener('play', () => {
+			state.isPlaying = true;
+			state.isBuffering = false;
+			errorRetries = 0;
+			halted = false;
+		});
 		element.addEventListener('pause', () => { state.isPlaying = false; settings.lastTrackTimestamp = 0; });
 		element.addEventListener('ended', () => {
 			state.isBuffering = false;
@@ -745,10 +764,14 @@ export function createPlayer(opts: PlayerOptions): Player {
 		},
 		seek(toSec) {
 			seeking = toSec;
+			// Deliberate, including a rewind to 0: that zero is a position, so a
+			// halt no longer describes the transport.
+			halted = false;
 			el().currentTime = toSec;
 			state.currentTime = toSec;
 			setTimeout(() => { seeking = null; }, 100);
 		},
+		isHalted() { return halted; },
 		destroy() {
 			destroyed = true;
 			controlsRoot?.();

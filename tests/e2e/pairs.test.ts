@@ -80,8 +80,10 @@ test.describe('Pairs sub-tab', () => {
 		// The delete affordance is a sibling button with an accessible name.
 		await expect(page.getByRole('button', { name: 'Delete Atomic Habits + Rain, 4.6.2026' })).toBeVisible();
 
-		// The panel mounts no player of its own: only the podcast and YouTube
-		// views own an <audio> element.
+		// The panel mounts no player of its own. These two DOM <audio> elements
+		// belong to PodcastView and YoutubePanel; the music decks create their
+		// elements with `new Audio()` in the player module and never append them, so
+		// a deck mounted behind the Pairs tab adds none.
 		await expect(page.locator('audio')).toHaveCount(2);
 	});
 });

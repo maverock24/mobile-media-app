@@ -42,6 +42,19 @@ export interface ActiveSceneDeps {
 	setActivePair: (id: number | null) => void;
 }
 
+/** Deck A's loaded track, or `null` when it has none. */
+function aFileOf(deckA: DeckCommands | null) {
+	return deckA?.capture()?.source ?? null;
+}
+
+/** Whether deck A's loaded track is this scene's audiobook. The one check two
+ *  rules share: the marker survives only while it holds, and the position writer
+ *  writes only while it holds. */
+function deckAHolds(pair: AbPairing | null, deckA: DeckCommands | null): boolean {
+	const aFile = aFileOf(deckA);
+	return Boolean(pair && aFile && getStoredFileKey(aFile) === pair.a.key);
+}
+
 /**
  * The id the marker should keep, after checking the decks against it.
  *
@@ -56,17 +69,75 @@ export function reconcileActiveScene(deps: ActiveSceneDeps): number | null {
 	if (id === null) return null;
 
 	const pair = deps.pairs.find((candidate) => candidate.id === id) ?? null;
-	const aFile = deps.deckA?.capture()?.source ?? null;
 
-	if (pair && aFile && getStoredFileKey(aFile) === pair.a.key) return id;
+	if (deckAHolds(pair, deps.deckA)) return id;
 
 	// Deck A is empty (unloaded, or never loaded): the scene still means
 	// something while deck B holds its background track, and nothing at all once
 	// both are empty.
-	if (pair && !aFile && deps.deckB?.capture()) return id;
+	if (pair && !aFileOf(deps.deckA) && deps.deckB?.capture()) return id;
 
 	deps.setActivePair(null);
 	return null;
+}
+
+/** Everything the writer's activity check reads. */
+export interface ActiveSceneHeldDeps {
+	/** The store's current marker. */
+	activePairId: number | null;
+	/** The saved rows, to find the marker's scene and its audiobook ref. */
+	pairs: readonly AbPairing[];
+	/** Deck A's commands, or `null` while that deck is not mounted. */
+	deckA: DeckCommands | null;
+}
+
+/**
+ * Whether the marked scene is the one deck A holds — the position writer's
+ * `isActive` (S8).
+ *
+ * The marker alone is not enough: it also says "this row is marked", and a
+ * marker can outlive the audiobook deck A holds for a tick (a deck that loaded
+ * another track between the reconcile effect and a write, a deck that unmounted).
+ * `capture()` is the deck's own truth, so a write never lands on a row whose
+ * audiobook is not loaded here. This is `reconcileActiveScene`'s first rule
+ * without its write: an `isActive` read must not mutate the store to decide.
+ */
+export function activeSceneHeldByDeckA(deps: ActiveSceneHeldDeps): boolean {
+	const id = deps.activePairId;
+	if (id === null) return false;
+	const pair = deps.pairs.find((candidate) => candidate.id === id) ?? null;
+	return deckAHolds(pair, deps.deckA);
+}
+
+/** Everything the save-time marker rule reads. */
+export interface SavedSceneDeps {
+	/** The row the upsert wrote, or `null` when no row can be named — a save must
+	 *  not mark a scene it cannot point at. */
+	savedPair: AbPairing | null;
+	/** Deck A's commands, or `null` while that deck is not mounted. */
+	deckA: DeckCommands | null;
+	/** The store's setter. Called with the row's id when deck A holds it. */
+	setActivePair: (id: number | null) => void;
+}
+
+/**
+ * Mark the row a save just wrote as the active scene, when it is the scene deck A
+ * holds. Returns the new marker, or `null` when the row is not deck A's.
+ *
+ * Without this a scene saved while it played was never active: `save()` writes
+ * the row but no marker, and the reconcile rule clears a marker whose audiobook
+ * deck A does not hold — so the writer's `isActive` stayed false and the row's
+ * position never followed playback until the human tapped the row.
+ *
+ * The check is the reconcile rule's, not the caller's word for it: the caller
+ * knows the save resolved deck A's track a moment ago, but "a moment ago" is not
+ * "now", and a marker written for a track the deck no longer holds is cleared on
+ * the next reconcile anyway.
+ */
+export function activateSavedScene(deps: SavedSceneDeps): number | null {
+	if (!deps.savedPair || !deckAHolds(deps.savedPair, deps.deckA)) return null;
+	deps.setActivePair(deps.savedPair.id);
+	return deps.savedPair.id;
 }
 
 /**

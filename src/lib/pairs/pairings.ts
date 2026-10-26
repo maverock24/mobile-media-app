@@ -106,8 +106,27 @@ export interface PairingCandidate {
 
 /** D6's dedupe key: the same audiobook and the same background track (or no
  *  background track on both) is one row. A different B is a different scene. */
-function sameSources(pair: AbPairing, candidate: PairingCandidate): boolean {
-	return pair.a.key === candidate.a.key && (pair.b?.key ?? null) === (candidate.b?.key ?? null);
+function sameSources(
+	pair: AbPairing,
+	a: PairingTrackRef,
+	b: PairingTrackRef | null
+): boolean {
+	return pair.a.key === a.key && (pair.b?.key ?? null) === (b?.key ?? null);
+}
+
+/**
+ * The row a save with these two refs can resolve to: the same D6 key
+ * `upsertPairing` dedupes on, as a read. The panel needs it after an upsert
+ * because a save may have inserted a row whose id it does not know, and the id
+ * is what the active-scene marker names (D3). `null` when no row matches, which
+ * only a caller that passed refs the upsert did not see can produce.
+ */
+export function findPairing(
+	pairs: readonly AbPairing[],
+	a: PairingTrackRef,
+	b: PairingTrackRef | null
+): AbPairing | null {
+	return pairs.find((pair) => sameSources(pair, a, b)) ?? null;
 }
 
 /**
@@ -124,7 +143,7 @@ function sameSources(pair: AbPairing, candidate: PairingCandidate): boolean {
  * the panel calls this: the caller reassigns `pairs` and `nextId` itself.
  */
 export function upsertPairing(state: PairingsState, candidate: PairingCandidate): PairingsState {
-	const index = state.pairs.findIndex((pair) => sameSources(pair, candidate));
+	const index = state.pairs.findIndex((pair) => sameSources(pair, candidate.a, candidate.b));
 	const existing = index >= 0 ? state.pairs[index] : null;
 	const entry: AbPairing = {
 		id: existing ? existing.id : state.nextId,

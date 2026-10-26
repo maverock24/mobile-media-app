@@ -22,6 +22,12 @@
  * `pending` and written by the next tick, even when the deck has stopped
  * playing by then.
  *
+ * **Never a halted zero.** The one number that must never reach the store is the
+ * `0` that `haltPlayback()` writes when a queue ends. Every flush point can see
+ * it — the cross-source stop seam flushes just before `player.stop()`, which
+ * halts too — so `isHalted()` drops a zero at write time and a rewind to the
+ * start (a seek, which clears the flag) still persists.
+ *
  * **Only the active scene.** The writer never decides which row to write: the
  * injected `isActive` says whether the deck still holds the scene the store has
  * marked active, and a false read makes every entry point a no-op. Nothing here
@@ -44,6 +50,13 @@ export interface PositionWriterDeps {
 	 *  only while true; a deck that stopped would otherwise persist the `0` that
 	 *  `haltPlayback()` leaves behind. */
 	isPlaying: () => boolean;
+	/** Whether the deck's zero came from a halt rather than a rewind. A queue that
+	 *  ends, and every `stop()`/`clear()`, zero the transport
+	 *  (`$lib/audio/player.svelte.ts` `haltPlayback()`), and the cross-source stop
+	 *  seam flushes right after one of those. Only the deck can tell that zero from
+	 *  a deliberate rewind, so it answers here and the writer never guesses: a zero
+	 *  read while this is true is dropped, at every entry point. */
+	isHalted: () => boolean;
 	/** The deck's position and duration, read at write time. */
 	read: () => DeckPosition;
 	/** Persist the position of the active scene. */
@@ -119,6 +132,10 @@ export function createPositionWriter(deps: PositionWriterDeps): PositionWriter {
 		pending = false;
 		if (!deps.isActive()) return;
 		const next = deps.read();
+		// A zero the deck reports as halted is not a position: it is the reset a
+		// finished queue or a stop left behind. A deliberate rewind to the start is
+		// the deck's to distinguish, and it does — `isHalted()` is false there.
+		if (next.positionSec <= 0 && deps.isHalted()) return;
 		if (
 			lastWritten &&
 			lastWritten.positionSec === next.positionSec &&

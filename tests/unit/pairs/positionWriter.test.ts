@@ -18,7 +18,14 @@ import {
 } from '$lib/pairs/positionWriter';
 
 interface Harness {
-	state: { positionSec: number; durationSec: number; playing: boolean; active: boolean };
+	state: {
+		positionSec: number;
+		durationSec: number;
+		playing: boolean;
+		active: boolean;
+		/** The deck's own halt signal: true while its zero is a halt, not a rewind. */
+		halted: boolean;
+	};
 	written: DeckPosition[];
 	intervals: number[];
 	cancelled: { ticker: number; hidden: number };
@@ -33,7 +40,13 @@ interface Harness {
 }
 
 function makeHarness(options: { documentHidden?: boolean } = {}): Harness {
-	const state = { positionSec: 0, durationSec: 3600, playing: true, active: true };
+	const state = {
+		positionSec: 0,
+		durationSec: 3600,
+		playing: true,
+		active: true,
+		halted: false
+	};
 	const written: DeckPosition[] = [];
 	const intervals: number[] = [];
 	const cancelled = { ticker: 0, hidden: 0 };
@@ -44,6 +57,7 @@ function makeHarness(options: { documentHidden?: boolean } = {}): Harness {
 	const deps: PositionWriterDeps = {
 		isActive: () => state.active,
 		isPlaying: () => state.playing,
+		isHalted: () => state.halted,
 		read: () => ({ positionSec: state.positionSec, durationSec: state.durationSec }),
 		write: (positionSec, durationSec) => {
 			written.push({ positionSec, durationSec });
@@ -143,6 +157,44 @@ describe('positionWriter', () => {
 		expect(harness.written).toEqual([{ positionSec: 42, durationSec: 3600 }]);
 	});
 
+	it('does not persist a zero from a halt', () => {
+		const harness = makeHarness();
+		harness.writer.start();
+
+		// The scene's real position, written by a pause.
+		harness.state.positionSec = 42;
+		harness.writer.flushNow();
+		expect(harness.written).toEqual([{ positionSec: 42, durationSec: 3600 }]);
+
+		// The queue ended: `haltPlayback()` zeroed the transport, and the
+		// cross-source stop seam fires right after. Every entry point must leave the
+		// row's real position alone, because 0 is not where the book stopped.
+		harness.state.playing = false;
+		harness.state.positionSec = 0;
+		harness.state.halted = true;
+		harness.writer.flushNow();
+		harness.writer.flush();
+		harness.fireHidden();
+		harness.advanceClock(POSITION_BURST_MS * 2);
+		harness.writer.flush();
+		harness.fireTick();
+
+		expect(harness.written).toEqual([{ positionSec: 42, durationSec: 3600 }]);
+	});
+
+	it('persists a deliberate seek to zero', () => {
+		const harness = makeHarness();
+		harness.writer.start();
+
+		// The listener dragged the slider back to the start: the deck reports a
+		// position, not a halt, so the 0 is written.
+		harness.state.positionSec = 0;
+		harness.state.halted = false;
+		harness.writer.flush();
+
+		expect(harness.written).toEqual([{ positionSec: 0, durationSec: 3600 }]);
+	});
+
 	it('writes immediately on seek and coalesces a burst', () => {
 		const harness = makeHarness();
 		harness.writer.start();
@@ -224,6 +276,7 @@ describe('positionWriter', () => {
 		const writer = createPositionWriter({
 			isActive: () => false,
 			isPlaying: () => true,
+			isHalted: () => false,
 			read,
 			write,
 			ticker: () => () => {},

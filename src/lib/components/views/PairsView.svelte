@@ -3,12 +3,16 @@
 	import { Layers, Trash2 } from 'lucide-svelte';
 	import {
 		derivePairingName,
+		findPairing,
 		pairings,
 		removePairing,
+		setActivePair,
 		upsertPairing,
 	} from '$lib/pairs/pairings';
+	import { activateSavedScene } from '$lib/pairs/activeScene';
 	import { startPairing } from '$lib/pairs/startPairing';
-	import { formatPosition, formatVolume } from '$lib/pairs/format';
+	import { formatVolume } from '$lib/pairs/format';
+	import { formatClock } from '$lib/models/music';
 	import { toTrackRef } from '$lib/pairs/resolve';
 	import { getDeckCommands } from '$lib/stores/deckCommands.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
@@ -26,11 +30,6 @@
 	// `capture()` reads the deck's own `$state` (its queue, time and duration).
 	const captureA = $derived(getDeckCommands('A')?.capture() ?? null);
 	const captureB = $derived(getDeckCommands('B')?.capture() ?? null);
-
-	/** The date a scene was last saved, in the user's locale. */
-	function savedOn(savedAt: number): string {
-		return new Date(savedAt).toLocaleDateString();
-	}
 
 	// The save (D6): deck A's file and position, deck B's file when it has one,
 	// and the current background volume and speed. `upsertPairing` decides whether
@@ -54,6 +53,15 @@
 		});
 		pairings.pairs = next.pairs;
 		pairings.nextId = next.nextId;
+
+		// D3: a scene saved while it is playing is the one deck A holds, so the
+		// save marks it active. Without this the new row was never the active
+		// scene, and its position did not follow playback until a tap started it.
+		activateSavedScene({
+			savedPair: findPairing(next.pairs, aRef, bRef),
+			deckA: getDeckCommands('A'),
+			setActivePair,
+		});
 
 		addToast({ message: `Saved "${derivePairingName(aRef, bRef, savedAt)}"`, type: 'info' });
 	}
@@ -124,11 +132,10 @@
 						<span class="flex-1 min-w-0">
 							<span class="block font-semibold text-[0.95rem] leading-tight truncate">{pair.name}</span>
 							<span class="block text-xs text-muted-foreground truncate">
-								{formatPosition(pair.positionSec)}{pair.durationSec > 0 ? ` / ${formatPosition(pair.durationSec)}` : ''}
+								{formatClock(pair.positionSec)}{pair.durationSec > 0 ? ` / ${formatClock(pair.durationSec)}` : ''}
 								· {formatVolume(pair.bVolume)}
 								· {pair.b ? pair.b.name : 'no background track'}
 							</span>
-							<span class="block text-xs text-muted-foreground">{savedOn(pair.savedAt)}</span>
 						</span>
 					</button>
 					<!-- A sibling, never a child, of the row button: nesting buttons is
