@@ -2,12 +2,36 @@
  * Pairs sub-tab — the fourth music tab, between B and YouTube.
  *
  * The web build has no native library, so these tests reach the tab through the
- * real UI and assert on rendered text only. Nothing here seeds the pairings
- * store: the tab owns an empty state at this stage and the row list lands in a
- * later phase.
+ * real UI and assert on rendered text only. The saved-scene row is seeded into
+ * `ab-pairings` with `addInitScript`, using native-source refs: they carry no
+ * live `File`, so the payload is serialisable and needs no library index.
  */
 import { test, expect } from '@playwright/test';
 import { goToTab } from './helpers';
+
+const PAIR = {
+	id: 7,
+	name: 'Atomic Habits + Rain, 4.6.2026',
+	savedAt: 1775433600000,
+	a: {
+		key: 'n:books/Atomic Habits.mp3',
+		name: 'Atomic Habits.mp3',
+		relativePath: 'books/Atomic Habits.mp3',
+		source: 'native',
+		path: '/storage/emulated/0/Books/Atomic Habits.mp3',
+	},
+	b: {
+		key: 'n:music/Rain.mp3',
+		name: 'Rain.mp3',
+		relativePath: 'music/Rain.mp3',
+		source: 'native',
+		path: '/storage/emulated/0/Music/Rain.mp3',
+	},
+	bVolume: 40,
+	bSpeed: 0.9,
+	positionSec: 125,
+	durationSec: 3600,
+};
 
 test.describe('Pairs sub-tab', () => {
 	test('the Pairs tab opens and shows its empty state', async ({ page }) => {
@@ -32,5 +56,32 @@ test.describe('Pairs sub-tab', () => {
 		// ...and tapping a deck tab leaves the pairs panel behind.
 		await page.getByRole('tab', { name: 'A', exact: true }).click();
 		await expect(page.getByText('No pairings yet.')).toBeHidden();
+	});
+
+	test('renders a saved pairing with its position and a delete button', async ({ page }) => {
+		await page.addInitScript((pair) => {
+			localStorage.setItem('ab-pairings', JSON.stringify({ pairs: [pair], nextId: 8, activePairId: null }));
+		}, PAIR);
+
+		await page.goto('/');
+		await goToTab(page, 'Music');
+		await page.getByRole('tab', { name: 'Pairs', exact: true }).click();
+
+		// The rows replace the empty state.
+		await expect(page.getByText('No pairings yet.')).toBeHidden();
+
+		// Anchored: the delete button's accessible name also contains the pair name.
+		const row = page.getByRole('button', { name: /^Atomic Habits \+ Rain, 4\.6\.2026/ });
+		await expect(row).toBeVisible();
+		// Position 125 s over a one-hour duration, and deck B's volume.
+		await expect(row).toContainText('2:05 / 1:00:00');
+		await expect(row).toContainText('40%');
+
+		// The delete affordance is a sibling button with an accessible name.
+		await expect(page.getByRole('button', { name: 'Delete Atomic Habits + Rain, 4.6.2026' })).toBeVisible();
+
+		// The panel mounts no player of its own: only the podcast and YouTube
+		// views own an <audio> element.
+		await expect(page.locator('audio')).toHaveCount(2);
 	});
 });

@@ -26,8 +26,9 @@
  *
  * Rune-free and factory-free on purpose (D10): the store object is injected
  * into every helper as a plain value, so the pure parts (`newestFirst`,
- * `trimPairings`) are unit tested without touching localStorage. This phase
- * adds no save/delete/upsert semantics; a later phase owns those.
+ * `trimPairings`) are unit tested without touching localStorage. `removePairing`
+ * is the one write this phase owns (S6's delete button); save/upsert semantics
+ * land in S9.
  */
 import { persisted } from '$lib/persisted.svelte';
 import type { AbPairing } from './types';
@@ -69,6 +70,20 @@ export function trimPairings(state: PairingsState): PairingsState {
 }
 
 export const pairings = persisted(PAIRINGS_KEY, emptyPairings(), { trim: trimPairings });
+
+/**
+ * Drop one row and persist the shorter list.
+ *
+ * Reassigns `pairs` instead of splicing it in place: `persisted()` tracks one
+ * read per top-level key, so only a reassignment schedules a flush. Clearing
+ * `activePairId` when it names the deleted row keeps the position writer (S8)
+ * from writing to a scene that no longer exists — a rule the plan puts here
+ * rather than in the panel.
+ */
+export function removePairing(id: number): void {
+	pairings.pairs = pairings.pairs.filter((pair) => pair.id !== id);
+	if (pairings.activePairId === id) pairings.activePairId = null;
+}
 
 // Load-time normalisation, in the style of `appSettings.listTileTone` and the
 // `playbackSpeed` migration (`settings.svelte.ts:20`, `:62-68`): enforce

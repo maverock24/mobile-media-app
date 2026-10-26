@@ -81,4 +81,46 @@ describe('pairings store', () => {
 		expect(pairings.nextId).toBe(4);
 		expect(pairings.activePairId).toBeNull();
 	});
+
+	it('removes one row and shrinks the stored payload', async () => {
+		localStorage.setItem(
+			KEY,
+			JSON.stringify({
+				pairs: [makePair(1, 1000), makePair(2, 3000)],
+				nextId: 3,
+				activePairId: null,
+			})
+		);
+
+		const { pairings, removePairing } = await loadStore();
+		expect(pairings.pairs).toHaveLength(2);
+
+		removePairing(2);
+
+		expect(pairings.pairs.map((pair) => pair.id)).toEqual([1]);
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const stored = JSON.parse(localStorage.getItem(KEY)!);
+		expect(stored.pairs).toHaveLength(1);
+		expect(stored.pairs.some((pair: AbPairing) => pair.id === 2)).toBe(false);
+	});
+
+	it('clears the active pointer when the active row is deleted', async () => {
+		localStorage.setItem(
+			KEY,
+			JSON.stringify({
+				pairs: [makePair(1, 1000), makePair(2, 3000)],
+				nextId: 3,
+				activePairId: 2,
+			})
+		);
+
+		const { pairings, removePairing } = await loadStore();
+
+		// Without this, S8's position writer keeps writing to a row that is gone.
+		removePairing(2);
+
+		expect(pairings.activePairId).toBeNull();
+	});
 });
