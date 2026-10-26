@@ -114,6 +114,11 @@ export interface Player {
 	play(tracks: StoredAudioFile[], startIndex?: number, options?: PlayerQueueOptions): Promise<void>;
 	/** Replace the queue without touching the element (no playback side effects). */
 	load(tracks: StoredAudioFile[], options?: PlayerLoadOptions): void;
+	/** Change the loop mode of the queue already loaded, without touching the
+	 *  element or the queue contents. `null` restores the global behaviour (the
+	 *  repeat setting and the live selection loop), which is what a queue loaded
+	 *  without a `loop` option has. */
+	setLoop(mode: PlayerLoopMode | null): void;
 	/** Merge files into the queue, keeping the URLs of files already queued. */
 	append(files: StoredAudioFile[]): void;
 	/** Stop, unload the element and drop the queue. */
@@ -621,6 +626,9 @@ export function createPlayer(opts: PlayerOptions): Player {
 		},
 		load(tracks, options = {}) {
 			loadQueue(tracks, options);
+		},
+		setLoop(mode) {
+			queueLoop = mode;
 		},
 		append(files) {
 			if (files.length === 0 || destroyed) return;

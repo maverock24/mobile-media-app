@@ -692,6 +692,34 @@ describe('player — per-queue loop mode', () => {
 
 		expect(advancing.state.currentIndex).toBe(1);
 	});
+
+	it('setLoop retargets the loaded queue, and null returns to the global behaviour', async () => {
+		// Global repeat is off and the queue declared no mode, so it would advance.
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0);
+		await flush();
+		audio.emit('play');
+
+		// The deck switches the already-loaded queue to repeat-one.
+		player.setLoop('one');
+		audio.currentTime = 10;
+		const playsBefore = audio.playCalls;
+
+		audio.emit('ended');
+		await flush();
+
+		expect(state.currentIndex).toBe(0);
+		expect(audio.currentTime).toBe(0);
+		expect(audio.playCalls).toBeGreaterThan(playsBefore);
+
+		// null hands the decision back to the global setting: repeat is off.
+		player.setLoop(null);
+		audio.emit('ended');
+		await flush();
+
+		expect(state.currentIndex).toBe(1);
+		expect(audio.src).toBe('blob:b.mp3');
+	});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

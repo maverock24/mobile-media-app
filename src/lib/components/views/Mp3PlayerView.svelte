@@ -6,7 +6,7 @@
 	import { Filesystem } from '@capacitor/filesystem';
 	import Input from '$lib/components/ui/Input.svelte';
 	import MusicEqPanel from '$lib/components/ui/MusicEqPanel.svelte';
-	import { createPlayer, type PlayerTrack } from '$lib/audio/player.svelte';
+	import { createPlayer, type PlayerLoopMode, type PlayerTrack } from '$lib/audio/player.svelte';
 	import { createEqFilterChain, applyEqGains } from '$lib/audio/equalizer';
 	import { bytesFromBase64, arrayBufferFromBytes } from '$lib/audio/fileResolver';
 	import type { MediaItem } from '$lib/models/media';
@@ -90,6 +90,9 @@
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
 	import { LIBRARY_RESCAN_EVENT, musicFavorites, registerMusicPlayerView } from '$lib/stores/musicView.svelte';
+	import { registerDeckCommands, type DeckApplyOptions } from '$lib/stores/deckCommands.svelte';
+	import { resolvePairingTrack } from '$lib/pairs/resolve';
+	import type { PairingTrackRef } from '$lib/pairs/types';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
 		Volume2, VolumeX, FolderOpen, Music2,
@@ -572,6 +575,60 @@
 		// tab is already active, so "Return to music player" needs this.
 		return registerMusicPlayerView(() => {
 			showQueue = false;
+		});
+	});
+
+	// ── the Pairs tab's command seam (D1) ──
+	// Nothing outside this component can reach `player` (Q1/Q2), and the engine's
+	// handler slots are single-owner and gated on `displayedSource` (Q5), so a
+	// hidden deck cannot be driven through them. This deck therefore lends the
+	// panel three closures, keyed by its own deck id. None of them moves player
+	// state across the boundary: `capture` copies what it needs and `apply`
+	// answers with a status.
+	$effect(() => {
+		return registerDeckCommands(deck, {
+			capture() {
+				const index = player.state.currentIndex;
+				const track = player.state.tracks[index];
+				if (index < 0 || !track) return null;
+				return {
+					source: track.source,
+					positionSec: player.state.currentTime,
+					durationSec: player.state.duration,
+				};
+			},
+
+			async apply(ref: PairingTrackRef, positionSec: number, options: DeckApplyOptions = {}) {
+				// Resolution belongs to the deck because the library index lives here
+				// (D1 amendment). The live queue is a candidate too: a file can be playing
+				// after the library index dropped it (a rescan that has not run yet, a
+				// Drive ref materialised only for playback), and the queued object is the
+				// one whose URL is already resolved.
+				const file = resolvePairingTrack(ref, [
+					...allFiles,
+					...player.state.tracks.map((t) => t.source),
+				]);
+				if (!file) return 'missing';
+
+				// The same two calls a favourite or a folder tap makes, in the same order:
+				// `beginQueue` first so the queue label, the session guard and the
+				// selection-loop flag are right, then `startPlayback`, which claims this
+				// deck's audio channel (D8) and returns false when the file will not play.
+				// `suppressAlert` because the panel toasts, and a blocking `alert()` on a
+				// hidden tab would be unusable (D5).
+				beginQueue('Pairings');
+				const started = await startPlayback([file], 0, {
+					preserveOrder: true,
+					loop: options.loop,
+					startAtSec: positionSec,
+					suppressAlert: true,
+				});
+				return started ? 'started' : 'missing';
+			},
+
+			setLoop(mode: PlayerLoopMode | null) {
+				player.setLoop(mode);
+			},
 		});
 	});
 
@@ -1082,12 +1139,22 @@
 	async function startPlayback(
 		files: StoredAudioFile[],
 		index: number,
-		options: { selectionLoop?: boolean; preserveOrder?: boolean; suppressAlert?: boolean } = {}
+		options: {
+			selectionLoop?: boolean;
+			preserveOrder?: boolean;
+			suppressAlert?: boolean;
+			/** Loop mode for the queue this starts. Absent keeps the global behaviour. */
+			loop?: PlayerLoopMode;
+			/** Position, in seconds, to start the queue's first track at. */
+			startAtSec?: number;
+		} = {}
 	): Promise<boolean> {
 		if (files.length === 0) return false;
 		await player.play(files, index, {
 			selectionLoop: options.selectionLoop,
 			preserveOrder: options.preserveOrder,
+			loop: options.loop,
+			startAtSec: options.startAtSec,
 		});
 		if (player.state.error) {
 			if (!options.suppressAlert) alert('Unable to load this track.');
