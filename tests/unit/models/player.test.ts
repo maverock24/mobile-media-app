@@ -693,3 +693,108 @@ describe('player — per-queue loop mode', () => {
 		expect(advancing.state.currentIndex).toBe(1);
 	});
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Start position. A queue can ask to begin its first track at a position, so a
+// saved scene can resume an audiobook where the listener stopped. The seek waits
+// for the element's metadata, fires once, and is consumed there: a later track
+// change must not seek again, and a superseded load must not seek at all.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('player — start position', () => {
+	it('seeks to startAtSec once the metadata is known', async () => {
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0, { startAtSec: 42 });
+		await flush();
+		// Nothing is seeked before the element reports the track's duration.
+		expect(audio.currentTime).toBe(0);
+
+		audio.duration = 600;
+		audio.emit('loadedmetadata');
+
+		expect(audio.currentTime).toBe(42);
+		expect(state.currentTime).toBe(42);
+	});
+
+	it('does not re-seek on the next track', async () => {
+		const files = [mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')];
+
+		// Skipped before the first track ever reported its metadata: the armed seek
+		// must go with the track it belonged to.
+		const skipped = makePlayer();
+		await skipped.player.play(files, 0, { startAtSec: 42 });
+		await flush();
+		await skipped.player.next();
+		await flush();
+		expect(skipped.state.currentIndex).toBe(1);
+		skipped.audio.currentTime = 0;
+		skipped.audio.duration = 600;
+		skipped.audio.emit('loadedmetadata');
+		expect(skipped.audio.currentTime).toBe(0);
+		expect(skipped.state.currentTime).toBe(0);
+
+		// Seeked, then skipped: the start position was consumed when it fired.
+		const seeking = makePlayer();
+		await seeking.player.play(files, 0, { startAtSec: 42 });
+		await flush();
+		seeking.audio.duration = 600;
+		seeking.audio.emit('loadedmetadata');
+		expect(seeking.audio.currentTime).toBe(42);
+
+		await seeking.player.next();
+		await flush();
+		expect(seeking.state.currentIndex).toBe(1);
+		seeking.audio.currentTime = 0;
+		seeking.audio.duration = 600;
+		seeking.audio.emit('loadedmetadata');
+		expect(seeking.audio.currentTime).toBe(0);
+		expect(seeking.state.currentTime).toBe(0);
+	});
+
+	it('drops the pending seek when the load is superseded', async () => {
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a')], 0, { startAtSec: 42 });
+		await flush();
+
+		// The listener picks another queue before the first track reported its
+		// metadata. load() deliberately leaves the element running, so that stale
+		// metadata can still arrive and must not seek the replacement queue.
+		player.load([mkSrc('b.mp3', 'b')], { startIndex: 0 });
+		audio.duration = 600;
+		audio.emit('loadedmetadata');
+
+		expect(audio.currentTime).toBe(0);
+		expect(state.currentTime).toBe(0);
+	});
+
+	it('does not re-seek after the error retry reloads the src', async () => {
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a')], 0, { startAtSec: 42 });
+		await flush();
+		audio.duration = 600;
+		audio.emit('loadedmetadata');
+		expect(audio.currentTime).toBe(42);
+
+		// The error path re-assigns the src, which rewinds a real element to 0. The
+		// start position was consumed the first time round, so it must not come back.
+		audio.emit('error');
+		await flush();
+		audio.currentTime = 0;
+		audio.emit('loadedmetadata');
+
+		// state.currentTime follows the element's next timeupdate, so only the
+		// element is asserted here.
+		expect(audio.currentTime).toBe(0);
+	});
+
+	it('startAtSec 0 starts at the beginning', async () => {
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0, { startAtSec: 0 });
+		await flush();
+
+		audio.duration = 600;
+		audio.emit('loadedmetadata');
+
+		expect(audio.currentTime).toBe(0);
+		expect(state.currentTime).toBe(0);
+	});
+});

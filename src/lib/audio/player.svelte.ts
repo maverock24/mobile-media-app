@@ -74,6 +74,10 @@ export interface PlayerQueueOptions {
 	 *  live selection loop until the queue is replaced. Absent means the global
 	 *  behaviour. */
 	loop?: PlayerLoopMode;
+	/** Position, in seconds, to start the queue's first track at. Applied once the
+	 *  element reports that track's metadata, then consumed. Absent or `0` starts
+	 *  at the beginning. */
+	startAtSec?: number;
 }
 
 export interface PlayerLoadOptions extends PlayerQueueOptions {
@@ -165,6 +169,13 @@ export function createPlayer(opts: PlayerOptions): Player {
 	 *  is every queue loaded without one: the global repeat and the live selection
 	 *  loop then decide, exactly as before. */
 	let queueLoop: PlayerLoopMode | null = null;
+	/** Start position the loaded queue asked for. It belongs to the queue's first
+	 *  start only, which consumes it when the element is handed that track. */
+	let queueStartSec: number | null = null;
+	/** Armed start position, waiting for the element's metadata. It carries the
+	 *  queue generation that armed it, so a superseded load drops it instead of
+	 *  seeking whatever track the replacement queue starts. */
+	let pendingStart: { sec: number; generation: number } | null = null;
 	/** Bumped whenever the queue is replaced wholesale (play/load/clear). A URL
 	 *  that resolves after that belongs to a queue nobody is playing, so it must
 	 *  not be written into the replacement queue. `append` deliberately does not
@@ -236,6 +247,38 @@ export function createPlayer(opts: PlayerOptions): Player {
 			});
 		};
 		tryPlay(0);
+	}
+
+	/** Forget a start position that no longer belongs to the track about to play. */
+	function dropStartPosition() {
+		queueStartSec = null;
+		pendingStart = null;
+	}
+
+	/** Consume the queue's start position and arm it for the element. Called
+	 *  wherever a track's src is assigned. */
+	function armStartPosition() {
+		const sec = queueStartSec;
+		queueStartSec = null;
+		pendingStart = sec !== null && sec > 0 ? { sec, generation: queueGeneration } : null;
+	}
+
+	/** Seek the element to the armed start position now that it knows its own
+	 *  duration, then consume it so a later track change does not seek again.
+	 *  Deliberately not routed through seek(): its 100 ms `seeking` guard would
+	 *  swallow the following timeupdate and lose the first position report. */
+	function applyPendingStart(element: HTMLAudioElement) {
+		const pending = pendingStart;
+		pendingStart = null;
+		if (!pending) return;
+		// The queue was replaced after this seek was armed: the replacement owns the
+		// element now, and its own start position, if any, was armed after this one.
+		if (pending.generation !== queueGeneration) return;
+		const target = Number.isFinite(element.duration) && element.duration > 0
+			? Math.min(pending.sec, element.duration - 1)
+			: pending.sec;
+		element.currentTime = target;
+		state.currentTime = target;
 	}
 
 	function setCurrentTrack(index: number) {
@@ -326,6 +369,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 		});
 		selectionLoop = options.selectionLoop ?? false;
 		queueLoop = options.loop ?? null;
+		queueStartSec = options.startAtSec ?? null;
 		state.error = null;
 		// A queue replacement supersedes any in-flight resume/prev that was showing
 		// the "Loading track…" overlay. That continuation drops out on the generation
@@ -362,6 +406,9 @@ export function createPlayer(opts: PlayerOptions): Player {
 		settings.lastTrackTimestamp = 0;
 		opts.applyEqualizer?.(el());
 		el().src = url;
+		armStartPosition();
+		// A cached track can report metadata before the listener gets a turn.
+		if (el().readyState >= 1) applyPendingStart(el());
 		preloadNextTrack(index);
 		state.isBuffering = true;
 		safePlay(() => { state.isBuffering = false; state.isPlaying = false; });
@@ -410,6 +457,11 @@ export function createPlayer(opts: PlayerOptions): Player {
 			}
 			opts.applyEqualizer?.(el());
 			el().src = url;
+			// The queue's start position belongs to its first start, which this may be
+			// (a queue loaded with `load()` starts here through resume()); any other
+			// start clears it, so a track change cannot inherit it.
+			armStartPosition();
+			if (el().readyState >= 1) applyPendingStart(el());
 			preloadNextTrack(index);
 			// A paused deck only loads the src: no play() means no playback start, so
 			// the caller must not claim the channel or flag the deck as playing.
@@ -424,6 +476,9 @@ export function createPlayer(opts: PlayerOptions): Player {
 		if (changingTrack || state.tracks.length === 0 || destroyed) return false;
 		changingTrack = true;
 		try {
+			// A start position belongs to the track that was loaded, so a track change
+			// must not inherit one that never found its metadata.
+			dropStartPosition();
 			// The view refreshes a changed selection loop here, before the next
 			// index is read from the queue.
 			opts.onBeforeAdvance?.();
@@ -500,6 +555,8 @@ export function createPlayer(opts: PlayerOptions): Player {
 			if (i >= 0 && state.tracks[i]) {
 				state.tracks = state.tracks.map((t, idx) => idx === i ? { ...t, duration: Math.round(d) } : t);
 			}
+			// After the duration mirror, so the clamp sees the real duration.
+			applyPendingStart(element);
 		});
 		element.addEventListener('play', () => { state.isPlaying = true; state.isBuffering = false; errorRetries = 0; });
 		element.addEventListener('pause', () => { state.isPlaying = false; settings.lastTrackTimestamp = 0; });
@@ -663,6 +720,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 		// too — the view must not flag it as playing.
 		prev() {
 			if (state.tracks.length === 0) return Promise.resolve(false);
+			dropStartPosition();
 			const element = el();
 			if (settings.rewindOnPrev && element.currentTime > 3) {
 				element.currentTime = 0;
