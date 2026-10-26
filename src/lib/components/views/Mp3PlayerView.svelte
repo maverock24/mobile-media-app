@@ -582,7 +582,7 @@
 	// Nothing outside this component can reach `player` (Q1/Q2), and the engine's
 	// handler slots are single-owner and gated on `displayedSource` (Q5), so a
 	// hidden deck cannot be driven through them. This deck therefore lends the
-	// panel three closures, keyed by its own deck id. None of them moves player
+	// panel four closures, keyed by its own deck id. None of them moves player
 	// state across the boundary: `capture` copies what it needs and `apply`
 	// answers with a status.
 	$effect(() => {
@@ -624,6 +624,15 @@
 					suppressAlert: true,
 				});
 				return started ? 'started' : 'missing';
+			},
+
+			stop() {
+				// The Pairs tab's "no background track" case: B has to go quiet when a
+				// scene without music starts. The same call the cross-source stop
+				// callback above makes, so the element is released rather than left
+				// paused with residual decoder state. The mirror effect below clears
+				// `mediaEngine.musicPlayingB` from the player's own `isPlaying`.
+				player.stop();
 			},
 
 			setLoop(mode: PlayerLoopMode | null) {

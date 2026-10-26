@@ -1,21 +1,47 @@
 <script lang="ts">
 	import Button from '$lib/components/ui/Button.svelte';
 	import { Layers, Trash2 } from 'lucide-svelte';
-	import { pairings, removePairing } from '$lib/pairs/pairings';
+	import { pairings, removePairing, setActivePair } from '$lib/pairs/pairings';
+	import { startPairing } from '$lib/pairs/startPairing';
 	import { formatPosition, formatVolume } from '$lib/pairs/format';
+	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import type { AbPairing } from '$lib/pairs/types';
 
 	// A "scene" (pair) remembers an audiobook on deck A together with the music
 	// on deck B, so both can be resumed as one thing. The list renders
 	// `pairings.pairs` in array order, which the store keeps newest first.
-	// Saving is not wired up yet (the header button stays disabled) and a row
-	// tap does nothing until S7 starts playback.
+	// Tapping a row starts the scene (S7) and deliberately changes no tab state,
+	// so the human stays on this panel while both decks start behind it. Saving is
+	// not wired up yet (the header button stays disabled).
 
 	/** The date a scene was last saved, in the user's locale. */
 	function savedOn(savedAt: number): string {
 		return new Date(savedAt).toLocaleDateString();
 	}
+
+	// D5's toasts are raised inside `startPairing`, so this is only the tap. The
+	// promise is not awaited in the markup: the row is not a navigation.
+	function start(pair: AbPairing): void {
+		void startPairing(pair);
+	}
+
+	// D3: a scene is "active" only while one of the decks is making sound, which
+	// is the window in which the position writer (S8) writes to it. The latch is
+	// what keeps a start from clearing itself: `activePairId` is set only after A
+	// has begun playing, but the decks mirror their playing flags into the engine
+	// one effect later, so the id can be set while both flags still read false.
+	let sawScenePlaying = false;
+	$effect(() => {
+		const playing = mediaEngine.musicPlayingA || mediaEngine.musicPlayingB;
+		const active = pairings.activePairId !== null;
+		if (playing) {
+			sawScenePlaying = active;
+			return;
+		}
+		if (sawScenePlaying && active) setActivePair(null);
+		sawScenePlaying = false;
+	});
 
 	// D9: the existing two-tap confirmation, the same shape as the file delete in
 	// `$lib/files/fileOps.ts:140-147` — a sticky warning toast with the action.
@@ -48,11 +74,23 @@
 		{:else}
 			<!-- ── Saved scenes, newest first ───────────────────────── -->
 			{#each pairings.pairs as pair (pair.id)}
-				<div class="flex items-center gap-2 p-3 pl-4 border-b">
-					<!-- The tap target: a real button so S7 can wire playback to it. The
-					     content is phrasing-only (spans), since a div inside a button is
-					     invalid HTML. -->
-					<button type="button" class="flex flex-1 min-w-0 items-center gap-3 text-left">
+				<!-- The active scene is marked the way PodcastView marks the playing
+				     episode: a left accent bar and a faint tint, no extra text, so the
+				     row's accessible name stays the scene's name. -->
+				<div
+					class="flex items-center gap-2 p-3 pl-4 border-b border-l-4 {pairings.activePairId === pair.id
+						? 'border-l-primary bg-primary/5'
+						: 'border-l-transparent'}"
+				>
+					<!-- The tap target: a real button, so starting a scene is reachable by
+					     role. The content is phrasing-only (spans), since a div inside a
+					     button is invalid HTML. -->
+					<button
+						type="button"
+						class="flex flex-1 min-w-0 items-center gap-3 text-left"
+						aria-current={pairings.activePairId === pair.id ? 'true' : undefined}
+						onclick={() => start(pair)}
+					>
 						<span class="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center shrink-0">
 							<Layers class="w-5 h-5" />
 						</span>

@@ -85,6 +85,19 @@ export function removePairing(id: number): void {
 	if (pairings.activePairId === id) pairings.activePairId = null;
 }
 
+/**
+ * Mark which scene deck A is playing, or clear it with `null` (D3).
+ *
+ * This is the switch the position writer (S8) keys off: only the active scene
+ * is written, so starting one scene and browsing another never rewrites the
+ * position of the one that is not playing. Starting a scene overwrites the id
+ * in place, which is also how "another scene started" clears the previous one,
+ * and the Pairs view clears it once neither deck is audible any more.
+ */
+export function setActivePair(id: number | null): void {
+	pairings.activePairId = id;
+}
+
 // Load-time normalisation, in the style of `appSettings.listTileTone` and the
 // `playbackSpeed` migration (`settings.svelte.ts:20`, `:62-68`): enforce
 // newest-first and tolerate a corrupt `pairs` (non-array) rather than letting a

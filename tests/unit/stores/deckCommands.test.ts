@@ -38,6 +38,7 @@ function fakeDeck(name: string) {
 	return {
 		capture: vi.fn((): DeckCapture | null => ({ source: source(name), positionSec: 12, durationSec: 300 })),
 		apply: vi.fn(async () => 'started' as const),
+		stop: vi.fn(),
 		setLoop: vi.fn(),
 	} satisfies DeckCommands;
 }

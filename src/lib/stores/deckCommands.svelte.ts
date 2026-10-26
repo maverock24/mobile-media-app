@@ -8,8 +8,8 @@
  * address a hidden deck (Q5, D1). This registry is the missing half: on mount a
  * deck registers a small object — `capture()` reads the deck's own current track
  * and position, `apply()` starts a stored ref through the deck's normal playback
- * path, `setLoop()` changes the loop of the queue it already loaded — and the
- * panel calls it by deck id.
+ * path, `stop()` silences the deck, `setLoop()` changes the loop of the queue it
+ * already loaded — and the panel calls it by deck id.
  *
  * Deliberately no `Player` (and no view state) crosses this boundary: the
  * registry holds closures and the caller learns only a status. Modelled on the
@@ -59,6 +59,11 @@ export interface DeckCommands {
 	/** Resolve a stored ref against this deck's library and start it at
 	 *  `positionSec`, through the same path a user tap takes. */
 	apply(ref: PairingTrackRef, positionSec: number, options?: DeckApplyOptions): Promise<DeckApplyStatus>;
+	/** Stop this deck through its own stop path: the element is released and
+	 *  `isPlaying` goes false, while the queue stays loaded. Callers gate on the
+	 *  deck being audible first, because stopping a paused deck would throw away
+	 *  its paused position (`startPairing`'s "no background track" rule). */
+	stop(): void;
 	/** Change the loop of the queue already loaded. `null` restores the global
 	 *  behaviour (repeat setting and live selection loop). */
 	setLoop(mode: PlayerLoopMode | null): void;
