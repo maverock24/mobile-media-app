@@ -5,14 +5,12 @@
 		derivePairingName,
 		pairings,
 		removePairing,
-		setActivePair,
 		upsertPairing,
 	} from '$lib/pairs/pairings';
 	import { startPairing } from '$lib/pairs/startPairing';
 	import { formatPosition, formatVolume } from '$lib/pairs/format';
 	import { toTrackRef } from '$lib/pairs/resolve';
 	import { getDeckCommands } from '$lib/stores/deckCommands.svelte';
-	import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
 	import { musicSettings } from '$lib/stores/settings.svelte';
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import type { AbPairing } from '$lib/pairs/types';
@@ -66,22 +64,11 @@
 		void startPairing(pair);
 	}
 
-	// D3: a scene is "active" only while one of the decks is making sound, which
-	// is the window in which the position writer (S8) writes to it. The latch is
-	// what keeps a start from clearing itself: `activePairId` is set only after A
-	// has begun playing, but the decks mirror their playing flags into the engine
-	// one effect later, so the id can be set while both flags still read false.
-	let sawScenePlaying = false;
-	$effect(() => {
-		const playing = mediaEngine.musicPlayingA || mediaEngine.musicPlayingB;
-		const active = pairings.activePairId !== null;
-		if (playing) {
-			sawScenePlaying = active;
-			return;
-		}
-		if (sawScenePlaying && active) setActivePair(null);
-		sawScenePlaying = false;
-	});
+	// The active-scene marker is no longer maintained here: its rule (a scene stays
+	// active while deck A still holds its audiobook, and is cleared when deck A
+	// loads another track or both decks empty) lives in `$lib/pairs/activeScene.ts`
+	// and is driven by deck A, so it is unit tested with fake deck commands. This
+	// panel only reads the marker, to mark the row.
 
 	// D9: the existing two-tap confirmation, the same shape as the file delete in
 	// `$lib/files/fileOps.ts:140-147` — a sticky warning toast with the action.

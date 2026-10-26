@@ -90,8 +90,11 @@
 	import { addToast } from '$lib/stores/toastStore.svelte';
 	import { openYoutubePanel, youtubePanel } from '$lib/stores/youtubePanel.svelte';
 	import { LIBRARY_RESCAN_EVENT, musicFavorites, registerMusicPlayerView } from '$lib/stores/musicView.svelte';
-	import { registerDeckCommands, type DeckApplyOptions } from '$lib/stores/deckCommands.svelte';
+	import { getDeckCommands, registerDeckCommands, type DeckApplyOptions } from '$lib/stores/deckCommands.svelte';
 	import { resolvePairingTrack } from '$lib/pairs/resolve';
+	import { reconcileActiveScene, setActivePositionSec } from '$lib/pairs/activeScene';
+	import { createPositionWriter, type PositionWriter } from '$lib/pairs/positionWriter';
+	import { pairings, setActivePair } from '$lib/pairs/pairings';
 	import type { PairingTrackRef } from '$lib/pairs/types';
 	import {
 		Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
@@ -552,6 +555,13 @@
 		musicSettings.librarySource === 'drive' ? 'Google Drive' : deviceLibrary.deckFolderLabel
 	);
 
+	// ── the active scene's position writer (D3, S8) ──
+	// Deck A owns the moving half of a saved scene: its audiobook is what a resume
+	// continues, so this deck writes that row's position while it plays. Declared
+	// here because the cross-source stop below has to flush it before it stops;
+	// the writer itself is built by the effect further down.
+	let positionWriter: PositionWriter | null = null;
+
 	// ── register stop-callback for cross-view audio exclusivity ──
 	$effect(() => {
 		if (musicSettings.lastTrackTimestamp !== 0) {
@@ -562,6 +572,12 @@
 	$effect(() => {
 		const srcId = deck === 'A' ? 'musicA' as const : 'musicB' as const;
 		registerAudioSource(srcId, () => {
+			// Before `player.stop()`: `haltPlayback()` zeroes `state.currentTime`
+			// (`$lib/audio/player.svelte.ts:303-310`), so a flush afterwards would
+			// persist 0 over the scene's real position. This is the cross-source
+			// steal path (a podcast or radio claim), and it is the write that keeps a
+			// stolen scene resumable. A deck with no writer pays one null check.
+			positionWriter?.flushNow();
 			// Fully reset so the browser releases the audio channel —
 			// pause() alone can leave residual decoder state that
 			// causes brief overlap when a new source starts immediately.
@@ -638,6 +654,54 @@
 			setLoop(mode: PlayerLoopMode | null) {
 				player.setLoop(mode);
 			},
+		});
+	});
+
+	// ── the position writer, deck A only (D3, S8) ──
+	// One writer for the deck that started the scene. Deck B returns before
+	// building anything, so it gains no timer and no visibility listener. The
+	// body reads no reactive state on purpose: it runs once on mount and the
+	// writer pulls what it needs at write time.
+	$effect(() => {
+		if (deck !== 'A') return;
+
+		const writer = createPositionWriter({
+			// The store's marker, not "either deck is audible": a paused scene is
+			// still the active one, and only its row is ever written.
+			isActive: () => pairings.activePairId !== null,
+			// The five-second tick writes while playing only; a deck that stopped
+			// would otherwise persist the 0 that `haltPlayback()` leaves behind.
+			isPlaying: () => player.state.isPlaying,
+			read: () => ({
+				positionSec: player.state.currentTime,
+				durationSec: player.state.duration,
+			}),
+			write: setActivePositionSec,
+		});
+
+		positionWriter = writer;
+		writer.start();
+
+		return () => {
+			writer.stop();
+			positionWriter = null;
+		};
+	});
+
+	// ── when the marker stops meaning anything (D3) ──
+	// The rule itself is in `$lib/pairs/activeScene.ts` so it is unit tested with
+	// fake deck commands; this effect is only the reactive wiring. Deck A drives
+	// it because deck A is the deck whose track decides whether the scene is
+	// still there at all.
+	$effect(() => {
+		if (deck !== 'A') return;
+
+		reconcileActiveScene({
+			activePairId: pairings.activePairId,
+			pairs: pairings.pairs,
+			deckA: getDeckCommands('A'),
+			deckB: getDeckCommands('B'),
+			setActivePair,
 		});
 	});
 
@@ -1405,6 +1469,11 @@
 			void triggerPlaybackHaptic(false);
 			markUserPaused();
 			player.pause();
+			// D3: a pause is the moment the listener stopped, so the active scene
+			// takes the position now instead of at the next five-second tick. The
+			// marker is deliberately left in place: a paused scene is still the
+			// scene, and resuming must keep tracking it.
+			positionWriter?.flushNow();
 		} catch { /* haptics or player failure */ }
 	}
 
@@ -1506,6 +1575,10 @@
 
 	function handleSeekSeconds(seconds: number) {
 		player.seek(seconds);
+		// D3: a seek is a deliberate new position, so it is written at once. A
+		// slider drag fires this per pixel; the writer collapses the burst into one
+		// trailing write rather than rewriting the store on every event.
+		positionWriter?.flush();
 	}
 	function handleVolume(e: Event) {
 		const input = e.target as HTMLInputElement;
