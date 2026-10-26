@@ -55,13 +55,15 @@ export function claimAudio(id: AudioSourceId): void {
 
 /**
  * Which feature view is on screen, so the MiniPlayer and the feature views agree
- * on what the transport controls drive. `music:youtube` is the YouTube sub-tab.
+ * on what the transport controls drive. `music:youtube` is the YouTube sub-tab and
+ * `music:pairs` the saved-scenes sub-tab, which owns no source of its own.
  * Weather/settings own no audio source; a transport claimed by the last visible
  * source stays active there.
  */
 export type ActiveView =
 	| 'music:A'
 	| 'music:B'
+	| 'music:pairs'
 	| 'music:youtube'
 	| 'podcasts'
 	| 'radio'

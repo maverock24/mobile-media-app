@@ -199,6 +199,29 @@ describe('displayedSource', () => {
 	});
 });
 
+describe('displayedSource – pairs tab', () => {
+	function resetDisplay() {
+		mediaEngine.clear();
+		mediaEngine.deckAItem = null;
+		mediaEngine.deckBItem = null;
+		mediaEngine.activeMusicDeck = 'A';
+		mediaEngine.activeView = 'music:A';
+	}
+
+	it('the pairs tab maps to no deck source while nothing plays', () => {
+		resetDisplay();
+		mediaEngine.activeView = 'music:pairs';
+		expect(mediaEngine.displayedSource).toBeNull();
+	});
+
+	it('the pairs tab still shows a deck that plays', () => {
+		resetDisplay();
+		mediaEngine.activeView = 'music:pairs';
+		mediaEngine.musicPlayingB = true;
+		expect(mediaEngine.displayedSource).toBe('B');
+	});
+});
+
 describe('transport fallbacks', () => {
 	it('next/prev delegate to registered _onNext/_onPrev', () => {
 		const onNext = vi.fn();
