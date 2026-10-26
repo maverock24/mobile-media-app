@@ -32,17 +32,22 @@ The live code in `src/` is authoritative. Planning docs (`01_PRD.md`, `PROGRESS.
 - **Imports**: `$lib/...` for internal modules.
 - **File org**: views → `src/lib/components/views/`, UI primitives → `src/lib/components/ui/`.
 - **Commits**: small, single-purpose, Conventional Commit style (`feat:`, `fix:`, `docs:`, `chore:`). Push to `origin/main` in the same turn as the commit. No waiting to be asked.
+- **Review: an effect must not read the state it writes.** A `$effect` or `$derived` that reads the same `$state` it writes loops until Svelte throws `effect_update_depth_exceeded`, after which every click in the app does nothing. `pnpm check` and the whole unit suite stay green; only `pnpm check:boot` fails. Look for it in the diff, not in the test output.
+- **Review: a persisted write must justify its value.** Any writer that stamps a shared persisted field (`completedAt`, `lastFolderName`, a playback position) must name where that value came from. Two real bugs came from writers inventing one: a walk that never completed stamped a completion time, and starting a scene wrote the literal `"Pairings"` into the library folder label.
 
 ## Commands
 
 ```sh
 pnpm dev           # dev server
-pnpm validate      # check + unit + E2E: the gate to run before committing
+pnpm check:boot    # Playwright smoke only: the per-commit gate
+pnpm validate      # check + unit + E2E: the gate to run before merging to main
 pnpm build:mobile  # mobile static build → dist-mobile/ (the APK target)
 ```
 
 Every other script lives in `package.json`. Note `pnpm test` is vitest only; the
 Playwright suite is `pnpm test:e2e`.
+
+**E2E covers Music, the app shell and YouTube only** (`tests/e2e/`). Podcasts, Radio and Weather have no E2E coverage, so a change to those views needs a browser check by hand, seeded through the `persisted()` localStorage keys.
 
 **Primary product target: Android APK.** Web is secondary (local preview + Playwright coverage).
 
