@@ -30,6 +30,7 @@ vi.mock('@capawesome/capacitor-file-picker', () => ({
 import {
 	yieldScanToUi,
 	scanNativeAudioFiles,
+	scanNativeLibrary,
 	collectAllFromPath,
 	pickNativeAudioDirectory,
 	type CollectAllDeps,
@@ -64,11 +65,23 @@ const driveFile = (name: string, relPath = name): StoredAudioFile => ({
 });
 
 /** A batch result shaped like `DirectoryReader.getAudioScanBatch`. */
-const batch = (files: string[], done: boolean, foldersScanned = 1, foldersQueued = 0) => ({
+const batch = (
+	files: string[],
+	done: boolean,
+	foldersScanned = 1,
+	foldersQueued = 0,
+	extra: {
+		dirs?: { path: string; mtime: number }[];
+		skippedDirs?: number;
+		skippedPaths?: string[];
+		unreadableDirs?: number;
+	} = {},
+) => ({
 	files: files.map((name) => ({ kind: 'file', name, path: `/sdcard/${name}`, relativePath: name })),
 	foldersScanned,
 	foldersQueued,
 	done,
+	...extra,
 });
 
 // jsdom has no FileSystemDirectoryHandle constructor; use the same plain-object
@@ -149,7 +162,7 @@ describe('scanNativeAudioFiles', () => {
 
 		const files = await scanNativeAudioFiles('content://tree', [], 10, {}, onBatch);
 
-		expect(mocks.startAudioScan).toHaveBeenCalledWith({ treeUri: 'content://tree', path: undefined });
+		expect(mocks.startAudioScan).toHaveBeenCalledWith({ treeUri: 'content://tree', path: undefined, prevDirs: undefined });
 		expect(files.map((f) => f.name)).toEqual(['a.mp3', 'b.mp3']);
 		expect(onBatch).toHaveBeenCalledTimes(2);
 		expect(onBatch.mock.calls[0][1]).toEqual({ done: false, foldersScanned: 1, foldersQueued: 2, totalFiles: 1 });
@@ -162,7 +175,7 @@ describe('scanNativeAudioFiles', () => {
 		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
 		mocks.getAudioScanBatch.mockResolvedValueOnce(batch([], true));
 		await scanNativeAudioFiles('content://tree', ['Music', 'Live'], 10);
-		expect(mocks.startAudioScan).toHaveBeenCalledWith({ treeUri: 'content://tree', path: 'Music/Live' });
+		expect(mocks.startAudioScan).toHaveBeenCalledWith({ treeUri: 'content://tree', path: 'Music/Live', prevDirs: undefined });
 	});
 
 	it('uses initialBatchSize for the first batch and batchSize afterwards', async () => {
@@ -212,6 +225,140 @@ describe('scanNativeAudioFiles', () => {
 		await expect(scanNativeAudioFiles('content://tree', [], 10)).rejects.toThrow('device gone');
 		expect(warn).toHaveBeenCalled();
 		warn.mockRestore();
+	});
+});
+
+// ─────────────────────────────────────────────────────────────
+// scanNativeLibrary
+// ─────────────────────────────────────────────────────────────
+
+describe('scanNativeLibrary', () => {
+	it('forwards the previous directory tree', async () => {
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		mocks.getAudioScanBatch.mockResolvedValueOnce(batch([], true));
+		const prevDirs = [
+			{ path: 'Music', mtime: 1_700_000_000_000 },
+			{ path: 'Music/Live', mtime: 0 },
+		];
+
+		await scanNativeLibrary('content://tree', [], 10, { prevDirs });
+
+		expect(mocks.startAudioScan).toHaveBeenCalledWith({
+			treeUri: 'content://tree',
+			path: undefined,
+			prevDirs,
+		});
+	});
+
+	it('aggregates directory rows from a batch that carried no files', async () => {
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		mocks.getAudioScanBatch
+			.mockResolvedValueOnce(batch([], false, 1, 2, { dirs: [{ path: 'Music/Live', mtime: 17 }] }))
+			.mockResolvedValueOnce(batch(['a.mp3'], true, 3, 0, { dirs: [{ path: 'Music/Studio', mtime: 18 }] }));
+		const onBatch = vi.fn();
+
+		const result = await scanNativeLibrary('content://tree', [], 10, {}, onBatch);
+
+		expect(result.dirs).toEqual([
+			{ path: 'Music/Live', mtime: 17 },
+			{ path: 'Music/Studio', mtime: 18 },
+		]);
+		expect(result.files.map((f) => f.name)).toEqual(['a.mp3']);
+		// The files-free batch must still reach the caller, or its rows are lost.
+		expect(onBatch).toHaveBeenCalledTimes(2);
+		expect(onBatch.mock.calls[0][0]).toEqual([]);
+	});
+
+	it('the root directory is reported as a row', async () => {
+		// `DirectoryReaderPlugin.startAudioScan` puts the scan root's own row in the first
+		// batch: path `''` (the walk's origin), mtime from the single document query that
+		// also resolves the folder name. Its path is empty, so this pins that the relay
+		// keeps the row instead of treating an empty path as "no row".
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		mocks.getAudioScanBatch
+			.mockResolvedValueOnce(batch(['a.mp3'], false, 1, 1, { dirs: [{ path: '', mtime: 9 }] }))
+			.mockResolvedValueOnce(batch([], true, 2, 0, { dirs: [{ path: 'Music/Live', mtime: 17 }] }));
+
+		const result = await scanNativeLibrary('content://tree', [], 10);
+
+		expect(result.dirs).toEqual([
+			{ path: '', mtime: 9 },
+			{ path: 'Music/Live', mtime: 17 },
+		]);
+	});
+
+	it('counts an unreadable directory across batches', async () => {
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		// The native counters are cumulative, so a second batch repeating the
+		// first batch's count must not be added to it.
+		mocks.getAudioScanBatch
+			.mockResolvedValueOnce(batch(['a.mp3'], false, 1, 1, { skippedDirs: 1, unreadableDirs: 2 }))
+			.mockResolvedValueOnce(batch([], true, 2, 0, { skippedDirs: 4, unreadableDirs: 3 }));
+
+		const result = await scanNativeLibrary('content://tree', [], 10);
+
+		expect(result.unreadableDirs).toBe(3);
+		expect(result.skippedDirs).toBe(4);
+	});
+
+	it('reports the paths it skipped across batches', async () => {
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		// The native payload is cumulative, so the second batch repeats the first
+		// path and adds one. The union must carry each path once.
+		mocks.getAudioScanBatch
+			.mockResolvedValueOnce(batch(['a.mp3'], false, 1, 1, {
+				skippedDirs: 1,
+				skippedPaths: ['Music/Live'],
+			}))
+			.mockResolvedValueOnce(batch([], true, 2, 0, {
+				skippedDirs: 2,
+				skippedPaths: ['Music/Live', 'Music/Studio'],
+			}));
+
+		const result = await scanNativeLibrary('content://tree', [], 10);
+
+		expect(result.skippedDirs).toBe(2);
+		expect(result.skippedPaths).toEqual(['Music/Live', 'Music/Studio']);
+	});
+
+	it('reports an incomplete walk', async () => {
+		// No tree URI: the batch loop never runs, so the walk never reaches a `done`
+		// batch. `completed` is the only signal a caller gets that the output is not a
+		// verdict on the tree, and it must be false there.
+		const neverRan = await scanNativeLibrary(null, [], 10);
+
+		expect(neverRan.completed).toBe(false);
+
+		// The same field is true only for a loop that ended on a batch saying `done`.
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		mocks.getAudioScanBatch
+			.mockResolvedValueOnce(batch(['a.mp3'], false, 1, 1))
+			.mockResolvedValueOnce(batch([], true, 2, 0));
+
+		const walked = await scanNativeLibrary('content://tree', [], 10);
+
+		expect(walked.completed).toBe(true);
+	});
+
+	it('defaults the delta counters to zero when an older APK omits them', async () => {
+		mocks.startAudioScan.mockResolvedValue({ scanId: 's1' });
+		mocks.getAudioScanBatch.mockResolvedValueOnce(batch(['a.mp3'], true));
+
+		const result = await scanNativeLibrary('content://tree', [], 10);
+
+		expect(result).toMatchObject({ dirs: [], skippedDirs: 0, skippedPaths: [], unreadableDirs: 0 });
+	});
+
+	it('returns an empty result and does not start a scan without a tree URI', async () => {
+		expect(await scanNativeLibrary(null, [], 10)).toEqual({
+			files: [],
+			dirs: [],
+			skippedDirs: 0,
+			skippedPaths: [],
+			unreadableDirs: 0,
+			completed: false,
+		});
+		expect(mocks.startAudioScan).not.toHaveBeenCalled();
 	});
 });
 

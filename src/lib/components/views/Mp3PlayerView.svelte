@@ -76,9 +76,13 @@
 		collectStoredFilesFromSnapshot
 	} from '$lib/browse/libraryCache';
 	import {
-		scanNativeAudioFiles,
+		scanNativeLibrary,
 		collectAllFromPath
 	} from '$lib/browse/folderScan';
+	import {
+		createSearchIndex,
+		updateSearchIndex
+	} from '$lib/browse/searchIndex';
 	import { appSettings, musicSettings } from '$lib/stores/settings.svelte';
 	import { getListTileToneClasses } from '$lib/utils/listTileTone';
 	
@@ -171,6 +175,10 @@
 	let browsePath       = $state<string[]>([]);                 // navigation stack
 	let fileSearchQuery  = $state('');
 	let browseVersion    = $state(0);                          // bump to force reload
+	// Bumped by every publish of `allFiles` (D9). The search index keys its
+	// rebuild/merge decision on it, because a length key cannot see an equal-length
+	// replacement or an in-place one. Same sink shape as `browseVersion`.
+	let libraryRevision  = $state(0);
 	let selectedBrowseFileKeys = $state<string[]>([]);
 	// Per-deck Drive session (token, expiry, user, error). One instance per deck,
 	// created here so two mounted decks never share a token.
@@ -238,68 +246,17 @@
 
 	// Search index: sorted files + lowercase haystacks. Built incrementally
 	// across batch loads so sortFiles + parseFilename don't re-run over the
-	// entire growing array on every incremental library scan batch.
-	let _searchIndexSortedLength = 0;
-	let _searchIndexSorted: Array<{ file: StoredAudioFile; haystack: string }> = [];
+	// entire growing array on every incremental library scan batch. The build,
+	// merge and rebuild rules live in `$lib/browse/searchIndex` so they can be
+	// unit-tested; this effect only supplies the reactive reads, including the
+	// publish revision that keys the rule.
+	let _searchIndex = createSearchIndex();
 	$effect(() => {
-		const total = allFiles.length;
-		// A delete shrinks the index. Without this reset the merge branch below
-		// slices past the new end, finds nothing "new", and keeps the deleted
-		// file in the search index forever.
-		if (total < _searchIndexSortedLength) _searchIndexSortedLength = 0;
-		if (total === _searchIndexSortedLength) return;
-		if (total === 0) {
-			_searchIndexSorted = [];
-			_searchIndexSortedLength = 0;
-			return;
-		}
-		// On first build or reset, sort the full array; on incremental batches,
-		// sort only the new slice and merge (the incoming slice is already sorted
-		// within itself from the source, so we benchmark vs full re-sort).
-		if (_searchIndexSortedLength === 0) {
-			_searchIndexSorted = sortFiles(allFiles).map((f) => {
-				const { title, artist } = parseFilename(f.name);
-				return { file: f, haystack: `${f.name} ${title} ${artist}`.toLowerCase() };
-			});
-		} else {
-			const newSlice = allFiles.slice(_searchIndexSortedLength);
-			const newEntries = sortFiles(newSlice).map((f) => {
-				const { title, artist } = parseFilename(f.name);
-				return { file: f, haystack: `${f.name} ${title} ${artist}`.toLowerCase() };
-			});
-			// Merge the pre-sorted index with the new sorted batch
-			_searchIndexSorted = mergeSortedIndex(_searchIndexSorted, newEntries);
-		}
-		_searchIndexSortedLength = total;
+		_searchIndex = updateSearchIndex(_searchIndex, allFiles, libraryRevision, musicSettings.sortOrder);
 	});
 
-	function mergeSortedIndex(
-		existing: Array<{ file: StoredAudioFile; haystack: string }>,
-		incoming: Array<{ file: StoredAudioFile; haystack: string }>,
-	): Array<{ file: StoredAudioFile; haystack: string }> {
-		const merged = new Array(existing.length + incoming.length);
-		let ei = 0, ii = 0, mi = 0;
-		const getKey = (entry: { file: StoredAudioFile }) => {
-			if (musicSettings.sortOrder === 'title') return parseFilename(entry.file.name).title;
-			if (musicSettings.sortOrder === 'artist') return parseFilename(entry.file.name).artist;
-			return entry.file.name;
-		};
-		while (ei < existing.length && ii < incoming.length) {
-			const aKey = getKey(existing[ei]);
-			const bKey = getKey(incoming[ii]);
-			if (aKey.localeCompare(bKey, undefined, { numeric: true }) <= 0) {
-				merged[mi++] = existing[ei++];
-			} else {
-				merged[mi++] = incoming[ii++];
-			}
-		}
-		while (ei < existing.length) merged[mi++] = existing[ei++];
-		while (ii < incoming.length) merged[mi++] = incoming[ii++];
-		return merged;
-	}
-
 	// Expose the search index as a reactive alias for the filteredEntries derivation
-	const searchIndex = $derived(_searchIndexSorted);
+	const searchIndex = $derived(_searchIndex.entries);
 
 	// Cap rendered results — a broad query (e.g. "a") matching thousands of
 	// rows explodes the DOM and freezes the UI. In search mode, limit to the
@@ -444,6 +401,7 @@
 		getFolderInputEl: () => folderInputEl,
 		getNativeFileInputEl: () => nativeFileInputEl,
 		bumpBrowseVersion: () => { browseVersion += 1; },
+		bumpLibraryRevision: () => { libraryRevision += 1; },
 		hydrateTracksFromLibrary,
 		runPendingFileOp: (destination) => fileOps.runPendingFileOp(destination),
 		refreshDriveLibrary: () => driveLibrary.refreshGoogleDrive(),
@@ -787,7 +745,19 @@
 		const driveFilter = driveSearch.trim().toLowerCase();
 		browseVersion; // reactive dependency
 		musicSettings.librarySource;
-		void browseNavigation.loadBrowseEntries(path, driveFilter);
+		// The load runs on the next frame, outside this effect's tracking scope, so
+		// every signal `loadBrowseEntries` reads has to be read here. These are the
+		// dependencies the effect had while it called the loader inline: the file
+		// list and sort order it builds from, and the two device handles that pick
+		// its branch. Without them a change to one of those alone (a sort-order
+		// change under a Drive search, say) would no longer reload the list.
+		void allFiles;
+		void musicSettings.sortOrder;
+		void deviceLibrary.nativeTreeUri;
+		void deviceLibrary.rootDirHandle;
+		// Coalesced: a scan batch bumps `browseVersion` once per frame at most, and a
+		// burst of bumps must not rebuild the entries once per bump.
+		browseNavigation.scheduleBrowseEntries(path, driveFilter);
 	});
 
 	$effect(() => {
@@ -1169,7 +1139,9 @@
 		});
 
 		const collectedFiles: StoredAudioFile[] = [];
-		void scanNativeAudioFiles(
+		// The library walk, not the file-only wrapper: a folder play from the root
+		// writes the library cache, and that write needs the tree the walk observed.
+		void scanNativeLibrary(
 			deviceLibrary.nativeTreeUri,
 			path,
 			FOLDER_PLAY_SCAN_BATCH_SIZE,
@@ -1203,7 +1175,7 @@
 				activePlaybackQueueSessionId
 			);
 			queuedFileCount = collectedFiles.length;
-		}).then(async () => {
+		}).then(async (walk) => {
 			if (!playbackStarted && collectedFiles.length > 0) {
 				beginQueue(folderLabel);
 				activePlaybackQueueSessionId = queueSessionId;
@@ -1221,7 +1193,22 @@
 			if (path.length === 0 && collectedFiles.length > 0) {
 				allFiles = collectedFiles;
 				browseVersion += 1;
-				await saveCachedLibrary(deviceLibrary.nativeTreeUri, folderLabel, collectedFiles);
+				// This walk started at the root and was given no previous tree, so the rows
+				// it observed are the tree the next start deltas against. Writing the files
+				// alone dropped `dirs` and made every later start walk in full (D6, D12).
+				// `completedAt` is claimed only by a walk that reached its last batch and
+				// read every directory: a partial one writes no stamp (`null`) and no tree,
+				// the rule `startLibraryScan` applies, so the payload it leaves is one the
+				// next start reads as unverified and walks in full (D7).
+				const verifiedTree = walk.completed && walk.unreadableDirs === 0;
+				await saveCachedLibrary(
+					deviceLibrary.nativeTreeUri,
+					folderLabel,
+					collectedFiles,
+					undefined,
+					verifiedTree ? walk.dirs : [],
+					{ completedAt: verifiedTree ? Date.now() : null }
+				);
 			}
 			if (!hasResolvedStart) {
 				hasResolvedStart = true;
@@ -1576,6 +1563,17 @@
 					deviceLibrary.pendingHandle = null;
 					showQueue = true;
 					browseVersion++;
+				}
+				// D1's second trigger on the path the app actually takes: without this,
+				// the mount restore left the index exactly as it was cached until the user
+				// rescaned by hand. `refreshWarmLibrary` is idempotent, so the header
+				// button's own restore cannot start a second walk over the same tree.
+				// Gated on a restored payload, not on that payload listing files: a library
+				// the user emptied writes a completed empty payload on purpose (D6
+				// amendment), and requiring a file left it never refreshing, so a folder
+				// refilled on the device stayed invisible until a manual rescan.
+				if (deviceLibrary.nativeTreeUri && cachedLibrary) {
+					deviceLibrary.refreshWarmLibrary(cachedLibrary.folderName, cachedLibrary, allFiles);
 				}
 				if (!('showDirectoryPicker' in window) || !handle) return;
 				type FSHandle = { queryPermission(o: object): Promise<string> };

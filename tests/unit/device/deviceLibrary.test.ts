@@ -8,7 +8,7 @@ import type { StoredAudioFile } from '$lib/models/music';
 // settings store is real: the source, folder names and tree URI live there.
 const mocks = vi.hoisted(() => ({
 	pickNativeAudioDirectory: vi.fn(),
-	scanNativeAudioFiles: vi.fn(),
+	scanNativeLibrary: vi.fn(),
 	listEntries: vi.fn(),
 	rememberTreeUri: vi.fn(),
 	writeFile: vi.fn(),
@@ -21,13 +21,19 @@ const mocks = vi.hoisted(() => ({
 	deleteCachedLibrary: vi.fn(),
 	loadHandleFromIDB: vi.fn(),
 	saveHandleToIDB: vi.fn(),
+	idbPut: vi.fn(),
+	loadCachedLibrary: vi.fn(),
+	openIDB: vi.fn(),
 	isPluginAvailable: vi.fn(() => true),
 	addToast: vi.fn(),
 }));
 
+// `scanNativeLibrary` must be exported here: the module imports it, and a missing
+// export fails every test in this file on an undefined import. That is the
+// intended tripwire for the delta walk.
 vi.mock('$lib/browse/folderScan', () => ({
 	pickNativeAudioDirectory: mocks.pickNativeAudioDirectory,
-	scanNativeAudioFiles: mocks.scanNativeAudioFiles,
+	scanNativeLibrary: mocks.scanNativeLibrary,
 }));
 
 vi.mock('$lib/native/directory-reader', () => ({
@@ -46,10 +52,18 @@ vi.mock('$lib/utils/idb', () => ({
 	deleteCachedLibrary: mocks.deleteCachedLibrary,
 	loadHandleFromIDB: mocks.loadHandleFromIDB,
 	saveHandleToIDB: mocks.saveHandleToIDB,
+	// The real `libraryCache` module is loaded through the mock below (it owns
+	// `hasUsableDirectoryTree`, which the scan decision reads), so the IDB
+	// primitives it imports have to be present here.
+	idbPut: mocks.idbPut,
+	loadCachedLibrary: mocks.loadCachedLibrary,
+	openIDB: mocks.openIDB,
 }));
 
-vi.mock('$lib/browse/libraryCache', () => ({
-	LAST_LIBRARY_CACHE_KEY: 'last-library',
+// The cache I/O is stubbed; everything else (`hasUsableDirectoryTree`) stays the
+// real implementation, so the decision tests exercise the predicate that ships.
+vi.mock('$lib/browse/libraryCache', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/browse/libraryCache')>()),
 	getDeviceLibraryCacheKey: mocks.getDeviceLibraryCacheKey,
 	saveCachedLibrary: mocks.saveCachedLibrary,
 	loadDeviceCachedLibrary: mocks.loadDeviceCachedLibrary,
@@ -70,8 +84,11 @@ import {
 	type DeviceLibrary,
 	type DeviceLibraryOptions,
 	type DeviceLibraryView,
+	type LibraryScanPrevious,
+	type LibraryScanOptions,
 } from '$lib/device/deviceLibrary.svelte';
 import type { DriveSession } from '$lib/drive/driveSession.svelte';
+import { hasUsableDirectoryTree } from '$lib/browse/libraryCache';
 import { musicSettings } from '$lib/stores/settings.svelte';
 
 beforeEach(() => {
@@ -89,7 +106,7 @@ beforeEach(() => {
 	mocks.loadDeviceCachedLibrary.mockResolvedValue(null);
 	mocks.restoreStoredFilesFromCache.mockImplementation((cached: { files: StoredAudioFile[] }) => cached.files);
 	mocks.collectStoredFilesFromDirHandle.mockResolvedValue([]);
-	mocks.scanNativeAudioFiles.mockResolvedValue([]);
+	mocks.scanNativeLibrary.mockResolvedValue({ files: [], dirs: [], skippedDirs: 0, skippedPaths: [], unreadableDirs: 0, completed: true });
 	mocks.pickNativeAudioDirectory.mockResolvedValue({ treeUri: 'tree', folderName: 'Music' });
 	mocks.deleteCachedLibrary.mockResolvedValue(undefined);
 	mocks.loadHandleFromIDB.mockResolvedValue(null);
@@ -113,6 +130,46 @@ afterEach(() => {
 
 const nativeFile = (name: string): StoredAudioFile => ({
 	source: 'native', name, relativePath: name, path: `/sdcard/${name}`, mimeType: 'audio/mpeg',
+	modifiedAt: 100, sizeBytes: 1000,
+});
+
+/** A cached native file, the shape a payload carries. */
+const cachedNativeFile = (name: string) => ({
+	source: 'native' as const, name, relativePath: name, path: `/sdcard/${name}`,
+	mimeType: 'audio/mpeg', modifiedAt: 100, sizeBytes: 1000,
+});
+
+/**
+ * A native walk result: the files and directory rows it observed, plus the relative
+ * paths and the count of directories it skipped because their mtime still matched.
+ * The two skip fields are independent on the wire, so `overrides` can disagree with
+ * the paths, which is what an APK that predates `skippedPaths` looks like. The walk
+ * reached `done` unless a test says otherwise.
+ */
+const walkResult = (
+	files: StoredAudioFile[] = [],
+	dirs: Array<{ path: string; mtime: number }> = [],
+	skippedPaths: string[] = [],
+	overrides: { skippedDirs?: number; unreadableDirs?: number; completed?: boolean } = {}
+) => ({
+	files,
+	dirs,
+	skippedDirs: skippedPaths.length,
+	skippedPaths,
+	unreadableDirs: 0,
+	completed: true,
+	...overrides
+});
+
+/** A cached payload a delta walk can trust: versioned, stamped, with a tree. */
+const usableCache = (overrides: Record<string, unknown> = {}) => ({
+	folderName: 'Music',
+	files: [cachedNativeFile('a.mp3')],
+	savedAt: 1,
+	schemaVersion: 1,
+	completedAt: Date.now(),
+	dirs: [{ path: '', mtime: 5 }],
+	...overrides,
 });
 
 const driveStored = (name: string): StoredAudioFile => ({
@@ -146,6 +203,7 @@ function makeDeviceLibrary(overrides: Partial<DeviceLibraryOptions> = {}) {
 		ensureDriveAccessToken: vi.fn().mockResolvedValue('tok'),
 	} as unknown as DriveSession;
 	const bumpBrowseVersion = vi.fn();
+	const bumpLibraryRevision = vi.fn();
 	const hydrateTracksFromLibrary = vi.fn();
 	const runPendingFileOp = vi.fn().mockResolvedValue(undefined);
 	const refreshDriveLibrary = vi.fn().mockResolvedValue(undefined);
@@ -159,6 +217,7 @@ function makeDeviceLibrary(overrides: Partial<DeviceLibraryOptions> = {}) {
 		getFolderInputEl: () => folderInputEl,
 		getNativeFileInputEl: () => nativeFileInputEl,
 		bumpBrowseVersion,
+		bumpLibraryRevision,
 		hydrateTracksFromLibrary,
 		runPendingFileOp,
 		refreshDriveLibrary,
@@ -166,17 +225,84 @@ function makeDeviceLibrary(overrides: Partial<DeviceLibraryOptions> = {}) {
 	});
 
 	return {
-		lib, view, driveSession, bumpBrowseVersion, hydrateTracksFromLibrary,
+		lib, view, driveSession, bumpBrowseVersion, bumpLibraryRevision, hydrateTracksFromLibrary,
 		runPendingFileOp, refreshDriveLibrary, folderInputEl, nativeFileInputEl,
 	};
 }
 
+/** Record every assignment to `view.allFiles`, so "publishes once" is observable. */
+function trackAllFiles(view: { allFiles: StoredAudioFile[] }) {
+	const writes: StoredAudioFile[][] = [];
+	let current = view.allFiles;
+	Object.defineProperty(view, 'allFiles', {
+		configurable: true,
+		get: () => current,
+		set: (value: StoredAudioFile[]) => { writes.push(value); current = value; },
+	});
+	return writes;
+}
+
 /** Run a scan and wait for the fired-and-forgotten promise chain to settle. */
-function startScan(lib: DeviceLibrary, folderName = 'Library', options: { resetExistingFiles?: boolean } = {}) {
+function startScan(lib: DeviceLibrary, folderName = 'Library', options: LibraryScanOptions = {}) {
 	lib.startLibraryScan(folderName, options);
+	return waitForScanToSettle(lib);
+}
+
+/** Wait until the already-started scan's promise chain has settled. */
+function waitForScanToSettle(lib: DeviceLibrary) {
 	return vi.waitFor(() => {
 		if (lib.libraryScanPromise) throw new Error('scan still running');
 	});
+}
+
+/** Wait for the warm start's scheduled walk to start and finish. */
+async function waitForWarmStartScan(lib: DeviceLibrary) {
+	await vi.waitFor(() => {
+		if (mocks.scanNativeLibrary.mock.calls.length === 0) throw new Error('warm start scan not started');
+	});
+	await waitForScanToSettle(lib);
+}
+
+/** A cached native entry, the shape a payload carries, rebuilt from a scanned file. */
+function toCachedNative(file: StoredAudioFile) {
+	if (file.source !== 'native') throw new Error(`not a native file: ${file.name}`);
+	return {
+		source: 'native' as const,
+		name: file.name,
+		relativePath: file.relativePath,
+		path: file.path,
+		mimeType: file.mimeType,
+		modifiedAt: file.modifiedAt,
+		sizeBytes: file.sizeBytes,
+	};
+}
+
+/**
+ * The payload a completed walk writes, read back from the real write path: run one
+ * scan whose native walk reports `dirs`, then hand back the files and the tree the
+ * module stored. A hand-written `{ path: '', mtime }` row is what hid the walker
+ * never emitting one, so the fixtures that care about the root row build it here.
+ */
+async function cachedPayloadFromRealWalk(
+	files: StoredAudioFile[],
+	dirs: Array<{ path: string; mtime: number }>,
+	folderName = 'Music'
+) {
+	const walk = makeDeviceLibrary({ isNativeApp: true });
+	walk.lib.nativeTreeUri = 'content://tree';
+	mocks.scanNativeLibrary.mockResolvedValue(walkResult(files, dirs));
+	await startScan(walk.lib, folderName);
+	const written = mocks.saveCachedLibrary.mock.calls.at(-1);
+	if (!written) throw new Error('the walk wrote no cache payload');
+
+	return {
+		folderName: written[1] as string,
+		files: (written[2] as StoredAudioFile[]).map(toCachedNative),
+		savedAt: 1,
+		schemaVersion: 1,
+		completedAt: Date.now(),
+		dirs: written[4] as Array<{ path: string; mtime: number }>
+	};
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -215,38 +341,68 @@ describe('startLibraryScan', () => {
 		expect(mocks.collectStoredFilesFromDirHandle).toHaveBeenCalledWith(handle);
 		expect(view.allFiles.map((f) => f.name)).toEqual(['a.mp3', 'b.mp3']);
 		expect(hydrateTracksFromLibrary).toHaveBeenCalledWith(view.allFiles);
-		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(null, 'Music', view.allFiles);
+		// No tree from a File System Access walk. The completion write still happens:
+		// a finished walk owns the payload, even an empty one.
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(null, 'Music', view.allFiles, undefined, [], { allowEmpty: true });
 		expect(lib.scanProgress).toBeNull();
 		expect(lib.libraryScanPromise).toBeNull();
 	});
 
-	it('streams a native scan batch by batch, bumping the browse version and progress', async () => {
-		let lib!: DeviceLibrary;
-		const progressAtFirstBatch: Array<{ pct: number; filesFound: number } | null> = [];
-		mocks.scanNativeAudioFiles.mockImplementation(async (_treeUri, _path, _size, _opts, onBatch) => {
-			const batch = [nativeFile('a.mp3')];
-			// The real plugin awaits a native call before its first batch; yield once
-			// so the view's `libraryScanPromise` is assigned before onBatch runs.
-			await Promise.resolve();
-			await onBatch?.(batch, { done: true, foldersScanned: 1, foldersQueued: 0, totalFiles: 1 });
-			progressAtFirstBatch.push(lib.scanProgress);
-			return batch;
-		});
-		const made = makeDeviceLibrary();
-		lib = made.lib;
-		lib.nativeTreeUri = 'content://tree';
+	it('streams a native scan batch by batch, bumping the browse version once per frame', async () => {
+		vi.useFakeTimers();
+		try {
+			let made!: ReturnType<typeof makeDeviceLibrary>;
+			const progressPerBatch: Array<{ pct: number; filesFound: number } | null> = [];
+			const bumpsPerBatch: number[] = [];
+			mocks.scanNativeLibrary.mockImplementation(async (_treeUri, _path, _size, _opts, onBatch) => {
+				const batch = [nativeFile('a.mp3')];
+				// The real plugin awaits a native call before its first batch; yield once
+				// so the view's `libraryScanPromise` is assigned before onBatch runs.
+				await Promise.resolve();
+				// Three batches, all inside one frame.
+				await onBatch?.(batch, { done: false, foldersScanned: 1, foldersQueued: 0, totalFiles: 3 });
+				progressPerBatch.push(made.lib.scanProgress);
+				bumpsPerBatch.push(made.bumpBrowseVersion.mock.calls.length);
+				for (const name of ['b.mp3', 'c.mp3']) {
+					await onBatch?.([nativeFile(name)], { done: false, foldersScanned: 1, foldersQueued: 0, totalFiles: 3 });
+					progressPerBatch.push(made.lib.scanProgress);
+					bumpsPerBatch.push(made.bumpBrowseVersion.mock.calls.length);
+				}
+				return walkResult([nativeFile('a.mp3'), nativeFile('b.mp3'), nativeFile('c.mp3')], [{ path: '', mtime: 9 }]);
+			});
+			made = makeDeviceLibrary();
+			made.lib.nativeTreeUri = 'content://tree';
+			const writes = trackAllFiles(made.view);
 
-		await startScan(lib);
+			made.lib.startLibraryScan('Library');
+			// Drains the walk's microtasks and then the frame the bump waits for.
+			await vi.advanceTimersByTimeAsync(20);
+			expect(made.lib.libraryScanPromise).toBeNull();
 
-		expect(mocks.scanNativeAudioFiles).toHaveBeenCalledWith('content://tree', [], 500, {}, expect.any(Function));
-		expect(progressAtFirstBatch[0]).toEqual({ pct: 99, filesFound: 1 });
-		expect(made.view.allFiles.map((f) => f.name)).toEqual(['a.mp3']);
-		expect(made.hydrateTracksFromLibrary).toHaveBeenCalled();
-		expect(made.bumpBrowseVersion).toHaveBeenCalled();
+			expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, {}, expect.any(Function));
+			// The files still land per batch, and so does the progress: only the bump moved.
+			expect(writes.slice(0, 3).map((files) => files.map((f) => f.name))).toEqual([['a.mp3'], ['a.mp3', 'b.mp3'], ['a.mp3', 'b.mp3', 'c.mp3']]);
+			expect(progressPerBatch).toEqual([
+				{ pct: 99, filesFound: 1 },
+				{ pct: 99, filesFound: 2 },
+				{ pct: 99, filesFound: 3 },
+			]);
+			// No bump per batch (D8: the old shape), one bump for the whole frame.
+			expect(bumpsPerBatch).toEqual([0, 0, 0]);
+			expect(made.bumpBrowseVersion).toHaveBeenCalledTimes(1);
+			expect(made.view.allFiles.map((f) => f.name)).toEqual(['a.mp3', 'b.mp3', 'c.mp3']);
+			expect(made.hydrateTracksFromLibrary).toHaveBeenCalled();
+			// The walk's own directory rows are stored, so the next start can skip them.
+			expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+				'content://tree', 'Library', made.view.allFiles, undefined, [{ path: '', mtime: 9 }], { allowEmpty: true }
+			);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('clears the existing list first when resetExistingFiles is set', async () => {
-		const { lib, view, bumpBrowseVersion } = makeDeviceLibrary();
+		const { lib, view, bumpBrowseVersion, bumpLibraryRevision } = makeDeviceLibrary();
 		lib.rootDirHandle = {} as FileSystemDirectoryHandle;
 		view.allFiles = [nativeFile('old.mp3')];
 
@@ -254,6 +410,8 @@ describe('startLibraryScan', () => {
 
 		expect(view.allFiles).toEqual([]);
 		expect(bumpBrowseVersion).toHaveBeenCalledWith();
+		// The clear is a publish, so the search index has to see it (D9).
+		expect(bumpLibraryRevision).toHaveBeenCalledTimes(1);
 		expect(lib.scanProgress).toEqual({ pct: 0, filesFound: 0 });
 		await startScan(lib);
 	});
@@ -268,6 +426,331 @@ describe('startLibraryScan', () => {
 
 		expect(hydrateTracksFromLibrary).not.toHaveBeenCalled();
 	});
+
+	it('a delta publishes the index once', async () => {
+		const made = makeDeviceLibrary();
+		const previousFile = nativeFile('a.mp3');
+		made.view.allFiles = [previousFile];
+		const writes = trackAllFiles(made.view);
+		made.lib.nativeTreeUri = 'content://tree';
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3'), nativeFile('b.mp3')], [{ path: '', mtime: 6 }])
+		);
+		const previous: LibraryScanPrevious = {
+			files: [previousFile],
+			dirs: [{ path: '', mtime: 5 }],
+			completedAt: Date.now(),
+		};
+
+		await startScan(made.lib, 'Music', { mode: 'delta', previous });
+
+		// The walk was told what it may skip, and no batch callback is handed over:
+		// a delta collects instead of streaming.
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, { prevDirs: previous.dirs });
+		// One assignment to `view.allFiles`, holding the merged index, and one bump:
+		// a delta never streams batch by batch.
+		expect(writes.map((files) => files.map((f) => f.name))).toEqual([['a.mp3', 'b.mp3']]);
+		expect(made.bumpBrowseVersion).toHaveBeenCalledTimes(1);
+		// One publish, one revision: the search index rebuilds off it (D9).
+		expect(made.bumpLibraryRevision).toHaveBeenCalledTimes(1);
+		expect(made.hydrateTracksFromLibrary).toHaveBeenCalledWith(writes[0]);
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', writes[0], undefined, [{ path: '', mtime: 6 }], { allowEmpty: true }
+		);
+	});
+
+	it('skips the queue reload when a delta merged nothing new', async () => {
+		const made = makeDeviceLibrary();
+		const previousFile = nativeFile('a.mp3');
+		made.view.allFiles = [previousFile];
+		made.lib.nativeTreeUri = 'content://tree';
+		// Same path, same (mtime, size): the merge keeps the previous object.
+		mocks.scanNativeLibrary.mockResolvedValue(walkResult([nativeFile('a.mp3')], [{ path: '', mtime: 5 }]));
+
+		await startScan(made.lib, 'Music', {
+			mode: 'delta',
+			previous: { files: [previousFile], dirs: [{ path: '', mtime: 5 }], completedAt: Date.now() },
+		});
+
+		expect(made.hydrateTracksFromLibrary).not.toHaveBeenCalled();
+	});
+
+	it('a completed delta that empties the library writes an empty payload', async () => {
+		const made = makeDeviceLibrary();
+		made.view.allFiles = [nativeFile('a.mp3')];
+		const writes = trackAllFiles(made.view);
+		made.lib.nativeTreeUri = 'content://tree';
+		// Everything the previous walk had is gone from the device.
+		mocks.scanNativeLibrary.mockResolvedValue(walkResult([], [{ path: '', mtime: 7 }]));
+
+		await startScan(made.lib, 'Music', {
+			mode: 'delta',
+			previous: { files: [nativeFile('a.mp3')], dirs: [{ path: '', mtime: 5 }], completedAt: Date.now() },
+		});
+
+		expect(writes.map((files) => files.length)).toEqual([0]);
+		// `allowEmpty` is what makes the completed empty walk reachable at all:
+		// without it `saveCachedLibrary` returns before touching IndexedDB.
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [], undefined, [{ path: '', mtime: 7 }], { allowEmpty: true }
+		);
+	});
+
+	it('protects only the directories the walk actually skipped', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		// Three previous directories: one the walker skipped, one it re-observed with
+		// no change, and one the user removed from the device. The removed one is
+		// absent from `dirs` *and* from the walk's skip report, which is the only way
+		// to tell it apart from the skipped one.
+		const skippedFile = nativeFile('Alpha/a.mp3');
+		const observedFile = nativeFile('Beta/b.mp3');
+		const removedFile = nativeFile('Zeta/z.mp3');
+		// The warm start restores the payload into the live index before it schedules
+		// the walk, so the live index is what the merge reads as `previous`.
+		made.view.allFiles = [skippedFile, observedFile, removedFile];
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([observedFile], [{ path: 'Beta', mtime: 20 }], ['Alpha'])
+		);
+		const previous: LibraryScanPrevious = {
+			files: [skippedFile, observedFile, removedFile],
+			dirs: [
+				{ path: 'Alpha', mtime: 10 },
+				{ path: 'Beta', mtime: 20 },
+				{ path: 'Zeta', mtime: 30 },
+			],
+			completedAt: Date.now(),
+		};
+
+		await startScan(made.lib, 'Music', { mode: 'delta', previous });
+
+		// Alpha's file survives because the walker said it skipped Alpha; Zeta's is
+		// pruned because the walker never mentioned Zeta and the walk completed.
+		expect(made.view.allFiles.map((f) => f.relativePath)).toEqual(['Beta/b.mp3', 'Alpha/a.mp3']);
+	});
+
+	it('prunes a file whose directory was removed from the device', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		const keptFile = nativeFile('Alpha/a.mp3');
+		const removedFile = nativeFile('Deleted/d.mp3');
+		made.view.allFiles = [keptFile, removedFile];
+		// The walk skips the unchanged Alpha folder and never mentions Deleted, which
+		// is what deleting a whole folder looks like from the walk's side.
+		mocks.scanNativeLibrary.mockResolvedValue(walkResult([], [], ['Alpha']));
+
+		await startScan(made.lib, 'Music', {
+			mode: 'delta',
+			previous: {
+				files: [keptFile, removedFile],
+				dirs: [{ path: 'Alpha', mtime: 10 }, { path: 'Deleted', mtime: 20 }],
+				completedAt: Date.now(),
+			},
+		});
+
+		expect(made.view.allFiles.map((f) => f.relativePath)).toEqual(['Alpha/a.mp3']);
+		// The pruned index is what gets written, so the folder does not come back on
+		// the next start, and the removed row leaves the tree with it.
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [keptFile], undefined, [{ path: 'Alpha', mtime: 10 }], { allowEmpty: true }
+		);
+	});
+
+	it('keeps a file added after the restore when its directory was skipped', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		// The restored payload the warm start holds, and the row the player's live
+		// index gains while the walk runs: a Drive download writing its native copy
+		// into Downloads and appending it to `view.allFiles`.
+		const restoredFile = nativeFile('Alpha/a.mp3');
+		const downloaded: StoredAudioFile = {
+			source: 'native',
+			name: 'song.mp3',
+			relativePath: 'Downloads/song.mp3',
+			path: '/sdcard/Downloads/song.mp3',
+			mimeType: 'audio/mpeg',
+			modifiedAt: Date.now()
+		};
+		made.view.allFiles = [restoredFile, downloaded];
+		// Both directories were skipped on their mtime, so the walk observed no file at
+		// all and neither file is in its output.
+		mocks.scanNativeLibrary.mockResolvedValue(walkResult([], [], ['Alpha', 'Downloads']));
+		const previous: LibraryScanPrevious = {
+			files: [restoredFile],
+			dirs: [{ path: 'Alpha', mtime: 10 }],
+			completedAt: Date.now(),
+		};
+
+		await startScan(made.lib, 'Music', { mode: 'delta', previous });
+
+		// The download is still on the device, so the publish must not drop it. Merging
+		// against the restored list instead of the live index would lose it until the
+		// next full walk.
+		expect(made.view.allFiles.map((f) => f.relativePath)).toEqual(['Alpha/a.mp3', 'Downloads/song.mp3']);
+		expect(made.view.allFiles[1]).toBe(downloaded);
+	});
+
+	it('prunes nothing when the walk reports skips without paths', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		const keptFile = nativeFile('Music/Live/a.mp3');
+		const alsoKeptFile = nativeFile('Music/Studio/b.mp3');
+		made.view.allFiles = [keptFile, alsoKeptFile];
+		// Two directories skipped and no path named, which is the payload of an APK
+		// that predates `skippedPaths`. Nothing under them is verified.
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([], [{ path: 'Music/Other', mtime: 20 }], [], { skippedDirs: 2 })
+		);
+
+		await startScan(made.lib, 'Music', {
+			mode: 'delta',
+			previous: {
+				files: [keptFile, alsoKeptFile],
+				dirs: [{ path: 'Music/Live', mtime: 10 }, { path: 'Music/Studio', mtime: 15 }],
+				completedAt: Date.now(),
+			},
+		});
+
+		expect(made.view.allFiles.map((f) => f.relativePath)).toEqual([
+			'Music/Live/a.mp3',
+			'Music/Studio/b.mp3',
+		]);
+		// The tree keeps only the row the walk observed: a row it cannot attribute to
+		// a named skip is dropped, so the next walk descends it instead of trusting it.
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [keptFile, alsoKeptFile], undefined,
+			[{ path: 'Music/Other', mtime: 20 }],
+			{ allowEmpty: true }
+		);
+	});
+
+	it('prunes nothing when the walk did not complete', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		const keptFile = nativeFile('Alpha/a.mp3');
+		const unseenFile = nativeFile('Beta/b.mp3');
+		made.view.allFiles = [keptFile, unseenFile];
+		// A walk that stopped without a `done` batch: it re-observed Alpha and never
+		// reached Beta, and it says so in its own result rather than by throwing.
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([keptFile], [{ path: 'Alpha', mtime: 10 }], [], { completed: false })
+		);
+
+		await startScan(made.lib, 'Music', {
+			mode: 'delta',
+			previous: {
+				files: [keptFile, unseenFile],
+				dirs: [{ path: 'Alpha', mtime: 10 }, { path: 'Beta', mtime: 20 }],
+				completedAt: Date.now(),
+			},
+		});
+
+		// Beta was never reached and the walk admits it did not finish, so its file
+		// stays even though the walk completed no skip report to protect it.
+		expect(made.view.allFiles.map((f) => f.relativePath)).toEqual(['Alpha/a.mp3', 'Beta/b.mp3']);
+	});
+
+	it('a completed full walk that empties the library writes an empty payload', async () => {
+		const made = makeDeviceLibrary();
+		made.view.allFiles = [nativeFile('a.mp3')];
+		const writes = trackAllFiles(made.view);
+		made.lib.nativeTreeUri = 'content://tree';
+		// A full walk of a folder the user emptied: no files, the root visited.
+		mocks.scanNativeLibrary.mockResolvedValue(walkResult([], [{ path: '', mtime: 7 }]));
+
+		await startScan(made.lib, 'Music');
+
+		expect(writes.map((files) => files.length)).toEqual([0]);
+		// A full walk owns the payload it produced too, so the stale one cannot
+		// outlive the emptied folder until the next walk.
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [], undefined, [{ path: '', mtime: 7 }], { allowEmpty: true }
+		);
+	});
+
+	it('a full walk with an unreadable directory writes no completion time', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		// The provider refused one directory (revoked permission, removed media): the
+		// walk saw part of the tree and says so in `unreadableDirs`.
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3')], [{ path: '', mtime: 7 }, { path: 'Locked', mtime: 8 }], [], { unreadableDirs: 1 })
+		);
+
+		await startScan(made.lib, 'Music');
+
+		// The files it did observe are published: a partial listing beats an empty library.
+		expect(made.view.allFiles.map((f) => f.name)).toEqual(['a.mp3']);
+		// But the payload is not stamped as a completed walk. `completedAt: null` writes no
+		// stamp at all, so `decideScanMode` reads the payload as unverified and the next
+		// start walks in full instead of delta-ing against a tree this walk could not check.
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [nativeFile('a.mp3')], undefined, [], { allowEmpty: true, completedAt: null }
+		);
+	});
+
+	it('a full walk that did not complete writes no completion time', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		// No batch ever reported `done`, so the walk saw an unknown part of the tree. Its
+		// output is not a verdict on the files it never reported (D3).
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3')], [{ path: '', mtime: 7 }], [], { completed: false })
+		);
+
+		await startScan(made.lib, 'Music');
+
+		expect(made.view.allFiles.map((f) => f.name)).toEqual(['a.mp3']);
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [nativeFile('a.mp3')], undefined, [], { allowEmpty: true, completedAt: null }
+		);
+	});
+
+	it('an unreadable directory is not recorded as walked', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		// The walker emits a child directory's row when its parent's listing names it,
+		// before descending, so `Locked` is in the walk output with the mtime the provider
+		// reported even though nobody read a byte of it. Written as-is, the next delta
+		// would skip the subtree on that mtime match and its files would never come back.
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3')], [{ path: '', mtime: 7 }, { path: 'Locked', mtime: 8 }], [], { unreadableDirs: 1 })
+		);
+
+		await startScan(made.lib, 'Music');
+
+		const written = mocks.saveCachedLibrary.mock.calls.at(-1);
+		const rows = written?.[4] as Array<{ path: string; mtime: number }>;
+		// No row at all, not `Locked`'s and not the ones that were readable: the unreadable
+		// directories arrive as a count, not as paths, so no row can be dropped by name.
+		expect(rows).toEqual([]);
+		// Which is what sends the next start into a full walk: no usable tree, so
+		// `decideScanMode` cannot pick a delta that skips `Locked` again.
+		expect(hasUsableDirectoryTree({
+			folderName: 'Music', files: [], savedAt: 1, schemaVersion: 1, completedAt: undefined, dirs: rows
+		})).toBe(false);
+	});
+
+	it('a delta that could not read a directory records no tree either', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		const keptFile = nativeFile('Alpha/a.mp3');
+		made.view.allFiles = [keptFile];
+		// The same rule as the full walk: a delta that could not read a directory has no
+		// verified tree to hand on, so the next start falls back to a full walk (D2, D3).
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([keptFile], [{ path: 'Alpha', mtime: 10 }, { path: 'Locked', mtime: 11 }], [], { unreadableDirs: 1 })
+		);
+
+		await startScan(made.lib, 'Music', {
+			mode: 'delta',
+			previous: { files: [keptFile], dirs: [{ path: 'Alpha', mtime: 10 }], completedAt: Date.now() },
+		});
+
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Music', [keptFile], undefined, [], { allowEmpty: true, completedAt: null }
+		);
+	});
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -275,28 +758,66 @@ describe('startLibraryScan', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('rescanCurrentLibraryIndex', () => {
-	it('deletes the device cache key and the last-library key before rescanning', async () => {
+	it('does not delete the cache before scanning', async () => {
 		const { lib } = makeDeviceLibrary();
 		lib.nativeTreeUri = 'content://tree';
 
 		await lib.rescanCurrentLibraryIndex();
 
-		expect(mocks.getDeviceLibraryCacheKey).toHaveBeenCalledWith({ treeUri: 'content://tree', folderName: 'Library' });
-		expect(mocks.deleteCachedLibrary.mock.calls.map((c) => c[0])).toEqual(['device:content://tree', 'last-library']);
-		expect(lib.libraryScanPromise).not.toBeNull();
-		await startScan(lib);
+		expect(mocks.deleteCachedLibrary).not.toHaveBeenCalled();
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledTimes(1);
+		await waitForScanToSettle(lib);
 	});
 
-	it('deletes the last-library key as well as the folder key', async () => {
+	it('a rescan always walks in full', async () => {
+		const made = makeDeviceLibrary();
+		made.lib.nativeTreeUri = 'content://tree';
+		// A payload a warm start would happily run a delta against.
+		mocks.loadDeviceCachedLibrary.mockResolvedValue(usableCache());
+		made.view.allFiles = [nativeFile('stale.mp3')];
+
+		await made.lib.rescanCurrentLibraryIndex();
+		await waitForScanToSettle(made.lib);
+
+		// No decision is taken and no tree is handed over: `{}` means "descend
+		// everything", and the walk streams into a list that was cleared first.
+		expect(mocks.loadDeviceCachedLibrary).not.toHaveBeenCalled();
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, {}, expect.any(Function));
+		expect(made.view.allFiles).toEqual([]);
+		// A completed full walk that found nothing writes the empty payload, so the
+		// previous one cannot outlive a folder the user emptied.
+		expect(mocks.saveCachedLibrary).toHaveBeenCalledWith(
+			'content://tree', 'Library', [], undefined, [], { allowEmpty: true }
+		);
+	});
+
+	it('keeps the stored payload when the rescan fails', async () => {
+		const { lib } = makeDeviceLibrary();
+		lib.rootDirHandle = {} as FileSystemDirectoryHandle;
+		mocks.collectStoredFilesFromDirHandle.mockRejectedValue(new Error('walk failed'));
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await lib.rescanCurrentLibraryIndex();
+		await waitForScanToSettle(lib);
+
+		// Nothing removed the key and nothing replaced it, so the previous payload
+		// is still what the next start restores.
+		expect(mocks.deleteCachedLibrary).not.toHaveBeenCalled();
+		expect(mocks.saveCachedLibrary).not.toHaveBeenCalled();
+		consoleError.mockRestore();
+	});
+
+	it('never deletes the last-library key', async () => {
 		const { lib } = makeDeviceLibrary();
 		musicSettings.lastFolderName = '';
 		lib.nativeTreeUri = null;
 
 		await lib.rescanCurrentLibraryIndex();
 
-		// `lastFolderName || 'Library'` is always truthy, so the folder key is
-		// never the last-library key and both deletes always run.
-		expect(mocks.deleteCachedLibrary.mock.calls.map((c) => c[0])).toEqual(['device-folder:Library', 'last-library']);
+		// The derived folder key is no longer computed at all, and the mirror is
+		// never a rescan's business: the completion write replaces the payload.
+		expect(mocks.deleteCachedLibrary).not.toHaveBeenCalledWith('last-library');
+		expect(mocks.deleteCachedLibrary).not.toHaveBeenCalledWith('device-folder:Library');
 		// No tree URI or handle — nothing to scan.
 		expect(lib.libraryScanPromise).toBeNull();
 	});
@@ -323,19 +844,50 @@ describe('restoreLocalLibrary', () => {
 		await expect(lib.restoreLocalLibrary()).resolves.toBe(false);
 	});
 
-	it('restores the native SAF tree from cache', async () => {
-		const { lib, view, hydrateTracksFromLibrary } = makeDeviceLibrary({ isNativeApp: true });
+	it('restores the native SAF tree from cache, then walks in full when the payload has no tree', async () => {
+		const { lib, view, hydrateTracksFromLibrary, bumpLibraryRevision } = makeDeviceLibrary({ isNativeApp: true });
 		musicSettings.nativeTreeUri = 'content://tree';
 		musicSettings.lastFolderName = 'Music';
-		mocks.loadDeviceCachedLibrary.mockResolvedValue({ folderName: 'Music', files: [{ source: 'native', name: 'a.mp3', relativePath: 'a.mp3', path: '/a.mp3' }] });
+		// The shape every device holds today: files, no schemaVersion, no rows.
+		mocks.loadDeviceCachedLibrary.mockResolvedValue({ folderName: 'Music', files: [cachedNativeFile('a.mp3')] });
+		const writes = trackAllFiles(view);
 
 		await expect(lib.restoreLocalLibrary()).resolves.toBe(true);
 
 		expect(lib.nativeTreeUri).toBe('content://tree');
 		expect(lib.rootDirHandle).toBeNull();
-		expect(view.allFiles.map((f) => f.name)).toEqual(['a.mp3']);
 		expect(hydrateTracksFromLibrary).toHaveBeenCalled();
-		expect(mocks.saveCachedLibrary).not.toHaveBeenCalled();
+		// The cache restore is a publish too, so the search index sees it (D9).
+		expect(bumpLibraryRevision).toHaveBeenCalled();
+		// The cached list is restored, then the background full walk publishes its
+		// own result once (the mocked walk finds nothing).
+		expect(writes.map((files) => files.map((f) => f.name))).toEqual([[], ['a.mp3'], []]);
+
+		// Nothing to skip against, so the background walk is the full fallback: no
+		// `prevDirs`, and no batch callback because it publishes once.
+		await waitForWarmStartScan(lib);
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, {}, undefined);
+	});
+
+	it('a warm start runs a delta walk without clearing the list', async () => {
+		const made = makeDeviceLibrary({ isNativeApp: true });
+		musicSettings.nativeTreeUri = 'content://tree';
+		musicSettings.lastFolderName = 'Music';
+		const cached = usableCache();
+		mocks.loadDeviceCachedLibrary.mockResolvedValue(cached);
+		const writes = trackAllFiles(made.view);
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3'), nativeFile('b.mp3')], [{ path: '', mtime: 6 }])
+		);
+
+		await expect(made.lib.restoreLocalLibrary()).resolves.toBe(true);
+		await waitForWarmStartScan(made.lib);
+
+		// The native branch's own clear, the cached list put back, and exactly one
+		// delta publish holding the merged index: no clear and no partial batch in
+		// between, whatever the walk's timing.
+		expect(writes.map((files) => files.map((f) => f.name))).toEqual([[], ['a.mp3'], ['a.mp3', 'b.mp3']]);
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, { prevDirs: cached.dirs });
 	});
 
 	it('starts a scan from the native branch on a cache miss', async () => {
@@ -361,6 +913,92 @@ describe('restoreLocalLibrary', () => {
 
 		expect(view.allFiles).toEqual([]);
 		expect(lib.deckFolderLabel).toBe('Web');
+	});
+});
+
+describe('refreshWarmLibrary', () => {
+	it('a mount restore starts a background delta', async () => {
+		// The payload is what a completed walk wrote, so its tree is the one the walker
+		// reports (the scan root row plus the directories it descended into).
+		const cached = await cachedPayloadFromRealWalk(
+			[nativeFile('a.mp3')],
+			[{ path: '', mtime: 5 }, { path: 'Alpha', mtime: 6 }]
+		);
+		vi.clearAllMocks();
+		mocks.loadDeviceCachedLibrary.mockResolvedValue(cached);
+		mocks.scanNativeLibrary.mockResolvedValue(
+			walkResult([nativeFile('a.mp3'), nativeFile('b.mp3')], cached.dirs)
+		);
+
+		// The mount effect's sequence, which is the path the real app takes: restore
+		// the cache into the view, adopt the tree URI, then refresh. Nothing here calls
+		// `restoreLocalLibrary`, which is only the header button's entry point.
+		const made = makeDeviceLibrary({ isNativeApp: true });
+		musicSettings.nativeTreeUri = 'content://tree';
+		musicSettings.lastFolderName = 'Music';
+		const loaded = await mocks.loadDeviceCachedLibrary('content://tree', 'Music');
+		made.view.allFiles = mocks.restoreStoredFilesFromCache(loaded);
+		made.lib.nativeTreeUri = musicSettings.nativeTreeUri;
+		const writes = trackAllFiles(made.view);
+
+		made.lib.refreshWarmLibrary(loaded.folderName, loaded, made.view.allFiles);
+		await waitForWarmStartScan(made.lib);
+
+		// A delta, not the full fallback: the restored file list survives untouched and
+		// the walk is told what it may skip.
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, { prevDirs: cached.dirs });
+		expect(writes.map((files) => files.map((f) => f.name))).toEqual([['a.mp3', 'b.mp3']]);
+	});
+
+	it('a second warm refresh while a scan runs does not start another walk', async () => {
+		const cached = await cachedPayloadFromRealWalk([nativeFile('a.mp3')], [{ path: '', mtime: 5 }]);
+		vi.clearAllMocks();
+		mocks.loadDeviceCachedLibrary.mockResolvedValue(cached);
+
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		mocks.scanNativeLibrary.mockImplementation(async () => {
+			await gate;
+			return walkResult([nativeFile('a.mp3')], cached.dirs);
+		});
+
+		const made = makeDeviceLibrary({ isNativeApp: true });
+		made.lib.nativeTreeUri = 'content://tree';
+		const restored = mocks.restoreStoredFilesFromCache(cached);
+
+		// Two calls in one tick: the first is still a scheduled microtask here, so the
+		// scan promise the guard also reads does not exist yet.
+		made.lib.refreshWarmLibrary('Music', cached, restored);
+		made.lib.refreshWarmLibrary('Music', cached, restored);
+		await vi.waitFor(() => {
+			if (!made.lib.libraryScanPromise) throw new Error('warm scan not started');
+		});
+		// And a third while the walk is in flight.
+		made.lib.refreshWarmLibrary('Music', cached, restored);
+		release();
+		await waitForScanToSettle(made.lib);
+
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledTimes(1);
+	});
+
+	it('a library with only root files gets a usable tree', async () => {
+		// Every file in the library sits in the tree root, so the walk sees the root and
+		// no child directory. The row is what a real walk wrote, not a hand-written one.
+		const cached = await cachedPayloadFromRealWalk([nativeFile('a.mp3')], [{ path: '', mtime: 9 }]);
+		expect(cached.dirs).toEqual([{ path: '', mtime: 9 }]);
+		expect(hasUsableDirectoryTree(cached)).toBe(true);
+
+		vi.clearAllMocks();
+		mocks.scanNativeLibrary.mockResolvedValue(walkResult([nativeFile('a.mp3')], cached.dirs));
+		const made = makeDeviceLibrary({ isNativeApp: true });
+		made.lib.nativeTreeUri = 'content://tree';
+		made.view.allFiles = mocks.restoreStoredFilesFromCache(cached);
+
+		made.lib.refreshWarmLibrary(cached.folderName, cached, made.view.allFiles);
+		await waitForWarmStartScan(made.lib);
+
+		// A root-only tree is a delta: the root row alone is enough to open the gate.
+		expect(mocks.scanNativeLibrary).toHaveBeenCalledWith('content://tree', [], 500, { prevDirs: [{ path: '', mtime: 9 }] });
 	});
 });
 

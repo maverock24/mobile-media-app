@@ -20,11 +20,14 @@
  * The browse reload effect stays in the view: it reads `browsePath`, `driveSearch`,
  * `browseVersion` and `musicSettings.librarySource` and calls this module. That is
  * deliberate — moving the effect here would drop the per-deck `driveSearch` read
- * (Drive-domain state the view owns) and change when the reload fires. The view
- * keeps the reads, so every dependency the effect had before is still read in the
- * effect body; this module is called synchronously from it, so the reactive reads
- * inside `loadBrowseEntries` (the library source, the sort order, the file list,
- * the device handles) still register exactly as they did in the view.
+ * (Drive-domain state the view owns) and change when the reload fires. The effect
+ * goes through `scheduleBrowseEntries`, so a burst of bumps rebuilds the entries
+ * once per frame rather than once per bump. Because the load itself then runs on
+ * the next frame, outside that effect's tracking scope, the signals
+ * `loadBrowseEntries` reads (the file list, the sort order, the device handles) are
+ * read in the effect body instead: they are the dependencies the effect had when
+ * it called the loader inline, and dropping them would stop a sort-order or
+ * file-list change from reloading the list on its own.
  *
  * State ownership:
  *  - `browseEntries` / `browseLoading` move here: only these functions and the
@@ -49,6 +52,7 @@ import {
 	sortFiles as sortStoredFiles
 } from '$lib/models/music';
 import { pathToString } from '$lib/browse/libraryCache';
+import { createFrameCoalescer } from '$lib/browse/reloadFrame';
 import { musicSettings } from '$lib/stores/settings.svelte';
 import { musicFavorites } from '$lib/stores/musicView.svelte';
 import { mediaEngine } from '$lib/stores/mediaEngine.svelte';
@@ -89,6 +93,8 @@ export interface BrowseNavigation {
 	browseLoading: boolean;
 
 	loadBrowseEntries(path: string[], driveFilter?: string): Promise<void>;
+	/** Coalesced `loadBrowseEntries`: several requests in one frame load once. */
+	scheduleBrowseEntries(path: string[], driveFilter?: string): void;
 	navigateInto(name: string): void;
 	goToFileFolder(file: StoredAudioFile): void;
 	navigateToParentFolderFromSwipe(): void;
@@ -104,6 +110,32 @@ export function createBrowseNavigation(opts: BrowseNavigationOptions): BrowseNav
 	// Plain `let`, like the view: the counter is never read in a reactive context.
 	// Per instance, so one deck's load cannot cancel the other deck's load.
 	let browseLoadId = 0;
+
+	/** The request the scheduled load will read when its frame arrives. */
+	let pendingEntryLoad: { path: string[]; driveFilter: string } | null = null;
+	const requestEntryLoad = createFrameCoalescer(() => {
+		const request = pendingEntryLoad;
+		pendingEntryLoad = null;
+		if (request) void loadBrowseEntries(request.path, request.driveFilter);
+	});
+
+	/**
+	 * Coalescing wrapper around `loadBrowseEntries`, for callers that reload on a
+	 * signal that fires faster than a frame (the view's `browseVersion` effect,
+	 * bumped once per scan batch). Several requests in one frame collapse into one
+	 * load, and the last request wins: `loadBrowseEntries` rebuilds the whole entry
+	 * list from `allFiles`, so the earlier paths are already stale.
+	 *
+	 * Deliberately a sibling of `loadBrowseEntries`, not a wrapper inside it: a
+	 * caller that awaits `loadBrowseEntries` still gets the rebuilt entries on the
+	 * next line.
+	 */
+	function scheduleBrowseEntries(path: string[], driveFilter = ''): void {
+		// Copied: the view rebuilds its `browsePath` array on every navigation, and
+		// the frame may land after that.
+		pendingEntryLoad = { path: [...path], driveFilter };
+		requestEntryLoad();
+	}
 
 	async function loadBrowseEntries(path: string[], driveFilter = ''): Promise<void> {
 		const loadId = ++browseLoadId;
@@ -240,6 +272,7 @@ export function createBrowseNavigation(opts: BrowseNavigationOptions): BrowseNav
 		set browseLoading(value: boolean) { state.browseLoading = value; },
 
 		loadBrowseEntries,
+		scheduleBrowseEntries,
 		navigateInto,
 		goToFileFolder,
 		navigateToParentFolderFromSwipe,

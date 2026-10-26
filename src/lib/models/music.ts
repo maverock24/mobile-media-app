@@ -3,11 +3,17 @@
  * Extracted from Mp3PlayerView.svelte to reduce file size and enable reuse.
  */
 
+// `NativeDirectoryFile` used to be declared a second time here, so that this module
+// could accept an entry from the native walk without importing the bridge (D13).
+// The bridge owns the declaration; a type-only import adds no runtime dependency on
+// Capacitor, so the second copy is gone.
+import type { NativeDirectoryFile } from '$lib/native/directory-reader';
+
 // ─── StoredAudioFile — unified representation of an MP3 file from any source ───
 
 export type StoredAudioFile =
 	| { source: 'web'; name: string; relativePath: string; file: File }
-	| { source: 'native'; name: string; relativePath: string; path: string; mimeType?: string; modifiedAt?: number }
+	| { source: 'native'; name: string; relativePath: string; path: string; mimeType?: string; modifiedAt?: number; sizeBytes?: number }
 	| {
 		source: 'drive';
 		name: string;
@@ -63,9 +69,24 @@ export type CachedNativeLibraryFile = {
 	path: string;
 	mimeType?: string;
 	modifiedAt?: number;
+	sizeBytes?: number;
 };
 export type CachedLibraryFile = CachedWebLibraryFile | CachedNativeLibraryFile;
-export type CachedLibrary = { folderName: string; files: CachedLibraryFile[]; savedAt: number; cacheKey?: string };
+/** One row of the persisted directory tree: a directory's path relative to the
+ *  tree root, and the mtime the walk that stored it trusted. */
+export type CachedLibraryDir = { path: string; mtime: number };
+export type CachedLibrary = {
+	folderName: string;
+	files: CachedLibraryFile[];
+	savedAt: number;
+	cacheKey?: string;
+	/** Payload version. Absent on a payload written before the tree existed. */
+	schemaVersion?: number;
+	/** When the walk that produced this payload finished. */
+	completedAt?: number;
+	/** The directory tree that walk observed. Empty or absent means "walk in full". */
+	dirs?: CachedLibraryDir[];
+};
 
 // ─── EQ Constants ────────────────────────────────────────────────────────────
 
@@ -135,15 +156,6 @@ export function createStoredWebAudioFile(file: File, relativePath: string): Stor
 	};
 }
 
-export interface NativeDirectoryFile {
-	kind: 'file';
-	name: string;
-	path: string;
-	relativePath: string;
-	mimeType?: string;
-	modifiedAt?: number;
-}
-
 export function createStoredNativeAudioFile(entry: NativeDirectoryFile): StoredAudioFile {
 	return {
 		source: 'native',
@@ -152,6 +164,7 @@ export function createStoredNativeAudioFile(entry: NativeDirectoryFile): StoredA
 		path: entry.path,
 		mimeType: entry.mimeType,
 		modifiedAt: entry.modifiedAt,
+		sizeBytes: entry.sizeBytes,
 	};
 }
 

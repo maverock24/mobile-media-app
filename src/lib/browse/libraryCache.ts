@@ -24,6 +24,7 @@ import { getRelativePath } from '$lib/models/browse';
 import {
 	type StoredAudioFile,
 	type CachedLibrary,
+	type CachedLibraryDir,
 	type CachedLibraryFile,
 	createStoredWebAudioFile,
 	isSupportedAudioFile,
@@ -48,12 +49,39 @@ export function getDeviceLibraryCacheKey(options: { treeUri?: string | null; fol
  * Persist a cooked library under its key, and under {@link LAST_LIBRARY_CACHE_KEY}
  * as well unless it is already that key. Write failures are swallowed: a full or
  * blocked IndexedDB must not break folder opening.
+ *
+ * The payload is versioned: `schemaVersion: 1` marks it as carrying a directory
+ * tree, `completedAt` is when the walk that produced it finished, and `dirs` is
+ * that walk's tree. A writer that cannot know a tree (the hidden-input paths, or
+ * any caller that passes none) gets an empty one, which
+ * {@link hasUsableDirectoryTree} reads as "no usable tree".
+ *
+ * An empty file list is skipped by default, which is how a stale payload survives
+ * a folder the user emptied. A completed walk is the case that must be written
+ * anyway: it owns the payload it produced, and skipping the empty write would let
+ * the stale payload outlive an emptied folder (D6 amendment). Both scan modes
+ * therefore pass `{ allowEmpty: true }`, and the empty payload lands with its tree
+ * and its `completedAt`.
+ *
+ * `completedAt` is the time the walk finished, and it defaults to now. A writer
+ * that did not walk (a delete rewriting the index, `fileOps.forgetDeletedFile`)
+ * must pass the time it carries forward instead: stamping now would claim a
+ * verification that never happened, and the next start could trust a tree that
+ * changed since it was read. Leaving it absent writes `Date.now()`, which is
+ * correct only for a writer that really just completed a walk.
+ *
+ * `completedAt: null` is the third case: a walk that ran but did not verify the
+ * tree (it stopped early, or could not read a directory). It still writes the
+ * files it observed, but with no stamp at all, so `libraryDelta.decideScanMode`
+ * reads the payload as never verified and the next start walks in full.
  */
 export async function saveCachedLibrary(
 	treeUri: string | null,
 	folderName: string,
 	files: StoredAudioFile[],
-	cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName })
+	cacheKey = getDeviceLibraryCacheKey({ treeUri, folderName }),
+	dirs: CachedLibraryDir[] = [],
+	options: { allowEmpty?: boolean; completedAt?: number | null } = {}
 ) {
 	const cachedFiles = files.reduce<CachedLibraryFile[]>((accumulator, file) => {
 		if (file.source === 'web') {
@@ -74,16 +102,27 @@ export async function saveCachedLibrary(
 				path: file.path,
 				mimeType: file.mimeType,
 				modifiedAt: file.modifiedAt,
+				sizeBytes: file.sizeBytes,
 			});
 		}
 
 		return accumulator;
 	}, []);
 
-	if (cachedFiles.length === 0) return;
+	if (cachedFiles.length === 0 && !options.allowEmpty) return;
 	try {
 		const db = await openIDB();
-		const payload = { folderName, files: cachedFiles, savedAt: Date.now(), cacheKey } satisfies CachedLibrary;
+		const payload = {
+			folderName,
+			files: cachedFiles,
+			savedAt: Date.now(),
+			cacheKey,
+			schemaVersion: 1,
+			// `null` means "this walk did not verify the tree": no stamp, so the next
+			// start cannot take the payload for a completed walk.
+			completedAt: options.completedAt === null ? undefined : (options.completedAt ?? Date.now()),
+			dirs
+		} satisfies CachedLibrary;
 		await idbPut(db, 'libraries', payload, cacheKey);
 		if (cacheKey !== LAST_LIBRARY_CACHE_KEY) {
 			await idbPut(db, 'libraries', payload, LAST_LIBRARY_CACHE_KEY);
@@ -108,6 +147,19 @@ export async function loadDeviceCachedLibrary(treeUri: string | null, folderName
 }
 
 /**
+ * True when a cached payload carries a directory tree a delta walk can trust: it
+ * was written by a versioned writer and it holds at least one row. A legacy
+ * payload (no `schemaVersion`), an unknown version, and a missing or empty tree
+ * all mean "walk in full". `libraryDelta.decideScanMode` gates the delta walk on
+ * it.
+ */
+export function hasUsableDirectoryTree(cached: CachedLibrary | null | undefined): boolean {
+	if (!cached) return false;
+	if (cached.schemaVersion !== 1) return false;
+	return Array.isArray(cached.dirs) && cached.dirs.length > 0;
+}
+
+/**
  * Rebuild playable `StoredAudioFile`s from a cached library. Cached entries
  * carry no live `File`, so web entries are re-wrapped and native entries are
  * returned as the plain native shape.
@@ -125,6 +177,7 @@ export function restoreStoredFilesFromCache(cachedLibrary: CachedLibrary): Store
 			path: file.path,
 			mimeType: file.mimeType,
 			modifiedAt: file.modifiedAt,
+			sizeBytes: file.sizeBytes,
 		} satisfies StoredAudioFile;
 	});
 }

@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.DocumentsContract;
+import android.util.Log;
 
 import androidx.core.content.FileProvider;
 import androidx.documentfile.provider.DocumentFile;
@@ -20,7 +21,12 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONObject;
+
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,6 +44,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @CapacitorPlugin(name = "DirectoryReader")
 public class DirectoryReaderPlugin extends Plugin {
+	private static final String TAG = "DirectoryReaderPlugin";
 	private static final int DEFAULT_SCAN_BATCH_SIZE = 250;
 	private static final Map<String, AudioScanSession> AUDIO_SCAN_SESSIONS = new ConcurrentHashMap<>();
 
@@ -56,6 +63,7 @@ public class DirectoryReaderPlugin extends Plugin {
 		DocumentsContract.Document.COLUMN_DISPLAY_NAME,
 		DocumentsContract.Document.COLUMN_MIME_TYPE,
 		DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+		DocumentsContract.Document.COLUMN_SIZE,
 	};
 
 	/** A directory queued for scanning: its SAF document id + path relative to the scan root. */
@@ -69,15 +77,43 @@ public class DirectoryReaderPlugin extends Plugin {
 		}
 	}
 
+	/** The two facts read from a single document: its display name and its mtime. */
+	private static final class DocumentInfo {
+		private final String displayName;
+		private final long lastModified;
+
+		private DocumentInfo(String displayName, long lastModified) {
+			this.displayName = displayName;
+			this.lastModified = lastModified;
+		}
+	}
+
 	private static final class AudioScanSession {
 		private final ArrayDeque<DirNode> pendingDirs = new ArrayDeque<>();
 		private final Uri treeUri;
 		private final String folderName;
+		/**
+		 * The scan root's own mtime, from the query that resolves its display name.
+		 * The child loop only ever sees children, so without this row a library whose
+		 * files all sit in the root reports an empty tree.
+		 */
+		private final long rootMtime;
+		/** True once the root's row has been put in a batch. */
+		private boolean rootRowEmitted = false;
+		/** Cached directory mtimes from a previous walk, keyed by relative path. 0 or absent means unknown. */
+		private final Map<String, Long> previousDirMtimes = new HashMap<>();
+		/** Directory rows this walk visited, keyed by relative path. */
+		private final Map<String, Long> observedDirMtimes = new HashMap<>();
 		private int foldersScanned = 0;
+		private int skippedDirs = 0;
+		/** Relative paths of the directories counted in {@link #skippedDirs}, in skip order. */
+		private final List<String> skippedDirPaths = new ArrayList<>();
+		private int unreadableDirs = 0;
 
-		private AudioScanSession(Uri treeUri, String startDocumentId, String basePath, String folderName) {
+		private AudioScanSession(Uri treeUri, String startDocumentId, String basePath, String folderName, long rootMtime) {
 			this.treeUri = treeUri;
 			this.folderName = folderName;
+			this.rootMtime = rootMtime;
 			this.pendingDirs.addLast(new DirNode(startDocumentId, basePath == null ? "" : basePath));
 		}
 	}
@@ -121,12 +157,31 @@ public class DirectoryReaderPlugin extends Plugin {
 				return;
 			}
 
-			String folderName = queryDisplayName(treeUri, startDocId);
+			// One query for the root's name and its mtime, so reporting the root as a
+			// directory row costs no extra round trip.
+			DocumentInfo startInfo = queryDocumentInfo(treeUri, startDocId);
+			long rootMtime = startInfo == null ? 0L : startInfo.lastModified;
+			String folderName = startInfo == null ? null : startInfo.displayName;
 			if (folderName == null || folderName.isEmpty()) {
 				folderName = "Selected Folder";
 			}
 
-			AudioScanSession session = new AudioScanSession(treeUri, startDocId, basePath, folderName);
+			AudioScanSession session = new AudioScanSession(treeUri, startDocId, basePath, folderName, rootMtime);
+
+			// Optional previous directory tree: { path, mtime } rows. Elements arrive
+			// as plain JSONObject (the bridge parses the call data with org.json), so
+			// they are read with optString/optLong rather than the JSObject accessors.
+			JSArray prevDirs = call.getArray("prevDirs");
+			if (prevDirs != null) {
+				for (int index = 0; index < prevDirs.length(); index += 1) {
+					JSONObject row = prevDirs.optJSONObject(index);
+					if (row == null) continue;
+					String rowPath = row.optString("path");
+					if (rowPath == null || rowPath.isEmpty()) continue;
+					session.previousDirMtimes.put(rowPath, row.optLong("mtime"));
+				}
+			}
+
 			String scanId = UUID.randomUUID().toString();
 			AUDIO_SCAN_SESSIONS.put(scanId, session);
 
@@ -162,7 +217,20 @@ public class DirectoryReaderPlugin extends Plugin {
 
 		ContentResolver resolver = getContext().getContentResolver();
 		JSArray files = new JSArray();
+		JSArray dirs = new JSArray();
 		int filesAdded = 0;
+
+		// The scan root is a row too. The child loop below only emits rows for child
+		// directories, so a library whose files all sit in the root used to walk with
+		// an empty tree, which `hasUsableDirectoryTree` reads as "never delta". Its
+		// path is the walk's own origin, so it is the empty string.
+		if (!session.rootRowEmitted) {
+			session.rootRowEmitted = true;
+			JSObject rootRow = new JSObject();
+			rootRow.put("path", "");
+			rootRow.put("mtime", session.rootMtime);
+			dirs.put(rootRow);
+		}
 
 		// Process whole directories (one cursor query each) until we've emitted
 		// at least batchSize files or the queue is drained. A directory's files
@@ -173,16 +241,38 @@ public class DirectoryReaderPlugin extends Plugin {
 
 			Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(session.treeUri, dir.documentId);
 			try (Cursor cursor = resolver.query(childrenUri, CHILD_PROJECTION, null, null, null)) {
-				if (cursor == null) continue;
+				if (cursor == null) {
+					session.unreadableDirs += 1;
+					continue;
+				}
 				while (cursor.moveToNext()) {
 					String docId = cursor.getString(0);
 					String name = cursor.getString(1);
 					String mime = cursor.getString(2);
 					long modified = cursor.isNull(3) ? 0L : cursor.getLong(3);
+					long size = cursor.isNull(4) ? 0L : cursor.getLong(4);
 					if (docId == null || name == null || name.isEmpty()) continue;
 
 					if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
-						session.pendingDirs.addLast(new DirNode(docId, buildRelativePath(dir.relativePath, name)));
+						String childPath = buildRelativePath(dir.relativePath, name);
+						Long previousMtime = session.previousDirMtimes.get(childPath);
+						// Skip the subtree only when the cached mtime is known and matches
+						// this row; a 0 or missing cached value means unknown, so descend.
+						if (previousMtime != null && previousMtime.longValue() > 0L && previousMtime.longValue() == modified) {
+							session.skippedDirs += 1;
+							session.skippedDirPaths.add(childPath);
+							// Probe for docs/device-verification.md 21: the mtime this skip
+							// trusts, so a device run can show whether the provider moved it.
+							Log.i(TAG, "Skipped " + childPath + " (cached mtime=" + previousMtime.longValue()
+								+ ", row mtime=" + modified + ")");
+							continue;
+						}
+						session.pendingDirs.addLast(new DirNode(docId, childPath));
+						session.observedDirMtimes.put(childPath, modified);
+						JSObject dirRow = new JSObject();
+						dirRow.put("path", childPath);
+						dirRow.put("mtime", modified);
+						dirs.put(dirRow);
 						continue;
 					}
 
@@ -190,11 +280,13 @@ public class DirectoryReaderPlugin extends Plugin {
 
 					Uri docUri = DocumentsContract.buildDocumentUriUsingTree(session.treeUri, docId);
 					files.put(createFileObject(name, docUri.toString(),
-						buildRelativePath(dir.relativePath, name), mime, modified));
+						buildRelativePath(dir.relativePath, name), mime, modified, size));
 					filesAdded += 1;
 				}
 			} catch (Exception ignored) {
-				// Unreadable directory (revoked permission, removed media) — skip it.
+				// Unreadable directory (revoked permission, removed media) — skip it,
+				// but report it so the caller can refuse to prune this walk.
+				session.unreadableDirs += 1;
 			}
 		}
 
@@ -203,10 +295,21 @@ public class DirectoryReaderPlugin extends Plugin {
 			AUDIO_SCAN_SESSIONS.remove(scanId);
 		}
 
+		// The skipped paths, not only their number: the caller cannot tell a directory
+		// it must protect from one the user deleted out of a count alone.
+		JSArray skippedPaths = new JSArray();
+		for (String skippedPath : session.skippedDirPaths) {
+			skippedPaths.put(skippedPath);
+		}
+
 		JSObject result = new JSObject();
 		result.put("files", files);
+		result.put("dirs", dirs);
 		result.put("foldersScanned", session.foldersScanned);
 		result.put("foldersQueued", session.pendingDirs.size());
+		result.put("skippedDirs", session.skippedDirs);
+		result.put("skippedPaths", skippedPaths);
+		result.put("unreadableDirs", session.unreadableDirs);
 		result.put("done", done);
 		call.resolve(result);
 	}
@@ -247,6 +350,7 @@ public class DirectoryReaderPlugin extends Plugin {
 						String name = cursor.getString(1);
 						String mime = cursor.getString(2);
 						long modified = cursor.isNull(3) ? 0L : cursor.getLong(3);
+						long size = cursor.isNull(4) ? 0L : cursor.getLong(4);
 						if (docId == null || name == null || name.isEmpty()) continue;
 
 						String relativePath = buildRelativePath(basePath, name);
@@ -262,12 +366,13 @@ public class DirectoryReaderPlugin extends Plugin {
 						if (!isSupportedAudioFile(name)) continue;
 
 						Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
-						entries.put(createFileObject(name, docUri.toString(), relativePath, mime, modified));
+						entries.put(createFileObject(name, docUri.toString(), relativePath, mime, modified, size));
 					}
 				}
 			}
 
-			String folderName = queryDisplayName(treeUri, dirDocId);
+			DocumentInfo dirInfo = queryDocumentInfo(treeUri, dirDocId);
+			String folderName = dirInfo == null ? null : dirInfo.displayName;
 			JSObject result = new JSObject();
 			result.put("folderName", folderName != null && !folderName.isEmpty() ? folderName : "Selected Folder");
 			result.put("entries", entries);
@@ -309,6 +414,7 @@ public class DirectoryReaderPlugin extends Plugin {
 						String name = cursor.getString(1);
 						String mime = cursor.getString(2);
 						long modified = cursor.isNull(3) ? 0L : cursor.getLong(3);
+						long size = cursor.isNull(4) ? 0L : cursor.getLong(4);
 						if (docId == null || name == null || name.isEmpty()) continue;
 
 						if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
@@ -320,14 +426,15 @@ public class DirectoryReaderPlugin extends Plugin {
 
 						Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
 						files.put(createFileObject(name, docUri.toString(),
-							buildRelativePath(dir.relativePath, name), mime, modified));
+							buildRelativePath(dir.relativePath, name), mime, modified, size));
 					}
 				} catch (Exception ignored) {
 					// Skip unreadable directory
 				}
 			}
 
-			String folderName = queryDisplayName(treeUri, startDocId);
+			DocumentInfo startInfo = queryDocumentInfo(treeUri, startDocId);
+			String folderName = startInfo == null ? null : startInfo.displayName;
 			JSObject result = new JSObject();
 			result.put("folderName", folderName != null && !folderName.isEmpty() ? folderName : "Selected Folder");
 			result.put("files", files);
@@ -384,13 +491,24 @@ public class DirectoryReaderPlugin extends Plugin {
 		return docId;
 	}
 
-	/** Fetch the display name of a single document (one query). */
-	private String queryDisplayName(Uri treeUri, String documentId) {
+	/**
+	 * Fetch one document's display name and mtime in a single query. The two are
+	 * read together because the callers that need a name also need the mtime of the
+	 * same document (the walk's root row, D6), and a second query would double that
+	 * cost for nothing.
+	 */
+	private DocumentInfo queryDocumentInfo(Uri treeUri, String documentId) {
 		Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId);
-		try (Cursor cursor = getContext().getContentResolver().query(docUri,
-			new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+		try (Cursor cursor = getContext().getContentResolver().query(docUri, new String[] {
+			DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+			DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+		}, null, null, null)) {
 			if (cursor != null && cursor.moveToFirst()) {
-				return cursor.getString(0);
+				String displayName = cursor.getString(0);
+				// A provider that does not maintain the column leaves it null or 0;
+				// both mean "unknown", which the delta walk reads as "descend".
+				long lastModified = cursor.isNull(1) ? 0L : cursor.getLong(1);
+				return new DocumentInfo(displayName, lastModified);
 			}
 		} catch (Exception ignored) {
 			// Fall through
@@ -402,7 +520,7 @@ public class DirectoryReaderPlugin extends Plugin {
 		return prefix == null || prefix.isEmpty() ? childName : prefix + "/" + childName;
 	}
 
-	private JSObject createFileObject(String name, String uriString, String relativePath, String mimeType, long modifiedAt) {
+	private JSObject createFileObject(String name, String uriString, String relativePath, String mimeType, long modifiedAt, long size) {
 		JSObject result = new JSObject();
 		result.put("kind", "file");
 		result.put("name", name);
@@ -410,6 +528,7 @@ public class DirectoryReaderPlugin extends Plugin {
 		result.put("relativePath", relativePath);
 		result.put("mimeType", mimeType);
 		result.put("modifiedAt", modifiedAt);
+		result.put("sizeBytes", size);
 		return result;
 	}
 
