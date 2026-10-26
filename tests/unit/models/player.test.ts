@@ -608,3 +608,88 @@ describe('player — URL cleanup', () => {
 		expect(elapsedMs).toBeLessThan(3000);
 	});
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-queue loop mode. A queue can declare its own loop, so one deck can repeat
+// a single background track while the other follows the global setting.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('player — per-queue loop mode', () => {
+	const repeatOn = () => ({
+		lastTrackIndex: 0, lastTrackKey: '', lastTrackTimestamp: 0,
+		isRepeat: true, isShuffle: false, rewindOnPrev: false, sortOrder: 'name',
+	});
+
+	it("an explicit loop: 'one' repeats the current track even when global repeat is off", async () => {
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0, { loop: 'one' });
+		await flush();
+		audio.emit('play');
+		audio.currentTime = 10;
+		const playsBefore = audio.playCalls;
+
+		audio.emit('ended');
+		await flush();
+
+		expect(state.currentIndex).toBe(0);
+		expect(state.isPlaying).toBe(true);
+		expect(audio.playCalls).toBeGreaterThan(playsBefore);
+		expect(audio.currentTime).toBe(0);
+	});
+
+	it("an explicit loop: 'off' stops at the end even when global repeat is on", async () => {
+		const { player, audio, state } = makePlayer({ settings: repeatOn() });
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 1, { loop: 'off' });
+		await flush();
+		audio.emit('play');
+		audio.currentTime = 10;
+
+		audio.emit('ended');
+		await flush();
+
+		// haltPlayback(): the global repeat-one rewind must not happen here.
+		expect(state.isPlaying).toBe(false);
+		expect(state.currentTime).toBe(0);
+		expect(audio.currentTime).toBe(0);
+		expect(state.currentIndex).toBe(1);
+	});
+
+	it("an explicit loop: 'all' wraps at the end of the queue", async () => {
+		const { player, audio, state } = makePlayer();
+		await player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 1, { loop: 'all' });
+		await flush();
+		audio.emit('play');
+
+		audio.emit('ended');
+		await flush();
+
+		expect(state.currentIndex).toBe(0);
+		expect(audio.src).toBe('blob:a.mp3');
+	});
+
+	it('a queue without a loop mode keeps the global behaviour', async () => {
+		// Global repeat on: repeat-one rewinds the same track, as before.
+		const repeating = makePlayer({ settings: repeatOn() });
+		await repeating.player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0);
+		await flush();
+		repeating.audio.emit('play');
+		repeating.audio.currentTime = 10;
+		const playsBefore = repeating.audio.playCalls;
+
+		repeating.audio.emit('ended');
+		await flush();
+
+		expect(repeating.state.currentIndex).toBe(0);
+		expect(repeating.audio.currentTime).toBe(0);
+		expect(repeating.audio.playCalls).toBeGreaterThan(playsBefore);
+
+		// Global repeat off: the queue advances, as before.
+		const advancing = makePlayer();
+		await advancing.player.play([mkSrc('a.mp3', 'a'), mkSrc('b.mp3', 'b')], 0);
+		await flush();
+
+		advancing.audio.emit('ended');
+		await flush();
+
+		expect(advancing.state.currentIndex).toBe(1);
+	});
+});

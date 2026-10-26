@@ -61,12 +61,19 @@ export interface PlayerControls {
 	playbackRate: number;
 }
 
+/** Loop mode a queue can declare for itself. */
+export type PlayerLoopMode = 'off' | 'one' | 'all';
+
 /** How a queue is built from a file list. */
 export interface PlayerQueueOptions {
 	/** Caller-supplied order is authoritative (favourites list, selection loop). */
 	preserveOrder?: boolean;
 	/** Wrap at the end of the queue instead of stopping (selection loop). */
 	selectionLoop?: boolean;
+	/** Explicit loop mode for this queue, overriding the global repeat and the
+	 *  live selection loop until the queue is replaced. Absent means the global
+	 *  behaviour. */
+	loop?: PlayerLoopMode;
 }
 
 export interface PlayerLoadOptions extends PlayerQueueOptions {
@@ -154,6 +161,10 @@ export function createPlayer(opts: PlayerOptions): Player {
 
 	/** Snapshot of the last queue's loop flag, used when no live getter is given. */
 	let selectionLoop = false;
+	/** Loop mode the loaded queue declared. `null` means "no explicit mode", which
+	 *  is every queue loaded without one: the global repeat and the live selection
+	 *  loop then decide, exactly as before. */
+	let queueLoop: PlayerLoopMode | null = null;
 	/** Bumped whenever the queue is replaced wholesale (play/load/clear). A URL
 	 *  that resolves after that belongs to a queue nobody is playing, so it must
 	 *  not be written into the replacement queue. `append` deliberately does not
@@ -165,6 +176,19 @@ export function createPlayer(opts: PlayerOptions): Player {
 	 *  toggle the loop at any time), the queue's own option otherwise. */
 	function isSelectionLoopActive(): boolean {
 		return opts.isSelectionLoop ? opts.isSelectionLoop() : selectionLoop;
+	}
+
+	/** Effective loop for the loaded queue, in the two flags the advance path
+	 *  needs. An explicit queue mode wins; with none set, the global repeat flag
+	 *  (`isRepeat` is repeat-one) and the live selection loop (it wraps the queue)
+	 *  keep their current meaning and precedence. */
+	function resolvedLoop(): { isRepeat: boolean; selectionLoop: boolean } {
+		switch (queueLoop) {
+			case 'one': return { isRepeat: true, selectionLoop: false };
+			case 'all': return { isRepeat: false, selectionLoop: true };
+			case 'off': return { isRepeat: false, selectionLoop: false };
+			default: return { isRepeat: settings.isRepeat, selectionLoop: isSelectionLoopActive() };
+		}
 	}
 	let preloadedIndex: number | null = null;
 	let preloadRequestId = 0;
@@ -301,6 +325,7 @@ export function createPlayer(opts: PlayerOptions): Player {
 			return { id: i, title, artist, filename: f.name, url: '', duration: 0, source: f };
 		});
 		selectionLoop = options.selectionLoop ?? false;
+		queueLoop = options.loop ?? null;
 		state.error = null;
 		// A queue replacement supersedes any in-flight resume/prev that was showing
 		// the "Loading track…" overlay. That continuation drops out on the generation
@@ -345,11 +370,12 @@ export function createPlayer(opts: PlayerOptions): Player {
 
 	// ── queue advance ─────────────────────────────────────────────────────────
 	function nextIndex(from: number): number | null {
+		const loop = resolvedLoop();
 		return getNextTrackIndex(from, {
 			trackCount: state.tracks.length,
 			isShuffle: settings.isShuffle,
-			isRepeat: settings.isRepeat,
-			selectionLoop: isSelectionLoopActive(),
+			isRepeat: loop.isRepeat,
+			selectionLoop: loop.selectionLoop,
 			preloadedIndex,
 		});
 	}
@@ -480,7 +506,8 @@ export function createPlayer(opts: PlayerOptions): Player {
 		element.addEventListener('ended', () => {
 			state.isBuffering = false;
 			settings.lastTrackTimestamp = 0;
-			if (settings.isRepeat && !isSelectionLoopActive()) {
+			const loop = resolvedLoop();
+			if (loop.isRepeat && !loop.selectionLoop) {
 				// repeat-one: rewind the same track.
 				element.currentTime = 0;
 				safePlay();
