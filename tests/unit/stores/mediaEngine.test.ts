@@ -142,6 +142,44 @@ describe('audio exclusivity (claimAudio)', () => {
 	});
 });
 
+describe('claimAudio flag ownership', () => {
+	/** The engine, not the stopped source, is the backstop for the flag. A source
+	 *  that forgets leaves the MiniPlayer on itself: the podcast's stop callback
+	 *  dropped its element src and trusted a 'pause' event the same tick could
+	 *  swallow. */
+	it('clears the playing flag of a stopped source whose callback forgets', () => {
+		registerAudioSource('podcast', () => {});
+		mediaEngine.podcastPlaying = true;
+
+		claimAudio('musicA');
+
+		expect(mediaEngine.podcastPlaying).toBe(false);
+	});
+
+	it('clears every source a claim stops, and leaves deck B alone', () => {
+		registerAudioSource('youtube', () => {});
+		registerAudioSource('musicB', () => {});
+		mediaEngine.podcastPlaying = true;
+		mediaEngine.youtubePlaying = true;
+		mediaEngine.musicPlayingB = true;
+
+		claimAudio('musicA');
+
+		expect(mediaEngine.podcastPlaying).toBe(false);
+		expect(mediaEngine.youtubePlaying).toBe(false);
+		// The mixing deck is never stopped, so it keeps its flag.
+		expect(mediaEngine.musicPlayingB).toBe(true);
+	});
+
+	it('a deck B claim stops nothing, so it clears nothing', () => {
+		mediaEngine.podcastPlaying = true;
+
+		claimAudio('musicB');
+
+		expect(mediaEngine.podcastPlaying).toBe(true);
+	});
+});
+
 describe('displayedSource', () => {
 	function resetDisplay() {
 		mediaEngine.clear();

@@ -36,6 +36,24 @@ import { addToast } from './toastStore.svelte';
 type AudioSourceId = MediaSource | 'essay' | 'mixer' | 'musicA' | 'musicB';
 const _stopFns: Partial<Record<AudioSourceId, () => void>> = {};
 
+/** The playing flag each source owns. A claim clears the flag of every source it
+ *  stopped, so no source can leave the MiniPlayer describing itself by forgetting
+ *  its own clear: the podcast's stop callback used to rely on the element's
+ *  'pause' event, which the same tick's `load()` can swallow, and the stale flag
+ *  then kept `displayedSource` on the podcast while a deck played. A source may
+ *  still clear its own flag; this is the backstop, not a replacement for a source
+ *  suppressing its own auto-resume (which only that source can do). `music` and
+ *  `essay` report through another source's flag, so they own none. */
+const _playingFlag: Partial<Record<AudioSourceId,
+	'musicPlayingA' | 'musicPlayingB' | 'podcastPlaying' | 'radioPlaying' | 'youtubePlaying' | 'mixerPlaying'>> = {
+	musicA: 'musicPlayingA',
+	musicB: 'musicPlayingB',
+	podcast: 'podcastPlaying',
+	radio: 'radioPlaying',
+	youtube: 'youtubePlaying',
+	mixer: 'mixerPlaying',
+};
+
 export function registerAudioSource(id: AudioSourceId, stopFn: () => void): void {
 	_stopFns[id] = stopFn;
 }
@@ -47,6 +65,8 @@ export function claimAudio(id: AudioSourceId): void {
 		// stops it. Every other combination stays exclusive.
 		if (id === 'musicB' || other === 'musicB') continue;
 		_stopFns[other]?.();
+		const flag = _playingFlag[other];
+		if (flag) mediaEngine[flag] = false;
 	}
 	// Stop any active live stream unless this is a radio or deck-B claim —
 	// deck B can mix with radio.

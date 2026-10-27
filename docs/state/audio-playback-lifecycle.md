@@ -1,8 +1,8 @@
 # Audio Playback Lifecycle — State Spec v1
-> **Source:** `src/lib/stores/mediaEngine.svelte.ts` (832L)
+> **Source:** `src/lib/stores/mediaEngine.svelte.ts`
 > **Authority:** code — the engine is a $state object; views drive their own `<audio>` elements.
 > **Initial:** `IDLE`
-> **Last reconciled:** 2026-10-06
+> **Last reconciled:** 2026-10-27
 
 ## States (5)
 
@@ -45,7 +45,8 @@
 - Both music decks (`musicPlayingA` + `musicPlayingB`) may be true simultaneously.
 - Deck B is the mixing deck: `musicPlayingB` may be true together with any one other source (`musicPlayingA`, `podcastPlaying`, `radioPlaying`, `youtubePlaying`, `mixerPlaying`). `claimAudio` neither stops another source for a `musicB` claim nor stops `musicB` for any other claim.
 - Every other combination among {musicA, podcast, radio, youtube, mixer} stays exclusive.
-- The MiniPlayer and the transport follow `mediaEngine.displayedSource`: the visible view's own source while it plays, otherwise a non-deck source that owns the primary state and is playing (YouTube/podcast/radio), otherwise the first other playing source, otherwise the view's own source (paused). Each source re-claims `setPlaybackHandlers`/`setSkipHandlers` when `displayedSource` points at it, and `mediaEngine.pause()`/`resume()` prefer the registered handler over the engine-owned radio stream. So the shown title and the play/pause button always describe the same source, even when Deck B keeps playing underneath an idle view.
+- **Flag ownership on a claim.** A source another source's claim stops ends with its own playing flag false, and `claimAudio` enforces that from `_playingFlag` after the stop callback returns, so no source can forget. The source still owns the half the engine cannot see: a pause it did not ask for must not be auto-resumed (the podcast schedules a 150 ms resume on a system pause, and that resume both fights the claim and can set the flag true again with nothing audible).
+- The MiniPlayer and the transport follow `mediaEngine.displayedSource`: the visible view's own source while it plays, otherwise a non-deck source that owns the primary state and is playing (YouTube/podcast/radio), otherwise the first other playing source, otherwise the view's own source (paused). `music:pairs` owns no source, so on that sub-tab a playing deck is what the MiniPlayer describes. Each source re-claims `setPlaybackHandlers`/`setSkipHandlers` when `displayedSource` points at it, and `mediaEngine.pause()`/`resume()` prefer the registered handler over the engine-owned radio stream. So the shown title and the play/pause button always describe the same source, even when Deck B keeps playing underneath an idle view.
 - Per-source flags that follow the view-owned `<audio>` pattern: music, podcast, **youtube**. Only radio is engine-owned (`_streamAudio`, hence `STREAM_RECONNECTING`).
 - `STREAM_RECONNECTING` only valid when `source=='radio'`.
 - `BG_RECOVERY` only valid on Android (`Capacitor.platform=='android'`). On web it is unreachable.
