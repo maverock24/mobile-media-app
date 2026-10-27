@@ -42,10 +42,22 @@ pnpm dev           # dev server
 pnpm check:boot    # Playwright smoke only: the per-commit gate
 pnpm validate      # check + unit + E2E: the gate to run before merging to main
 pnpm build:mobile  # mobile static build → dist-mobile/ (the APK target)
+
+pnpm test:changed  # only the unit tests the current change can affect
+pnpm test:e2e:warm # E2E against a preview that persists; builds only when stale
 ```
 
 Every other script lives in `package.json`. Note `pnpm test` is vitest only; the
 Playwright suite is `pnpm test:e2e`.
+
+`pnpm test:changed` selects through Vite's module graph, so there is no map to
+maintain. When no unit test imports the changed files it runs the full suite
+rather than reporting green having executed nothing. It is an inner-loop tool:
+`pnpm validate` and CI still run everything.
+
+`pnpm test:e2e:warm` keeps a preview server between runs and rebuilds it whenever
+`src/` is newer than the build, so a warm run never tests replaced code. It leaves
+the server up; `pnpm test:e2e:warm --stop` ends it.
 
 **E2E covers Music, the app shell and YouTube only** (`tests/e2e/`). Podcasts, Radio and Weather have no E2E coverage, so a change to those views needs a browser check by hand, seeded through the `persisted()` localStorage keys.
 

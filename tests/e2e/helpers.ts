@@ -3,8 +3,6 @@
  */
 import { type Locator, type Page, expect } from '@playwright/test';
 
-export const BASE = 'http://127.0.0.1:4177';
-
 // ── Tab navigation ──────────────────────────────────────────────────────────
 // Wait for SvelteKit to fully hydrate the page before switching tabs.
 // We wait for body[data-hydrated] (set via onMount), falling back to waiting
