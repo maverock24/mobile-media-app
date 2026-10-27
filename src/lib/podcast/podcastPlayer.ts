@@ -42,6 +42,11 @@
  *  - the audio channel is claimed on play (`mediaEngine.podcastPlaying = true;`
  *    then `claimAudio('podcast')`) and on resume, and pause is a deliberate
  *    pause (`markUserPaused()`) that also cancels a pending reconnect;
+ *  - a stop caused by another source claiming the channel
+ *    (`stopForOtherSource`) clears `mediaEngine.podcastPlaying` itself, because
+ *    the element event it used to rely on is lost once the src is dropped, and
+ *    it is marked deliberate so the system-pause auto-resume cannot take the
+ *    audio back from the source that just started;
  *  - `ended` marks the episode fully played and clears `mediaEngine.item`,
  *    never advancing to the next episode;
  *  - `syncEpisodeAudioSource` applies the stored resume position (> 10 s) once
@@ -98,6 +103,12 @@ export interface PodcastPlayer {
 	togglePlay(): void;
 	pausePlayback(): void;
 	resumePlayback(): void;
+	/** Silence the podcast because another source claimed the audio channel
+	 *  (`registerAudioSource`'s stop callback). Not a user pause and not a system
+	 *  pause: it clears the engine's playing flag itself and must never reach the
+	 *  pause handler's auto-resume, or that resume fights the source that just
+	 *  started and leaves the MiniPlayer describing the podcast. */
+	stopForOtherSource(): void;
 	prevEpisode(): void;
 	nextEpisode(): void;
 	handleSeekSeconds(seconds: number): void;
@@ -447,6 +458,34 @@ export function createPodcastPlayer(opts: PodcastPlayerOptions): PodcastPlayer {
 		getAudioEl()!.pause();
 	}
 
+	function stopForOtherSource(): void {
+		// Clear the engine flag here rather than leaving it to the element's 'pause'
+		// event: this path drops the src immediately, and that event can be lost on
+		// the Android WebView. While the flag stayed true, `displayedSource` kept
+		// answering 'podcast' and the deck that had just claimed the channel could
+		// not push its own now-playing state, so the MiniPlayer described the
+		// episode instead of the audiobook. YouTube's stop callback clears its flag
+		// the same way.
+		view.isPlaying = false;
+		view.isBuffering = false;
+		mediaEngine.podcastPlaying = false;
+
+		const el = getAudioEl();
+		if (!el) return;
+
+		// A claim by another source is not a system pause. Without this marker the
+		// pause handler schedules its 150 ms auto-resume, which pulls the audio
+		// back out from under the source that just started and can set
+		// `podcastPlaying` true again with nothing audible.
+		userPaused = true;
+		el.pause();
+		// Fully reset so the browser releases the audio channel — pause() alone can
+		// leave residual decoder state that causes brief overlap when a new source
+		// starts immediately.
+		el.removeAttribute('src');
+		el.load();
+	}
+
 	function resumePlayback(): void {
 		if (!getAudioEl() || !view.currentEpisode || view.isPlaying) return;
 		userPaused = false;
@@ -497,6 +536,7 @@ export function createPodcastPlayer(opts: PodcastPlayerOptions): PodcastPlayer {
 		activateEpisode,
 		togglePlay,
 		pausePlayback,
+		stopForOtherSource,
 		resumePlayback,
 		prevEpisode,
 		nextEpisode,

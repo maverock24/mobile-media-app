@@ -220,6 +220,20 @@ describe('displayedSource – pairs tab', () => {
 		mediaEngine.musicPlayingB = true;
 		expect(mediaEngine.displayedSource).toBe('B');
 	});
+
+	/** The state a scene tap leaves behind: the last thing that played was a
+	 *  podcast, so it still owns the primary source, but its playing flag is false
+	 *  and deck A is the thing making sound. The MiniPlayer must describe deck A.
+	 *  (It described the podcast while a music claim left `podcastPlaying` true.) */
+	it('shows deck A after a podcast stopped, even though it still owns the primary source', () => {
+		resetDisplay();
+		mediaEngine.activeView = 'music:pairs';
+		mediaEngine.source = 'podcast';
+		mediaEngine.item = { id: 'ep-1', source: 'podcast', title: 'Episode 1', subtitle: 'Cast', audioUrl: 'https://x/ep.mp3' };
+		mediaEngine.podcastPlaying = false;
+		mediaEngine.musicPlayingA = true;
+		expect(mediaEngine.displayedSource).toBe('A');
+	});
 });
 
 describe('transport fallbacks', () => {

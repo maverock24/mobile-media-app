@@ -516,6 +516,57 @@ describe('resumePlayback', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// stopForOtherSource
+// ─────────────────────────────────────────────────────────────
+
+describe('stopForOtherSource', () => {
+	const episode = makeEpisode({ id: 'ep-1' });
+	const podcast = makePodcast({ episodes: [episode] });
+
+	/** The cross-source stop: another source called claimAudio() and this deck is
+	 *  being silenced. It must leave the engine flag false itself, because the
+	 *  MiniPlayer reads that flag and the element event this path used to rely on
+	 *  can be lost once the src is cleared. */
+	it('clears the engine playing flag without waiting for a pause event', () => {
+		const view = makeView({ isPlaying: true, isBuffering: true, currentEpisode: { podcast, episode } });
+		const { player, el } = makePlayer(view);
+		mediaEngine.podcastPlaying = true;
+		el.src = 'https://x/ep1.mp3';
+
+		player.stopForOtherSource();
+
+		expect(mediaEngine.podcastPlaying).toBe(false);
+		expect(view.isPlaying).toBe(false);
+		expect(view.isBuffering).toBe(false);
+		expect(el.pause).toHaveBeenCalledTimes(1);
+		expect(el.removeAttribute).toHaveBeenCalledWith('src');
+		expect(el.load).toHaveBeenCalledTimes(1);
+	});
+
+	/** The pause this path causes is not a system pause. Without the deliberate
+	 *  marker the pause handler schedules a 150 ms auto-resume, which fights the
+	 *  deck that just claimed the audio channel and can set podcastPlaying back to
+	 *  true — the MiniPlayer then kept describing the podcast while deck A played. */
+	it('does not auto-resume the pause it caused', async () => {
+		vi.useFakeTimers();
+		const view = makeView({ isPlaying: true, currentEpisode: { podcast, episode } });
+		const { player, el } = makePlayer(view);
+		mediaEngine.podcastPlaying = true;
+		el.src = 'https://x/ep1.mp3';
+		player.attachElementListeners(el as unknown as HTMLAudioElement);
+
+		player.stopForOtherSource();
+		// The element's own 'pause' event arrives after the src is gone.
+		el.src = '';
+		el.dispatch('pause');
+		await vi.advanceTimersByTimeAsync(1200);
+
+		expect(el.play).not.toHaveBeenCalled();
+		expect(mediaEngine.podcastPlaying).toBe(false);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────
 // prevEpisode / nextEpisode
 // ─────────────────────────────────────────────────────────────
 

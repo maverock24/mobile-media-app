@@ -161,17 +161,11 @@
 	});
 
 	// ── Register stop-callback ───────────────────────────────────
+	// Another source claimed the audio channel. The transport owns this body (it
+	// is the only place that knows a claim is not a system pause), so the flag it
+	// must clear and the auto-resume it must suppress stay next to `userPaused`.
 	$effect(() => {
-		registerAudioSource('podcast', () => {
-			if (!audioEl) return;
-			isPlaying = false;
-			audioEl.pause();
-			// Fully reset so the browser releases the audio channel —
-			// pause() alone can leave residual decoder state that
-			// causes brief overlap when a new source starts immediately.
-			audioEl.removeAttribute('src');
-			audioEl.load();
-		});
+		registerAudioSource('podcast', () => podcastPlayer.stopForOtherSource());
 	});
 
 	// ── Audio element event wiring ───────────────────────────────
