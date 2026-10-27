@@ -12,7 +12,9 @@ The live code in `src/` is authoritative. Planning docs (`01_PRD.md`, `PROGRESS.
 |---|---|
 | SvelteKit app shell | `src/app.html`, `src/app.d.ts`, `src/app.css` |
 | Routes / API endpoints | `src/routes/` (`api/podcast/{feed,search,lookup}`, `api/radio/search`, `essays`) |
-| Svelte 5 rune stores | `src/lib/stores/*.svelte.ts` — `mediaEngine` (playback core, 832L), `settings`, `googleDriveSession`, `musicView`, `sleepTimer`, `toastStore`, `youtubePanel`, `runtimeDiagnostics`, `library` (types only) |
+| Svelte 5 rune stores | `src/lib/stores/*.svelte.ts` — `mediaEngine` (playback core: per-source playing flags, `displayedSource`, exclusivity via `registerAudioSource`/`claimAudio`), `deckCommands` (the seam the Pairs panel drives both decks through), `settings`, `googleDriveSession`, `musicView`, `sleepTimer`, `toastStore`, `youtubePanel`, `runtimeDiagnostics`, `library` (types only) |
+| Pairs (A + B scenes) | `src/lib/pairs/` (`pairings` store, `startPairing`, `activeScene`, `resolve`), `src/lib/components/views/PairsView.svelte` |
+| Podcast | `src/lib/components/views/PodcastView.svelte` plus `src/lib/podcast/` (`podcastPlayer` transport, library, RSS, progress) |
 | UI components | `src/lib/components/views/*` (feature screens), `src/lib/components/ui/*` (primitives) |
 | Google Drive | `src/lib/google-drive.ts` (API), `src/lib/google-drive-native.ts` (Android bridge), `src/lib/google-drive-auth-error.ts`, `src/lib/drive/` (extracted modules, currently `driveSession.svelte.ts`) |
 | Audio | `src/lib/audio/player.svelte.ts` (per-deck player), `src/lib/audio/fileResolver.ts`, `src/lib/audio/equalizer.ts` |
@@ -23,7 +25,7 @@ The live code in `src/` is authoritative. Planning docs (`01_PRD.md`, `PROGRESS.
 | Android project | `android/` (Capacitor + native plugins) |
 | Tests | `tests/` (11,859 lines: `tests/unit` is vitest, `tests/e2e` is Playwright) |
 | Decisions & specs | `docs/adr/` (decisions), `docs/state/` (runtime state machines), `docs/device-verification.md` (device checks) |
-| CI | `.github/workflows/` — `quality` (check + unit + E2E) runs on push and pull request; `netlify-deploy` compiles `android/` and builds the APK on every push to main; `android-release` on version tags; `android-build` is a manual debug-APK button. No workflow compiles Java on a pull request. |
+| CI | `.github/workflows/` — `quality` (check + unit + E2E, plus the `android-release-compile` job that assembles the release and benchmark APKs and checks R8 in the DEX) runs on push to main and on **every pull request**; `netlify-deploy` compiles `android/` and publishes the APK on every push to main; `android-release` on version tags; `android-build` is a manual debug-APK button. |
 
 ## Conventions
 
@@ -44,7 +46,7 @@ pnpm validate      # check + unit + E2E: the gate to run before merging to main
 pnpm build:mobile  # mobile static build → dist-mobile/ (the APK target)
 
 pnpm test:changed  # only the unit tests the current change can affect
-pnpm test:e2e:warm # E2E against a preview that persists; builds only when stale
+pnpm test:e2e:warm # E2E against a persistent preview (--stop ends it)
 ```
 
 Every other script lives in `package.json`. Note `pnpm test` is vitest only; the

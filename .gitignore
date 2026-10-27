@@ -18,6 +18,7 @@ test-results
 tmp-test-files
 
 # Local operational scratch files
+.scratch/
 jobs_info.json
 run_info.json
 run_result.json
